@@ -142,3 +142,6 @@ cython_debug/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local Cache / Data
+raw_data.json
