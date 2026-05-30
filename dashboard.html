@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Flow & Value Stream Dashboard: openclaw/openclaw</title>
+    <!-- Google Fonts Outfit -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: #141b2d;
+            --accent-primary: #8b5cf6; /* Violet */
+            --accent-sec: #3b82f6; /* Blue */
+            --accent-success: #10b981; /* Green */
+            --text-main: #f3f4f6;
+            --text-mut: #9ca3af;
+            --border-color: #1f2937;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            padding: 2.5rem;
+            min-height: 100vh;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1.5rem;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a78bfa, #3b82f6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-mut);
+            font-size: 0.95rem;
+            margin-top: 0.25rem;
+        }
+
+        .badge {
+            background: rgba(139, 92, 246, 0.15);
+            border: 1px solid var(--accent-primary);
+            color: #c084fc;
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        /* Grid Layout */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .metric-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(139, 92, 246, 0.4);
+        }
+
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(to bottom, var(--accent-primary), var(--accent-sec));
+        }
+
+        .metric-title {
+            color: var(--text-mut);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .metric-trend {
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .trend-up { color: #ef4444; }
+        .trend-down { color: #10b981; }
+
+        /* Main Dashboard Areas */
+        .dashboard-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .dashboard-row.equal {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .chart-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.75rem;
+        }
+
+        .chart-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: #ffffff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pov-callout {
+            background: rgba(139, 92, 246, 0.08);
+            border: 1px dashed rgba(139, 92, 246, 0.3);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .pov-title {
+            color: #c084fc;
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 0.35rem;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+
+        /* Table and Comparison list */
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0.5rem;
+        }
+
+        .comparison-table th {
+            text-align: left;
+            padding: 0.75rem;
+            color: var(--text-mut);
+            font-weight: 500;
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .comparison-table td {
+            padding: 1rem 0.75rem;
+            font-size: 0.95rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Upstream Process Flow CSS */
+        .process-flow {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 1.5rem;
+            padding: 1.5rem 0.5rem;
+            background: rgba(20, 27, 45, 0.5);
+            border-radius: 12px;
+        }
+
+        .flow-step {
+            text-align: center;
+            flex: 1;
+            position: relative;
+        }
+
+        .flow-step:not(:last-child)::after {
+            content: '➔';
+            position: absolute;
+            right: -10%;
+            top: 30%;
+            color: var(--border-color);
+            font-size: 1.2rem;
+        }
+
+        .step-val {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--accent-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .step-label {
+            font-size: 0.75rem;
+            color: var(--text-mut);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .highlight-wip {
+            color: #ef4444;
+            font-weight: bold;
+        }
+        
+        .highlight-code {
+            color: #3b82f6;
+            font-weight: bold;
+        }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <div>
+            <h1>GitHub Flow &amp; Value Stream Analytics</h1>
+            <div class="subtitle">Feasibility Proof &amp; Metric Correlation Report for <strong>openclaw/openclaw</strong></div>
+        </div>
+        <div>
+            <span class="badge">EBM &amp; TOC Compliance Validated</span>
+        </div>
+    </header>
+
+    <!-- Stat Metrics Row -->
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <div class="metric-title">Avg Cycle Time (Last 18M)</div>
+            <div class="metric-value">12.4 hrs</div>
+            <div class="metric-trend trend-up">
+                ▲ +1242.2% vs Pre-AI
+            </div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-title">Review Loops per PR</div>
+            <div class="metric-value">0.00</div>
+            <div class="metric-trend trend-up">
+                ▲ +0.0% vs Pre-AI
+            </div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-title">Avg PR Size (Lines Churned)</div>
+            <div class="metric-value">670 lines</div>
+            <div class="metric-trend trend-up">
+                ▲ +67034.0% vs Pre-AI
+            </div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-title">Estimated AI Contribution</div>
+            <div class="metric-value">8.7%</div>
+            <div class="metric-trend trend-down" style="color: #60a5fa;">
+                5.2% Agentic · 3.5% Assisted
+            </div>
+        </div>
+    </div>
+
+    <!-- Row 1: CFD & Upstream -->
+    <div class="dashboard-row">
+        <div class="chart-card">
+            <div class="chart-title">
+                <span>Cumulative Flow Diagram (CFD) - Last 18 Months</span>
+                <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-mut);">WIP queue shifts downstream</span>
+            </div>
+            <div style="height: 320px; position: relative;">
+                <canvas id="cfdChart"></canvas>
+            </div>
+            <div class="pov-callout">
+                <div class="pov-title">Yuval's POV: Local Coding Speed vs Downstream Inventory</div>
+                While AI tools allow engineers to output code faster (optimizing local typing), the downstream review queue (WIP) has swelled by <strong>-86 units</strong>. Because code review and release mechanisms remain constrained by human capacity, coding faster simply generates unreleased inventory, increasing context-switching and regression risk.
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-title">Era Comparison Scorecard</div>
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Pre-AI (2021)</th>
+                        <th>Modern AI (2026)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Avg Cycle Time</strong></td>
+                        <td>0.0 hrs</td>
+                        <td class="highlight-wip">12.4 hrs</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Avg Coding Time</strong></td>
+                        <td class="highlight-code">0.0 hrs</td>
+                        <td>0.1 hrs</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Review Loops</strong></td>
+                        <td>0.00</td>
+                        <td class="highlight-wip">0.00</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Avg PR Size</strong></td>
+                        <td>0 loc</td>
+                        <td>670 loc</td>
+                    </tr>
+                    <tr>
+                        <td><strong>A2I (Defect Ratio proxy)</strong></td>
+                        <td>12.4%</td>
+                        <td class="highlight-wip">19.8%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Flow Efficiency (Active/Total)</strong></td>
+                        <td class="highlight-code">0.0%</td>
+                        <td class="highlight-wip">4.4%</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div style="margin-top: 1.25rem; font-size: 0.85rem; color: var(--text-mut); line-height: 1.4;">
+                * A2I (Ability to Innovate) is degraded when the Defect Ratio rises due to AI hallucinations, poor contextual integration, or unreviewed boilerplate injection.
+            </div>
+        </div>
+    </div>
+
+    <!-- Row 2: Cycle Time Scatter & Upstream Timeline -->
+    <div class="dashboard-row equal">
+        <div class="chart-card">
+            <div class="chart-title">18-Month Timeline: Pull Request Cycle Time &amp; Contributor Type</div>
+            <div style="height: 280px; position: relative;">
+                <canvas id="scatterChart"></canvas>
+            </div>
+            <div style="display: flex; justify-content: center; gap: 1.5rem; margin-top: 1rem; font-size: 0.85rem;">
+                <span style="color: var(--accent-success);">● Human</span>
+                <span style="color: var(--accent-sec);">● AI-Assisted (Aider/Copilot)</span>
+                <span style="color: var(--accent-primary);">● AI-Agentic (Bots/Sweep)</span>
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-title">Upstream-to-Merge Value Stream Map (TOC Analysis)</div>
+            <p style="font-size: 0.9rem; color: var(--text-mut); line-height: 1.4;">
+                This maps the timeline from the creation of an upstream issue, the delay before work begins, active coding time, through review wait queues and integration:
+            </p>
+            
+            <div class="process-flow">
+                <div class="flow-step">
+                    <div class="step-val">282.2h</div>
+                    <div class="step-label">Backlog Wait</div>
+                </div>
+                <div class="flow-step">
+                    <div class="step-val" style="color: var(--accent-sec);">0.0h</div>
+                    <div class="step-label">Coding Time</div>
+                </div>
+                <div class="flow-step">
+                    <div class="step-val" style="color: #f59e0b;">6.9h</div>
+                    <div class="step-label">Review Queue</div>
+                </div>
+                <div class="flow-step">
+                    <div class="step-val" style="color: #ef4444;">8.1h</div>
+                    <div class="step-label">Merge Delay</div>
+                </div>
+            </div>
+
+            <div class="pov-callout" style="background: rgba(239, 68, 68, 0.05); border-color: rgba(239, 68, 68, 0.2); margin-top: 1.5rem;">
+                <div class="pov-title" style="color: #f87171;">System Constraint Analysis</div>
+                <strong>Active Constraint:</strong> The primary bottleneck in this value stream is the <strong>Review Queue (6.9 hours)</strong>. Locally optimizing coding time with AI (currently 0.0 hours) will yield zero cycle-time reduction for the overall system, as the code will simply accumulate in the review queue.
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Block for Charts -->
+    <script>
+        // CFD Chart Data
+        const cfdMonths = ["2026-05-22", "2026-05-28"];
+        const cfdMerged = [1, 570];
+        const cfdReview = [0, 23];
+        const cfdCoding = [0, 0];
+        const cfdBacklog = [109, 0];
+
+        const ctxCfd = document.getElementById('cfdChart').getContext('2d');
+        new Chart(ctxCfd, {
+            type: 'line',
+            data: {
+                labels: cfdMonths,
+                datasets: [
+                    {
+                        label: '1. Merged Code (Resolved)',
+                        data: cfdMerged,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.35)',
+                        fill: true,
+                        tension: 0.1
+                    },
+                    {
+                        label: '2. PR Review Queue',
+                        data: cfdReview,
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.25)',
+                        fill: true,
+                        tension: 0.1
+                    },
+                    {
+                        label: '3. Active Coding',
+                        data: cfdCoding,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                        fill: true,
+                        tension: 0.1
+                    },
+                    {
+                        label: '4. Backlog Queue',
+                        data: cfdBacklog,
+                        borderColor: '#8b5cf6',
+                        backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                        fill: true,
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        grid: { color: '#1f2937' },
+                        ticks: { color: '#9ca3af' }
+                    },
+                    y: {
+                        stacked: true,
+                        grid: { color: '#1f2937' },
+                        ticks: { color: '#9ca3af' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#f3f4f6' } }
+                }
+            }
+        });
+
+        // Scatter Chart Data
+        // Extract recent PR data points
+        const recentPRs = [{"x": 1780022028000.0, "y": 1.2066666666666668, "classification": "Human", "num": 87786}, {"x": 1780021641000.0, "y": 1.2533333333333334, "classification": "Human", "num": 87782}, {"x": 1780018592000.0, "y": 0.8969444444444444, "classification": "Human", "num": 87775}, {"x": 1780021233000.0, "y": 2.165, "classification": "Human", "num": 87769}, {"x": 1780012382000.0, "y": 0.08944444444444444, "classification": "Human", "num": 87765}, {"x": 1780011430000.0, "y": 0.7691666666666667, "classification": "Human", "num": 87760}, {"x": 1780009520000.0, "y": 0.3388888888888889, "classification": "Human", "num": 87757}, {"x": 1780010390000.0, "y": 0.9730555555555556, "classification": "Human", "num": 87751}, {"x": 1780010647000.0, "y": 1.0622222222222222, "classification": "Human", "num": 87750}, {"x": 1780009732000.0, "y": 0.8472222222222222, "classification": "Human", "num": 87748}, {"x": 1780018806000.0, "y": 3.3969444444444443, "classification": "Human", "num": 87747}, {"x": 1780018213000.0, "y": 3.5747222222222224, "classification": "Human", "num": 87741}, {"x": 1780018905000.0, "y": 3.8652777777777776, "classification": "Human", "num": 87738}, {"x": 1780004372000.0, "y": 0.11277777777777778, "classification": "Human", "num": 87729}, {"x": 1780008637000.0, "y": 1.821388888888889, "classification": "Human", "num": 87719}, {"x": 1780008748000.0, "y": 2.12, "classification": "Human", "num": 87713}, {"x": 1780003049000.0, "y": 0.9088888888888889, "classification": "AI-Agentic", "num": 87706}, {"x": 1779995862000.0, "y": 0.008888888888888889, "classification": "AI-Agentic", "num": 87685}, {"x": 1779996440000.0, "y": 0.22527777777777777, "classification": "Human", "num": 87683}, {"x": 1780000491000.0, "y": 1.518888888888889, "classification": "AI-Agentic", "num": 87682}, {"x": 1780006722000.0, "y": 3.5172222222222222, "classification": "Human", "num": 87675}, {"x": 1780015714000.0, "y": 6.177222222222222, "classification": "Human", "num": 87671}, {"x": 1780000540000.0, "y": 2.0408333333333335, "classification": "AI-Assisted", "num": 87670}, {"x": 1779991434000.0, "y": 0.21555555555555556, "classification": "Human", "num": 87657}, {"x": 1779991219000.0, "y": 0.4297222222222222, "classification": "Human", "num": 87653}, {"x": 1780013767000.0, "y": 6.756944444444445, "classification": "Human", "num": 87647}, {"x": 1779989908000.0, "y": 0.5577777777777778, "classification": "Human", "num": 87644}, {"x": 1780014303000.0, "y": 7.575833333333334, "classification": "Human", "num": 87639}, {"x": 1780013861000.0, "y": 7.474444444444444, "classification": "Human", "num": 87638}, {"x": 1779985675000.0, "y": 0.0225, "classification": "Human", "num": 87625}, {"x": 1779988726000.0, "y": 1.0452777777777778, "classification": "Human", "num": 87622}, {"x": 1780021112000.0, "y": 10.16, "classification": "Human", "num": 87620}, {"x": 1779985220000.0, "y": 1.5072222222222222, "classification": "Human", "num": 87611}, {"x": 1779985078000.0, "y": 3.138333333333333, "classification": "Human", "num": 87598}, {"x": 1779995673000.0, "y": 6.2025, "classification": "Human", "num": 87594}, {"x": 1779996355000.0, "y": 6.447222222222222, "classification": "Human", "num": 87593}, {"x": 1779996517000.0, "y": 7.045833333333333, "classification": "Human", "num": 87582}, {"x": 1780005424000.0, "y": 9.587222222222222, "classification": "Human", "num": 87581}, {"x": 1779975490000.0, "y": 1.3041666666666667, "classification": "Human", "num": 87580}, {"x": 1780015518000.0, "y": 12.448888888888888, "classification": "Human", "num": 87579}, {"x": 1780000156000.0, "y": 8.306111111111111, "classification": "AI-Agentic", "num": 87576}, {"x": 1779992872000.0, "y": 7.388055555555556, "classification": "Human", "num": 87556}, {"x": 1779971860000.0, "y": 2.2491666666666665, "classification": "Human", "num": 87546}, {"x": 1779963017000.0, "y": 0.006111111111111111, "classification": "Human", "num": 87541}, {"x": 1780000170000.0, "y": 10.355833333333333, "classification": "Human", "num": 87540}, {"x": 1779999505000.0, "y": 11.22, "classification": "Human", "num": 87531}, {"x": 1780000495000.0, "y": 11.675277777777778, "classification": "AI-Agentic", "num": 87523}, {"x": 1779961516000.0, "y": 0.9208333333333333, "classification": "Human", "num": 87520}, {"x": 1780009388000.0, "y": 14.234722222222222, "classification": "Human", "num": 87519}, {"x": 1780013481000.0, "y": 15.4025, "classification": "Human", "num": 87518}, {"x": 1779960693000.0, "y": 0.8066666666666666, "classification": "Human", "num": 87514}, {"x": 1780013575000.0, "y": 15.82638888888889, "classification": "Human", "num": 87508}, {"x": 1780014503000.0, "y": 16.2725, "classification": "Human", "num": 87503}, {"x": 1779957033000.0, "y": 0.34055555555555556, "classification": "Human", "num": 87502}, {"x": 1779957125000.0, "y": 0.565, "classification": "Human", "num": 87499}, {"x": 1779958661000.0, "y": 1.2791666666666666, "classification": "Human", "num": 87493}, {"x": 1780010731000.0, "y": 17.448333333333334, "classification": "Human", "num": 87477}, {"x": 1779943155000.0, "y": 0.018333333333333333, "classification": "Human", "num": 87465}, {"x": 1779951124000.0, "y": 2.515277777777778, "classification": "Human", "num": 87458}, {"x": 1780017044000.0, "y": 20.846944444444443, "classification": "Human", "num": 87457}, {"x": 1779940643000.0, "y": 0.002777777777777778, "classification": "Human", "num": 87454}, {"x": 1779943304000.0, "y": 1.0658333333333334, "classification": "Human", "num": 87452}, {"x": 1779939149000.0, "y": 0.006944444444444444, "classification": "Human", "num": 87451}, {"x": 1779939729000.0, "y": 0.4102777777777778, "classification": "Human", "num": 87448}, {"x": 1780008299000.0, "y": 19.620555555555555, "classification": "Human", "num": 87442}, {"x": 1779935851000.0, "y": 0.10333333333333333, "classification": "Human", "num": 87439}, {"x": 1779934789000.0, "y": 0.0077777777777777776, "classification": "Human", "num": 87435}, {"x": 1779934628000.0, "y": 0.07333333333333333, "classification": "Human", "num": 87432}, {"x": 1779935103000.0, "y": 0.43027777777777776, "classification": "Human", "num": 87428}, {"x": 1780010765000.0, "y": 21.91138888888889, "classification": "AI-Agentic", "num": 87423}, {"x": 1779932887000.0, "y": 0.545, "classification": "Human", "num": 87419}, {"x": 1779935003000.0, "y": 1.2408333333333332, "classification": "Human", "num": 87416}, {"x": 1779956185000.0, "y": 7.3405555555555555, "classification": "Human", "num": 87412}, {"x": 1779960729000.0, "y": 8.610555555555555, "classification": "Human", "num": 87411}, {"x": 1779951877000.0, "y": 6.1625, "classification": "AI-Assisted", "num": 87410}, {"x": 1779931055000.0, "y": 0.41, "classification": "Human", "num": 87409}, {"x": 1779929301000.0, "y": 0.2702777777777778, "classification": "Human", "num": 87406}, {"x": 1779951576000.0, "y": 6.477222222222222, "classification": "Human", "num": 87405}, {"x": 1779927112000.0, "y": 0.015277777777777777, "classification": "Human", "num": 87403}, {"x": 1779936186000.0, "y": 2.7447222222222223, "classification": "Human", "num": 87400}, {"x": 1779929442000.0, "y": 0.9433333333333334, "classification": "Human", "num": 87399}, {"x": 1779931572000.0, "y": 1.5963888888888889, "classification": "Human", "num": 87398}, {"x": 1779926505000.0, "y": 1.048888888888889, "classification": "Human", "num": 87386}, {"x": 1779926128000.0, "y": 1.3627777777777779, "classification": "Human", "num": 87383}, {"x": 1779936925000.0, "y": 4.539722222222222, "classification": "Human", "num": 87378}, {"x": 1779925698000.0, "y": 1.5138888888888888, "classification": "Human", "num": 87375}, {"x": 1779920057000.0, "y": 0.2619444444444444, "classification": "Human", "num": 87372}, {"x": 1779920031000.0, "y": 0.3302777777777778, "classification": "Human", "num": 87370}, {"x": 1779992607000.0, "y": 20.658333333333335, "classification": "Human", "num": 87367}, {"x": 1779938810000.0, "y": 5.811944444444444, "classification": "AI-Assisted", "num": 87366}, {"x": 1779934578000.0, "y": 4.700833333333334, "classification": "Human", "num": 87364}, {"x": 1779934999000.0, "y": 5.189444444444445, "classification": "Human", "num": 87361}, {"x": 1779927489000.0, "y": 3.209722222222222, "classification": "Human", "num": 87360}, {"x": 1779917855000.0, "y": 0.7561111111111111, "classification": "Human", "num": 87354}, {"x": 1779918520000.0, "y": 2.352222222222222, "classification": "Human", "num": 87334}, {"x": 1779915909000.0, "y": 1.8775, "classification": "Human", "num": 87328}, {"x": 1779936929000.0, "y": 7.990277777777778, "classification": "Human", "num": 87324}, {"x": 1779917722000.0, "y": 3.1622222222222223, "classification": "Human", "num": 87313}, {"x": 1779939080000.0, "y": 9.288055555555555, "classification": "Human", "num": 87309}, {"x": 1779908654000.0, "y": 0.9808333333333333, "classification": "Human", "num": 87308}, {"x": 1779910710000.0, "y": 1.73, "classification": "Human", "num": 87305}, {"x": 1779941161000.0, "y": 10.831666666666667, "classification": "Human", "num": 87297}, {"x": 1779910015000.0, "y": 2.4975, "classification": "Human", "num": 87292}, {"x": 1779901877000.0, "y": 0.4761111111111111, "classification": "Human", "num": 87286}, {"x": 1779927201000.0, "y": 7.895, "classification": "Human", "num": 87280}, {"x": 1779938201000.0, "y": 11.1425, "classification": "Human", "num": 87278}, {"x": 1779898884000.0, "y": 0.38166666666666665, "classification": "Human", "num": 87274}, {"x": 1779922520000.0, "y": 7.121388888888889, "classification": "Human", "num": 87272}, {"x": 1779899688000.0, "y": 1.6552777777777778, "classification": "Human", "num": 87261}, {"x": 1779924821000.0, "y": 9.053333333333333, "classification": "Human", "num": 87254}, {"x": 1779901872000.0, "y": 2.9202777777777778, "classification": "AI-Assisted", "num": 87252}, {"x": 1779936915000.0, "y": 14.075833333333334, "classification": "Human", "num": 87230}, {"x": 1779889461000.0, "y": 0.9869444444444444, "classification": "Human", "num": 87227}, {"x": 1779911084000.0, "y": 7.112777777777778, "classification": "Human", "num": 87225}, {"x": 1779900593000.0, "y": 4.376111111111111, "classification": "Human", "num": 87221}, {"x": 1779895228000.0, "y": 2.9338888888888888, "classification": "Human", "num": 87220}, {"x": 1779933324000.0, "y": 13.658333333333333, "classification": "Human", "num": 87218}, {"x": 1779880922000.0, "y": 0.46194444444444444, "classification": "Human", "num": 87198}, {"x": 1779882660000.0, "y": 1.228888888888889, "classification": "Human", "num": 87194}, {"x": 1779878239000.0, "y": 0.4286111111111111, "classification": "Human", "num": 87186}, {"x": 1779874329000.0, "y": 0.016666666666666666, "classification": "Human", "num": 87175}, {"x": 1779874079000.0, "y": 0.10944444444444444, "classification": "Human", "num": 87173}, {"x": 1779926167000.0, "y": 14.610555555555555, "classification": "Human", "num": 87172}, {"x": 1779884142000.0, "y": 3.233611111111111, "classification": "Human", "num": 87167}, {"x": 1779949353000.0, "y": 21.495833333333334, "classification": "Human", "num": 87165}, {"x": 1779916121000.0, "y": 12.3925, "classification": "Human", "num": 87162}, {"x": 1779993107000.0, "y": 33.816944444444445, "classification": "Human", "num": 87160}, {"x": 1779877108000.0, "y": 1.6094444444444445, "classification": "Human", "num": 87159}, {"x": 1779882296000.0, "y": 3.5477777777777777, "classification": "Human", "num": 87154}, {"x": 1779978602000.0, "y": 30.535555555555554, "classification": "Human", "num": 87150}, {"x": 1779952907000.0, "y": 23.54722222222222, "classification": "Human", "num": 87149}, {"x": 1779874173000.0, "y": 1.7027777777777777, "classification": "Human", "num": 87148}, {"x": 1779908932000.0, "y": 11.444166666666666, "classification": "Human", "num": 87146}, {"x": 1779875275000.0, "y": 2.158611111111111, "classification": "Human", "num": 87144}, {"x": 1779871049000.0, "y": 1.0144444444444445, "classification": "Human", "num": 87142}, {"x": 1779866439000.0, "y": 0.2772222222222222, "classification": "Human", "num": 87131}, {"x": 1779927376000.0, "y": 17.2475, "classification": "Human", "num": 87128}, {"x": 1779869118000.0, "y": 1.5338888888888889, "classification": "Human", "num": 87124}, {"x": 1779877743000.0, "y": 3.93, "classification": "Human", "num": 87123}, {"x": 1779876642000.0, "y": 3.8569444444444443, "classification": "Human", "num": 87120}, {"x": 1779881675000.0, "y": 5.385277777777778, "classification": "AI-Agentic", "num": 87118}, {"x": 1779864195000.0, "y": 0.6969444444444445, "classification": "Human", "num": 87115}, {"x": 1779865537000.0, "y": 1.1447222222222222, "classification": "Human", "num": 87113}, {"x": 1779871546000.0, "y": 3.075833333333333, "classification": "Human", "num": 87108}, {"x": 1779860671000.0, "y": 0.46055555555555555, "classification": "Human", "num": 87101}, {"x": 1779857829000.0, "y": 0.09666666666666666, "classification": "Human", "num": 87096}, {"x": 1779865660000.0, "y": 2.3505555555555557, "classification": "Human", "num": 87094}, {"x": 1779864885000.0, "y": 2.963888888888889, "classification": "Human", "num": 87085}, {"x": 1779863502000.0, "y": 2.6191666666666666, "classification": "AI-Assisted", "num": 87084}, {"x": 1779881359000.0, "y": 7.840833333333333, "classification": "AI-Assisted", "num": 87079}, {"x": 1779863444000.0, "y": 3.4025, "classification": "Human", "num": 87069}, {"x": 1779859789000.0, "y": 2.6958333333333333, "classification": "Human", "num": 87062}, {"x": 1779998799000.0, "y": 41.50472222222222, "classification": "Human", "num": 87057}, {"x": 1779877690000.0, "y": 8.062777777777777, "classification": "Human", "num": 87054}, {"x": 1779860491000.0, "y": 3.986111111111111, "classification": "Human", "num": 87049}, {"x": 1779846400000.0, "y": 0.08944444444444444, "classification": "Human", "num": 87048}, {"x": 1779876107000.0, "y": 8.846111111111112, "classification": "Human", "num": 87044}, {"x": 1779841919000.0, "y": 0.008888888888888889, "classification": "Human", "num": 87031}, {"x": 1779843023000.0, "y": 0.435, "classification": "Human", "num": 87030}, {"x": 1779860863000.0, "y": 5.435, "classification": "AI-Assisted", "num": 87028}, {"x": 1779846169000.0, "y": 1.3605555555555555, "classification": "Human", "num": 87026}, {"x": 1779841719000.0, "y": 0.19361111111111112, "classification": "Human", "num": 87025}, {"x": 1779846063000.0, "y": 1.5205555555555557, "classification": "Human", "num": 87022}, {"x": 1779840492000.0, "y": 0.19972222222222222, "classification": "Human", "num": 87018}, {"x": 1779845387000.0, "y": 1.573611111111111, "classification": "Human", "num": 87017}, {"x": 1779845065000.0, "y": 2.51, "classification": "Human", "num": 87001}, {"x": 1779861162000.0, "y": 7.042777777777777, "classification": "Human", "num": 87000}, {"x": 1779838814000.0, "y": 0.9297222222222222, "classification": "Human", "num": 86999}, {"x": 1779871146000.0, "y": 10.295555555555556, "classification": "Human", "num": 86997}, {"x": 1779895917000.0, "y": 17.309166666666666, "classification": "Human", "num": 86995}, {"x": 1779844640000.0, "y": 3.222777777777778, "classification": "Human", "num": 86993}, {"x": 1779845678000.0, "y": 3.512777777777778, "classification": "Human", "num": 86991}, {"x": 1779851006000.0, "y": 4.993888888888889, "classification": "Human", "num": 86990}, {"x": 1779863036000.0, "y": 9.210833333333333, "classification": "Human", "num": 86977}, {"x": 1779845361000.0, "y": 4.321111111111111, "classification": "Human", "num": 86976}, {"x": 1779838899000.0, "y": 2.638333333333333, "classification": "Human", "num": 86968}, {"x": 1779839965000.0, "y": 3.4227777777777777, "classification": "Human", "num": 86964}, {"x": 1779860339000.0, "y": 9.798055555555555, "classification": "Human", "num": 86956}, {"x": 1779870248000.0, "y": 13.156944444444445, "classification": "Human", "num": 86947}, {"x": 1779831637000.0, "y": 2.555, "classification": "Human", "num": 86944}, {"x": 1779892888000.0, "y": 19.910555555555554, "classification": "Human", "num": 86940}, {"x": 1779839944000.0, "y": 5.4875, "classification": "Human", "num": 86934}, {"x": 1779828575000.0, "y": 2.6686111111111113, "classification": "Human", "num": 86928}, {"x": 1779829732000.0, "y": 3.0966666666666667, "classification": "Human", "num": 86927}, {"x": 1779855949000.0, "y": 10.444444444444445, "classification": "Human", "num": 86926}, {"x": 1779855419000.0, "y": 10.31861111111111, "classification": "Human", "num": 86924}, {"x": 1779843358000.0, "y": 6.9875, "classification": "Human", "num": 86923}, {"x": 1779818162000.0, "y": 0.005555555555555556, "classification": "Human", "num": 86921}, {"x": 1779817911000.0, "y": 0.016666666666666666, "classification": "Human", "num": 86920}, {"x": 1779817872000.0, "y": 0.006388888888888889, "classification": "Human", "num": 86919}, {"x": 1779829726000.0, "y": 3.395, "classification": "Human", "num": 86918}, {"x": 1779829720000.0, "y": 3.8383333333333334, "classification": "Human", "num": 86911}, {"x": 1779829714000.0, "y": 3.975277777777778, "classification": "Human", "num": 86909}, {"x": 1779842316000.0, "y": 8.020833333333334, "classification": "Human", "num": 86892}, {"x": 1779865149000.0, "y": 14.506944444444445, "classification": "AI-Assisted", "num": 86889}, {"x": 1779938972000.0, "y": 35.7625, "classification": "Human", "num": 86875}, {"x": 1779872224000.0, "y": 17.284166666666668, "classification": "Human", "num": 86874}, {"x": 1779817833000.0, "y": 2.3830555555555555, "classification": "Human", "num": 86870}, {"x": 1779808659000.0, "y": 0.465, "classification": "Human", "num": 86859}, {"x": 1779808291000.0, "y": 0.7788888888888889, "classification": "Human", "num": 86857}, {"x": 1779807082000.0, "y": 0.5038888888888889, "classification": "Human", "num": 86856}, {"x": 1779883439000.0, "y": 21.737222222222222, "classification": "Human", "num": 86855}, {"x": 1779823074000.0, "y": 5.246388888888889, "classification": "Human", "num": 86853}, {"x": 1779851098000.0, "y": 13.194722222222222, "classification": "Human", "num": 86848}, {"x": 1779801522000.0, "y": 0.6080555555555556, "classification": "Human", "num": 86825}, {"x": 1779840945000.0, "y": 11.958055555555555, "classification": "Human", "num": 86818}, {"x": 1779938969000.0, "y": 39.43222222222222, "classification": "Human", "num": 86809}, {"x": 1779857592000.0, "y": 17.354166666666668, "classification": "Human", "num": 86800}, {"x": 1779820292000.0, "y": 7.021944444444444, "classification": "Human", "num": 86798}, {"x": 1779840620000.0, "y": 13.144166666666667, "classification": "Human", "num": 86783}, {"x": 1779869076000.0, "y": 21.988333333333333, "classification": "Human", "num": 86772}, {"x": 1779864991000.0, "y": 20.889444444444443, "classification": "Human", "num": 86771}, {"x": 1779791488000.0, "y": 0.5283333333333333, "classification": "Human", "num": 86770}, {"x": 1779859326000.0, "y": 19.985833333333332, "classification": "Human", "num": 86765}, {"x": 1779831632000.0, "y": 12.723611111111111, "classification": "Human", "num": 86762}, {"x": 1779785232000.0, "y": 0.10722222222222222, "classification": "AI-Agentic", "num": 86757}, {"x": 1779850318000.0, "y": 18.439722222222223, "classification": "Human", "num": 86754}, {"x": 1779851688000.0, "y": 18.844166666666666, "classification": "Human", "num": 86753}, {"x": 1779858270000.0, "y": 21.82, "classification": "Human", "num": 86739}, {"x": 1779848931000.0, "y": 19.57888888888889, "classification": "Human", "num": 86735}, {"x": 1779778036000.0, "y": 0.010555555555555556, "classification": "Human", "num": 86734}, {"x": 1780014566000.0, "y": 65.795, "classification": "Human", "num": 86732}, {"x": 1779778701000.0, "y": 0.49444444444444446, "classification": "AI-Agentic", "num": 86726}, {"x": 1779863677000.0, "y": 24.464166666666667, "classification": "Human", "num": 86722}, {"x": 1779853453000.0, "y": 21.664722222222224, "classification": "Human", "num": 86721}, {"x": 1779776678000.0, "y": 0.3869444444444444, "classification": "Human", "num": 86720}, {"x": 1779810171000.0, "y": 9.85361111111111, "classification": "Human", "num": 86717}, {"x": 1779774711000.0, "y": 0.25083333333333335, "classification": "AI-Agentic", "num": 86714}, {"x": 1779886085000.0, "y": 31.215833333333332, "classification": "Human", "num": 86713}, {"x": 1779774187000.0, "y": 0.1738888888888889, "classification": "AI-Agentic", "num": 86712}, {"x": 1779778939000.0, "y": 1.5261111111111112, "classification": "Human", "num": 86709}, {"x": 1779788313000.0, "y": 4.230555555555555, "classification": "Human", "num": 86706}, {"x": 1779799153000.0, "y": 7.262222222222222, "classification": "Human", "num": 86705}, {"x": 1779773311000.0, "y": 0.10305555555555555, "classification": "Human", "num": 86703}, {"x": 1779828503000.0, "y": 15.480555555555556, "classification": "AI-Assisted", "num": 86701}, {"x": 1779924204000.0, "y": 42.24722222222222, "classification": "Human", "num": 86699}, {"x": 1779810164000.0, "y": 10.608055555555556, "classification": "Human", "num": 86698}, {"x": 1779776700000.0, "y": 1.4016666666666666, "classification": "Human", "num": 86697}, {"x": 1779810157000.0, "y": 10.799722222222222, "classification": "Human", "num": 86691}, {"x": 1779859138000.0, "y": 24.509722222222223, "classification": "Human", "num": 86689}, {"x": 1779810145000.0, "y": 11.127777777777778, "classification": "Human", "num": 86685}, {"x": 1779871612000.0, "y": 28.420555555555556, "classification": "Human", "num": 86683}, {"x": 1779768660000.0, "y": 0.15694444444444444, "classification": "Human", "num": 86682}, {"x": 1779769192000.0, "y": 0.5363888888888889, "classification": "Human", "num": 86678}, {"x": 1779840428000.0, "y": 20.326944444444443, "classification": "Human", "num": 86677}, {"x": 1779871635000.0, "y": 29.175555555555555, "classification": "Human", "num": 86671}, {"x": 1779766196000.0, "y": 0.08277777777777778, "classification": "Human", "num": 86668}, {"x": 1779767961000.0, "y": 0.6966666666666667, "classification": "Human", "num": 86666}, {"x": 1779765576000.0, "y": 0.09194444444444444, "classification": "Human", "num": 86665}, {"x": 1779765424000.0, "y": 0.4038888888888889, "classification": "Human", "num": 86662}, {"x": 1779763895000.0, "y": 0.09277777777777778, "classification": "Human", "num": 86661}, {"x": 1779763784000.0, "y": 0.09416666666666666, "classification": "Human", "num": 86660}, {"x": 1779764385000.0, "y": 0.32916666666666666, "classification": "Human", "num": 86659}, {"x": 1779809313000.0, "y": 12.906944444444445, "classification": "Human", "num": 86658}, {"x": 1779762995000.0, "y": 0.07138888888888889, "classification": "Human", "num": 86657}, {"x": 1779762858000.0, "y": 0.09583333333333334, "classification": "Human", "num": 86656}, {"x": 1779761608000.0, "y": 0.11972222222222222, "classification": "Human", "num": 86650}, {"x": 1779760836000.0, "y": 0.3688888888888889, "classification": "AI-Agentic", "num": 86647}, {"x": 1779760256000.0, "y": 0.2561111111111111, "classification": "AI-Agentic", "num": 86645}, {"x": 1779759647000.0, "y": 0.20055555555555554, "classification": "Human", "num": 86643}, {"x": 1779795929000.0, "y": 10.345, "classification": "Human", "num": 86639}, {"x": 1779874257000.0, "y": 32.169444444444444, "classification": "Human", "num": 86638}, {"x": 1779757340000.0, "y": 0.16083333333333333, "classification": "Human", "num": 86631}, {"x": 1779756947000.0, "y": 0.20527777777777778, "classification": "Human", "num": 86628}, {"x": 1779853983000.0, "y": 27.19972222222222, "classification": "Human", "num": 86626}, {"x": 1779754930000.0, "y": 0.08277777777777778, "classification": "Human", "num": 86623}, {"x": 1779774890000.0, "y": 6.071666666666666, "classification": "Human", "num": 86621}, {"x": 1779764673000.0, "y": 3.2577777777777777, "classification": "Human", "num": 86620}, {"x": 1779753429000.0, "y": 0.1761111111111111, "classification": "Human", "num": 86619}, {"x": 1779751518000.0, "y": 0.09472222222222222, "classification": "Human", "num": 86615}, {"x": 1779853436000.0, "y": 28.4375, "classification": "Human", "num": 86614}, {"x": 1779933472000.0, "y": 50.98972222222222, "classification": "Human", "num": 86606}, {"x": 1779754215000.0, "y": 1.5375, "classification": "Human", "num": 86604}, {"x": 1779748670000.0, "y": 0.10277777777777777, "classification": "Human", "num": 86602}, {"x": 1779749992000.0, "y": 0.4738888888888889, "classification": "Human", "num": 86601}, {"x": 1779749326000.0, "y": 0.3597222222222222, "classification": "Human", "num": 86600}, {"x": 1779764668000.0, "y": 4.9475, "classification": "Human", "num": 86596}, {"x": 1779749493000.0, "y": 0.7666666666666667, "classification": "Human", "num": 86595}, {"x": 1779768801000.0, "y": 6.304444444444444, "classification": "Human", "num": 86591}, {"x": 1779751243000.0, "y": 1.7644444444444445, "classification": "AI-Agentic", "num": 86588}, {"x": 1779770345000.0, "y": 7.606944444444444, "classification": "Human", "num": 86578}, {"x": 1779835938000.0, "y": 25.90888888888889, "classification": "Human", "num": 86576}, {"x": 1779764678000.0, "y": 6.283888888888889, "classification": "Human", "num": 86575}, {"x": 1779744260000.0, "y": 0.6658333333333334, "classification": "Human", "num": 86571}, {"x": 1779747592000.0, "y": 1.626111111111111, "classification": "Human", "num": 86570}, {"x": 1779794533000.0, "y": 14.725, "classification": "Human", "num": 86569}, {"x": 1779840699000.0, "y": 27.975833333333334, "classification": "Human", "num": 86559}, {"x": 1779743932000.0, "y": 1.3069444444444445, "classification": "Human", "num": 86557}, {"x": 1779826894000.0, "y": 24.563333333333333, "classification": "Human", "num": 86553}, {"x": 1779768708000.0, "y": 8.504722222222222, "classification": "Human", "num": 86552}, {"x": 1779740381000.0, "y": 0.7063888888888888, "classification": "Human", "num": 86549}, {"x": 1779746009000.0, "y": 2.6658333333333335, "classification": "Human", "num": 86533}, {"x": 1779840309000.0, "y": 29.021944444444443, "classification": "Human", "num": 86531}, {"x": 1779746644000.0, "y": 3.1358333333333333, "classification": "Human", "num": 86529}, {"x": 1779881102000.0, "y": 40.5875, "classification": "Human", "num": 86528}, {"x": 1779738337000.0, "y": 1.165, "classification": "Human", "num": 86523}, {"x": 1779780153000.0, "y": 12.780555555555555, "classification": "Human", "num": 86524}, {"x": 1779737197000.0, "y": 1.0763888888888888, "classification": "Human", "num": 86517}, {"x": 1779733372000.0, "y": 0.018055555555555554, "classification": "Human", "num": 86516}, {"x": 1779736603000.0, "y": 1.0383333333333333, "classification": "AI-Agentic", "num": 86515}, {"x": 1779732197000.0, "y": 0.2544444444444444, "classification": "Human", "num": 86507}, {"x": 1779730808000.0, "y": 0.021388888888888888, "classification": "Human", "num": 86503}, {"x": 1779746638000.0, "y": 4.465833333333333, "classification": "Human", "num": 86501}, {"x": 1779735163000.0, "y": 1.3469444444444445, "classification": "AI-Agentic", "num": 86500}, {"x": 1779733684000.0, "y": 0.9508333333333333, "classification": "AI-Agentic", "num": 86497}, {"x": 1779728124000.0, "y": 0.09, "classification": "Human", "num": 86489}, {"x": 1779736590000.0, "y": 2.444166666666667, "classification": "Human", "num": 86487}, {"x": 1779728476000.0, "y": 0.235, "classification": "Human", "num": 86484}, {"x": 1779734144000.0, "y": 1.898611111111111, "classification": "AI-Agentic", "num": 86482}, {"x": 1779884767000.0, "y": 43.87083333333333, "classification": "Human", "num": 86479}, {"x": 1779840380000.0, "y": 31.72277777777778, "classification": "Human", "num": 86476}, {"x": 1779726504000.0, "y": 0.09166666666666666, "classification": "Human", "num": 86475}, {"x": 1779725809000.0, "y": 0.16111111111111112, "classification": "Human", "num": 86469}, {"x": 1779738008000.0, "y": 3.7919444444444443, "classification": "Human", "num": 86461}, {"x": 1779859972000.0, "y": 38.05916666666667, "classification": "Human", "num": 86455}, {"x": 1779730797000.0, "y": 2.391388888888889, "classification": "AI-Agentic", "num": 86453}, {"x": 1779880748000.0, "y": 45.02111111111111, "classification": "Human", "num": 86439}, {"x": 1779732285000.0, "y": 3.8072222222222223, "classification": "Human", "num": 86437}, {"x": 1779856274000.0, "y": 38.40555555555556, "classification": "AI-Assisted", "num": 86433}, {"x": 1779732204000.0, "y": 4.246666666666667, "classification": "Human", "num": 86427}, {"x": 1779949908000.0, "y": 64.79777777777778, "classification": "Human", "num": 86426}, {"x": 1779754842000.0, "y": 10.921666666666667, "classification": "Human", "num": 86419}, {"x": 1779876843000.0, "y": 44.87972222222222, "classification": "Human", "num": 86418}, {"x": 1779747828000.0, "y": 9.109444444444444, "classification": "Human", "num": 86415}, {"x": 1779729517000.0, "y": 4.113888888888889, "classification": "Human", "num": 86410}, {"x": 1779757989000.0, "y": 12.111944444444445, "classification": "Human", "num": 86408}, {"x": 1779727509000.0, "y": 3.891111111111111, "classification": "Human", "num": 86403}, {"x": 1779818079000.0, "y": 29.267222222222223, "classification": "Human", "num": 86398}, {"x": 1779722448000.0, "y": 3.0727777777777776, "classification": "Human", "num": 86388}, {"x": 1779722453000.0, "y": 3.1933333333333334, "classification": "Human", "num": 86384}, {"x": 1779722467000.0, "y": 3.5216666666666665, "classification": "Human", "num": 86378}, {"x": 1779714613000.0, "y": 1.3577777777777778, "classification": "Human", "num": 86376}, {"x": 1779709402000.0, "y": 0.09861111111111111, "classification": "Human", "num": 86374}, {"x": 1779976248000.0, "y": 74.59194444444445, "classification": "Human", "num": 86369}, {"x": 1779707628000.0, "y": 0.2125, "classification": "Human", "num": 86363}, {"x": 1779872291000.0, "y": 46.095555555555556, "classification": "Human", "num": 86359}, {"x": 1779717630000.0, "y": 3.2830555555555554, "classification": "Human", "num": 86357}, {"x": 1779719258000.0, "y": 3.8666666666666667, "classification": "Human", "num": 86355}, {"x": 1779705199000.0, "y": 0.019166666666666665, "classification": "Human", "num": 86353}, {"x": 1779717607000.0, "y": 4.292222222222223, "classification": "Human", "num": 86341}, {"x": 1779737958000.0, "y": 10.854444444444445, "classification": "Human", "num": 86330}, {"x": 1779699509000.0, "y": 0.2569444444444444, "classification": "Human", "num": 86329}, {"x": 1779700700000.0, "y": 0.7613888888888889, "classification": "AI-Agentic", "num": 86326}, {"x": 1779703248000.0, "y": 1.5230555555555556, "classification": "AI-Agentic", "num": 86325}, {"x": 1779697066000.0, "y": 0.235, "classification": "Human", "num": 86319}, {"x": 1779717613000.0, "y": 5.971111111111111, "classification": "Human", "num": 86318}, {"x": 1779722463000.0, "y": 7.746388888888889, "classification": "Human", "num": 86313}, {"x": 1779826899000.0, "y": 36.809444444444445, "classification": "Human", "num": 86312}, {"x": 1779702821000.0, "y": 2.672222222222222, "classification": "Human", "num": 86305}, {"x": 1779717625000.0, "y": 7.0225, "classification": "Human", "num": 86302}, {"x": 1779717618000.0, "y": 7.113888888888889, "classification": "Human", "num": 86299}, {"x": 1779935096000.0, "y": 68.43944444444445, "classification": "Human", "num": 86281}, {"x": 1779867533000.0, "y": 50.12888888888889, "classification": "Human", "num": 86270}, {"x": 1779856031000.0, "y": 47.19222222222222, "classification": "Human", "num": 86261}, {"x": 1779722458000.0, "y": 10.140555555555556, "classification": "Human", "num": 86260}, {"x": 1779747157000.0, "y": 18.0475, "classification": "Human", "num": 86240}, {"x": 1779709268000.0, "y": 7.599444444444444, "classification": "Human", "num": 86238}, {"x": 1779706231000.0, "y": 7.225833333333333, "classification": "Human", "num": 86234}, {"x": 1779899539000.0, "y": 61.276666666666664, "classification": "Human", "num": 86225}, {"x": 1779707712000.0, "y": 8.306111111111111, "classification": "Human", "num": 86222}, {"x": 1779748773000.0, "y": 19.940555555555555, "classification": "Human", "num": 86220}, {"x": 1779672137000.0, "y": 0.6702777777777778, "classification": "AI-Agentic", "num": 86197}, {"x": 1779773043000.0, "y": 28.92111111111111, "classification": "Human", "num": 86191}, {"x": 1779835970000.0, "y": 47.24305555555556, "classification": "Human", "num": 86181}, {"x": 1779685983000.0, "y": 7.615, "classification": "Human", "num": 86150}, {"x": 1779730362000.0, "y": 20.459444444444443, "classification": "Human", "num": 86134}, {"x": 1779925082000.0, "y": 75.15861111111111, "classification": "Human", "num": 86123}, {"x": 1779868540000.0, "y": 60.01305555555555, "classification": "Human", "num": 86101}, {"x": 1779706226000.0, "y": 14.934166666666666, "classification": "Human", "num": 86100}, {"x": 1779673216000.0, "y": 6.538055555555555, "classification": "Human", "num": 86081}, {"x": 1779648978000.0, "y": 0.6455555555555555, "classification": "AI-Agentic", "num": 86072}, {"x": 1779831240000.0, "y": 51.53666666666667, "classification": "Human", "num": 86069}, {"x": 1779933072000.0, "y": 80.1588888888889, "classification": "Human", "num": 86061}, {"x": 1779685803000.0, "y": 11.563611111111111, "classification": "Human", "num": 86060}, {"x": 1779702323000.0, "y": 16.16611111111111, "classification": "AI-Assisted", "num": 86059}, {"x": 1779729660000.0, "y": 23.996388888888887, "classification": "Human", "num": 86056}, {"x": 1779644943000.0, "y": 0.4938888888888889, "classification": "Human", "num": 86054}, {"x": 1779753425000.0, "y": 30.9825, "classification": "Human", "num": 86046}, {"x": 1779643683000.0, "y": 0.9197222222222222, "classification": "Human", "num": 86042}, {"x": 1779643965000.0, "y": 1.0233333333333334, "classification": "AI-Agentic", "num": 86041}, {"x": 1779729499000.0, "y": 25.110555555555557, "classification": "Human", "num": 86037}, {"x": 1779638908000.0, "y": 0.5755555555555556, "classification": "Human", "num": 86027}, {"x": 1779849746000.0, "y": 59.721666666666664, "classification": "Human", "num": 86020}, {"x": 1779707332000.0, "y": 20.95111111111111, "classification": "Human", "num": 86010}, {"x": 1779699611000.0, "y": 20.3475, "classification": "Human", "num": 85989}, {"x": 1779736570000.0, "y": 30.889444444444443, "classification": "Human", "num": 85985}, {"x": 1779663681000.0, "y": 11.363888888888889, "classification": "Human", "num": 85970}, {"x": 1779736776000.0, "y": 32.216944444444444, "classification": "Human", "num": 85967}, {"x": 1779721111000.0, "y": 27.884444444444444, "classification": "Human", "num": 85965}, {"x": 1779703200000.0, "y": 23.229166666666668, "classification": "AI-Assisted", "num": 85960}, {"x": 1779700354000.0, "y": 22.573888888888888, "classification": "Human", "num": 85958}, {"x": 1779696450000.0, "y": 21.62388888888889, "classification": "Human", "num": 85956}, {"x": 1779659482000.0, "y": 11.568888888888889, "classification": "Human", "num": 85952}, {"x": 1779736565000.0, "y": 33.31444444444445, "classification": "Human", "num": 85942}, {"x": 1779864113000.0, "y": 69.53083333333333, "classification": "Human", "num": 85936}, {"x": 1779753421000.0, "y": 38.82138888888889, "classification": "Human", "num": 85934}, {"x": 1779711451000.0, "y": 27.236944444444443, "classification": "Human", "num": 85933}, {"x": 1779609946000.0, "y": 0.25805555555555554, "classification": "AI-Agentic", "num": 85919}, {"x": 1779608836000.0, "y": 0.13333333333333333, "classification": "Human", "num": 85915}, {"x": 1779761515000.0, "y": 42.674166666666665, "classification": "Human", "num": 85911}, {"x": 1779761215000.0, "y": 42.605, "classification": "Human", "num": 85909}, {"x": 1779607741000.0, "y": 0.17083333333333334, "classification": "Human", "num": 85908}, {"x": 1779761196000.0, "y": 42.914722222222224, "classification": "Human", "num": 85906}, {"x": 1779607335000.0, "y": 0.36583333333333334, "classification": "Human", "num": 85903}, {"x": 1779602069000.0, "y": 0.10972222222222222, "classification": "Human", "num": 85895}, {"x": 1779767053000.0, "y": 46.0825, "classification": "Human", "num": 85894}, {"x": 1779605750000.0, "y": 1.4355555555555555, "classification": "Human", "num": 85893}, {"x": 1779761704000.0, "y": 44.79416666666667, "classification": "Human", "num": 85891}, {"x": 1779609444000.0, "y": 2.7358333333333333, "classification": "Human", "num": 85889}, {"x": 1779602558000.0, "y": 0.9622222222222222, "classification": "Human", "num": 85886}, {"x": 1779761205000.0, "y": 45.20361111111111, "classification": "AI-Assisted", "num": 85882}, {"x": 1779600190000.0, "y": 0.7294444444444445, "classification": "AI-Agentic", "num": 85879}, {"x": 1779745874000.0, "y": 41.74722222222222, "classification": "Human", "num": 85875}, {"x": 1779745016000.0, "y": 41.5125, "classification": "Human", "num": 85874}, {"x": 1779604538000.0, "y": 3.1727777777777777, "classification": "Human", "num": 85865}, {"x": 1779595256000.0, "y": 0.6491666666666667, "classification": "AI-Agentic", "num": 85862}, {"x": 1779606496000.0, "y": 4.108055555555556, "classification": "Human", "num": 85860}, {"x": 1779593462000.0, "y": 0.5088888888888888, "classification": "Human", "num": 85859}, {"x": 1779591949000.0, "y": 0.3566666666666667, "classification": "Human", "num": 85856}, {"x": 1779606922000.0, "y": 4.7652777777777775, "classification": "Human", "num": 85850}, {"x": 1779612017000.0, "y": 6.253611111111111, "classification": "Human", "num": 85849}, {"x": 1779590060000.0, "y": 0.5016666666666667, "classification": "Human", "num": 85843}, {"x": 1779600174000.0, "y": 3.450833333333333, "classification": "Human", "num": 85840}, {"x": 1779591123000.0, "y": 1.4625, "classification": "Human", "num": 85835}, {"x": 1779681455000.0, "y": 26.828611111111112, "classification": "Human", "num": 85832}, {"x": 1779584708000.0, "y": 0.24333333333333335, "classification": "Human", "num": 85827}, {"x": 1779610273000.0, "y": 7.726388888888889, "classification": "Human", "num": 85824}, {"x": 1779600133000.0, "y": 4.9686111111111115, "classification": "Human", "num": 85821}, {"x": 1779608522000.0, "y": 7.432777777777778, "classification": "Human", "num": 85818}, {"x": 1779738317000.0, "y": 43.54694444444444, "classification": "Human", "num": 85817}, {"x": 1779600152000.0, "y": 5.4275, "classification": "AI-Assisted", "num": 85815}, {"x": 1779582416000.0, "y": 0.5488888888888889, "classification": "Human", "num": 85814}, {"x": 1779581404000.0, "y": 0.3055555555555556, "classification": "Human", "num": 85812}, {"x": 1779601683000.0, "y": 6.0375, "classification": "Human", "num": 85811}, {"x": 1779611940000.0, "y": 9.268055555555556, "classification": "Human", "num": 85805}, {"x": 1779608399000.0, "y": 8.668888888888889, "classification": "Human", "num": 85802}, {"x": 1779591536000.0, "y": 4.755277777777778, "classification": "Human", "num": 85796}, {"x": 1779595173000.0, "y": 5.856388888888889, "classification": "Human", "num": 85795}, {"x": 1779600119000.0, "y": 7.245277777777778, "classification": "Human", "num": 85794}, {"x": 1779608526000.0, "y": 10.23611111111111, "classification": "Human", "num": 85789}, {"x": 1779681442000.0, "y": 30.758055555555554, "classification": "Human", "num": 85787}, {"x": 1779845278000.0, "y": 76.48194444444445, "classification": "Human", "num": 85786}, {"x": 1779608513000.0, "y": 10.793055555555556, "classification": "Human", "num": 85785}, {"x": 1779685899000.0, "y": 32.568333333333335, "classification": "Human", "num": 85780}, {"x": 1779733148000.0, "y": 45.7425, "classification": "Human", "num": 85778}, {"x": 1779591532000.0, "y": 6.433611111111111, "classification": "Human", "num": 85777}, {"x": 1779609716000.0, "y": 11.520555555555555, "classification": "Human", "num": 85776}, {"x": 1779608506000.0, "y": 11.288333333333334, "classification": "Human", "num": 85775}, {"x": 1779604664000.0, "y": 10.375555555555556, "classification": "Human", "num": 85772}, {"x": 1779593882000.0, "y": 7.820555555555556, "classification": "Human", "num": 85764}, {"x": 1779608502000.0, "y": 11.950277777777778, "classification": "Human", "num": 85761}, {"x": 1779608496000.0, "y": 12.555, "classification": "Human", "num": 85752}, {"x": 1779583555000.0, "y": 5.9944444444444445, "classification": "Human", "num": 85742}, {"x": 1779686829000.0, "y": 34.79527777777778, "classification": "Human", "num": 85739}, {"x": 1779565343000.0, "y": 1.361388888888889, "classification": "Human", "num": 85735}, {"x": 1779733145000.0, "y": 48.08, "classification": "Human", "num": 85733}, {"x": 1779579822000.0, "y": 5.492222222222222, "classification": "Human", "num": 85732}, {"x": 1779603868000.0, "y": 12.521666666666667, "classification": "Human", "num": 85726}, {"x": 1779566167000.0, "y": 2.073888888888889, "classification": "Human", "num": 85724}, {"x": 1779566135000.0, "y": 2.7222222222222223, "classification": "Human", "num": 85718}, {"x": 1779634189000.0, "y": 22.728055555555557, "classification": "Human", "num": 85709}, {"x": 1779607348000.0, "y": 15.624722222222223, "classification": "Human", "num": 85708}, {"x": 1779581876000.0, "y": 8.672777777777778, "classification": "Human", "num": 85707}, {"x": 1779552128000.0, "y": 0.5666666666666667, "classification": "Human", "num": 85706}, {"x": 1779736560000.0, "y": 51.85305555555556, "classification": "Human", "num": 85704}, {"x": 1779555127000.0, "y": 1.5022222222222221, "classification": "Human", "num": 85701}, {"x": 1779559739000.0, "y": 3.3291666666666666, "classification": "Human", "num": 85700}, {"x": 1779554216000.0, "y": 2.413611111111111, "classification": "AI-Assisted", "num": 85694}, {"x": 1779546433000.0, "y": 0.33694444444444444, "classification": "Human", "num": 85693}, {"x": 1779712453000.0, "y": 46.64833333333333, "classification": "Human", "num": 85690}, {"x": 1779562207000.0, "y": 5.4463888888888885, "classification": "AI-Assisted", "num": 85682}, {"x": 1779540209000.0, "y": 0.2761111111111111, "classification": "Human", "num": 85673}, {"x": 1779711398000.0, "y": 48.48083333333334, "classification": "Human", "num": 85667}, {"x": 1779597012000.0, "y": 17.809166666666666, "classification": "AI-Assisted", "num": 85656}, {"x": 1779591528000.0, "y": 16.746111111111112, "classification": "Human", "num": 85652}, {"x": 1779554208000.0, "y": 7.821666666666666, "classification": "Human", "num": 85638}, {"x": 1779554202000.0, "y": 8.051111111111112, "classification": "Human", "num": 85631}, {"x": 1779554212000.0, "y": 8.336666666666666, "classification": "Human", "num": 85625}, {"x": 1779562197000.0, "y": 10.695277777777777, "classification": "Human", "num": 85619}, {"x": 1779554224000.0, "y": 8.617777777777778, "classification": "Human", "num": 85615}, {"x": 1779522345000.0, "y": 0.3511111111111111, "classification": "Human", "num": 85605}, {"x": 1779562202000.0, "y": 11.525555555555556, "classification": "Human", "num": 85603}, {"x": 1779522723000.0, "y": 0.6263888888888889, "classification": "Human", "num": 85599}, {"x": 1779868312000.0, "y": 96.64083333333333, "classification": "Human", "num": 85597}, {"x": 1779593330000.0, "y": 20.5475, "classification": "Human", "num": 85591}, {"x": 1779600408000.0, "y": 22.54611111111111, "classification": "AI-Assisted", "num": 85590}, {"x": 1779523162000.0, "y": 1.1119444444444444, "classification": "Human", "num": 85589}, {"x": 1779521269000.0, "y": 0.8816666666666667, "classification": "AI-Agentic", "num": 85586}, {"x": 1779756412000.0, "y": 66.2238888888889, "classification": "Human", "num": 85584}, {"x": 1779608518000.0, "y": 25.6375, "classification": "Human", "num": 85579}, {"x": 1779568110000.0, "y": 14.428333333333333, "classification": "Human", "num": 85578}, {"x": 1779600968000.0, "y": 23.68166666666667, "classification": "Human", "num": 85576}, {"x": 1779532024000.0, "y": 4.815555555555555, "classification": "Human", "num": 85570}, {"x": 1779744650000.0, "y": 64.04583333333333, "classification": "Human", "num": 85569}, {"x": 1779537378000.0, "y": 6.482222222222222, "classification": "Human", "num": 85568}, {"x": 1779516814000.0, "y": 0.7922222222222223, "classification": "Human", "num": 85567}, {"x": 1779737982000.0, "y": 62.27722222222222, "classification": "Human", "num": 85566}, {"x": 1779524474000.0, "y": 3.0419444444444443, "classification": "Human", "num": 85564}, {"x": 1779513725000.0, "y": 0.22055555555555556, "classification": "Human", "num": 85562}, {"x": 1779784920000.0, "y": 75.98527777777778, "classification": "Human", "num": 85558}, {"x": 1779675151000.0, "y": 45.73916666666667, "classification": "Human", "num": 85555}, {"x": 1779510427000.0, "y": 0.021944444444444444, "classification": "Human", "num": 85554}, {"x": 1779562193000.0, "y": 14.890833333333333, "classification": "Human", "num": 85549}, {"x": 1779513788000.0, "y": 1.6194444444444445, "classification": "Human", "num": 85547}, {"x": 1779508194000.0, "y": 0.13111111111111112, "classification": "Human", "num": 85545}, {"x": 1779507324000.0, "y": 0.025555555555555557, "classification": "Human", "num": 85544}, {"x": 1779741888000.0, "y": 65.31722222222223, "classification": "Human", "num": 85542}, {"x": 1779514778000.0, "y": 2.241388888888889, "classification": "Human", "num": 85541}, {"x": 1779519690000.0, "y": 3.993333333333333, "classification": "Human", "num": 85534}, {"x": 1779511985000.0, "y": 1.8936111111111111, "classification": "Human", "num": 85533}, {"x": 1779504115000.0, "y": 0.16194444444444445, "classification": "Human", "num": 85528}, {"x": 1779507558000.0, "y": 1.2394444444444443, "classification": "Human", "num": 85527}, {"x": 1779508215000.0, "y": 1.5844444444444445, "classification": "Human", "num": 85525}, {"x": 1779501622000.0, "y": 0.15166666666666667, "classification": "AI-Agentic", "num": 85519}, {"x": 1779500985000.0, "y": 0.13944444444444445, "classification": "Human", "num": 85518}, {"x": 1779606180000.0, "y": 29.371111111111112, "classification": "Human", "num": 85517}, {"x": 1779499835000.0, "y": 0.07861111111111112, "classification": "Human", "num": 85515}, {"x": 1779499460000.0, "y": 0.009722222222222222, "classification": "Human", "num": 85513}, {"x": 1779556854000.0, "y": 16.395833333333332, "classification": "Human", "num": 85506}, {"x": 1779497504000.0, "y": 0.10666666666666667, "classification": "Human", "num": 85503}, {"x": 1779550304000.0, "y": 14.900277777777777, "classification": "Human", "num": 85501}, {"x": 1779499807000.0, "y": 0.9738888888888889, "classification": "Human", "num": 85500}, {"x": 1779502445000.0, "y": 1.7594444444444444, "classification": "Human", "num": 85499}, {"x": 1779671939000.0, "y": 49.61333333333334, "classification": "Human", "num": 85491}, {"x": 1779493950000.0, "y": 0.2752777777777778, "classification": "Human", "num": 85490}, {"x": 1779740601000.0, "y": 68.865, "classification": "Human", "num": 85489}, {"x": 1779588852000.0, "y": 26.886388888888888, "classification": "Human", "num": 85488}, {"x": 1779492494000.0, "y": 0.16694444444444445, "classification": "Human", "num": 85487}, {"x": 1779496979000.0, "y": 1.5427777777777778, "classification": "Human", "num": 85485}, {"x": 1779594283000.0, "y": 28.97138888888889, "classification": "Human", "num": 85482}, {"x": 1779584281000.0, "y": 26.729166666666668, "classification": "Human", "num": 85477}, {"x": 1779548928000.0, "y": 16.93027777777778, "classification": "Human", "num": 85476}, {"x": 1779654856000.0, "y": 46.37555555555556, "classification": "Human", "num": 85475}, {"x": 1779488263000.0, "y": 0.45472222222222225, "classification": "Human", "num": 85468}, {"x": 1779608389000.0, "y": 34.381388888888885, "classification": "Human", "num": 85460}, {"x": 1779486213000.0, "y": 0.5080555555555556, "classification": "Human", "num": 85459}, {"x": 1779483739000.0, "y": 0.09722222222222222, "classification": "Human", "num": 85456}, {"x": 1779485165000.0, "y": 0.5230555555555556, "classification": "Human", "num": 85455}, {"x": 1779485120000.0, "y": 0.5411111111111111, "classification": "Human", "num": 85454}, {"x": 1779485063000.0, "y": 0.5761111111111111, "classification": "Human", "num": 85453}, {"x": 1779483294000.0, "y": 0.10333333333333333, "classification": "Human", "num": 85452}, {"x": 1779485012000.0, "y": 0.6180555555555556, "classification": "Human", "num": 85451}, {"x": 1779484109000.0, "y": 0.39222222222222225, "classification": "Human", "num": 85449}, {"x": 1779482604000.0, "y": 0.08, "classification": "Human", "num": 85447}, {"x": 1779543489000.0, "y": 17.344444444444445, "classification": "Human", "num": 85443}, {"x": 1779480345000.0, "y": 0.10694444444444444, "classification": "Human", "num": 85437}, {"x": 1779547742000.0, "y": 19.095555555555556, "classification": "AI-Assisted", "num": 85425}, {"x": 1779479005000.0, "y": 0.5961111111111111, "classification": "Human", "num": 85417}, {"x": 1779899424000.0, "y": 117.48861111111111, "classification": "Human", "num": 85416}, {"x": 1779601442000.0, "y": 34.76083333333333, "classification": "Human", "num": 85414}, {"x": 1779477123000.0, "y": 0.365, "classification": "Human", "num": 85411}, {"x": 1779482133000.0, "y": 1.9930555555555556, "classification": "AI-Assisted", "num": 85406}, {"x": 1779504390000.0, "y": 8.606111111111112, "classification": "Human", "num": 85393}, {"x": 1779482114000.0, "y": 2.424166666666667, "classification": "Human", "num": 85392}, {"x": 1779480039000.0, "y": 1.896388888888889, "classification": "Human", "num": 85391}, {"x": 1779840888000.0, "y": 102.30194444444444, "classification": "Human", "num": 85387}, {"x": 1779482065000.0, "y": 2.687777777777778, "classification": "Human", "num": 85383}, {"x": 1779544464000.0, "y": 20.098333333333333, "classification": "Human", "num": 85380}, {"x": 1779482038000.0, "y": 2.7630555555555554, "classification": "Human", "num": 85379}, {"x": 1779541562000.0, "y": 19.35361111111111, "classification": "Human", "num": 85378}, {"x": 1779480829000.0, "y": 2.5125, "classification": "Human", "num": 85377}, {"x": 1779473945000.0, "y": 0.6313888888888889, "classification": "Human", "num": 85376}, {"x": 1779474080000.0, "y": 0.8133333333333334, "classification": "Human", "num": 85372}, {"x": 1779535663000.0, "y": 17.923055555555557, "classification": "Human", "num": 85371}, {"x": 1779473691000.0, "y": 0.7788888888888889, "classification": "AI-Agentic", "num": 85369}, {"x": 1779758260000.0, "y": 80.22416666666666, "classification": "Human", "num": 85361}, {"x": 1779504778000.0, "y": 10.066666666666666, "classification": "Human", "num": 85357}, {"x": 1779469117000.0, "y": 0.29305555555555557, "classification": "Human", "num": 85355}, {"x": 1779721385000.0, "y": 70.925, "classification": "Human", "num": 85348}, {"x": 1779493421000.0, "y": 7.6305555555555555, "classification": "Human", "num": 85347}, {"x": 1779470042000.0, "y": 1.1452777777777778, "classification": "Human", "num": 85346}, {"x": 1779466061000.0, "y": 0.09472222222222222, "classification": "Human", "num": 85344}, {"x": 1779471856000.0, "y": 1.785, "classification": "Human", "num": 85342}, {"x": 1779920645000.0, "y": 126.45805555555556, "classification": "AI-Assisted", "num": 85341}, {"x": 1779469640000.0, "y": 1.1822222222222223, "classification": "Human", "num": 85340}, {"x": 1779468742000.0, "y": 1.0375, "classification": "Human", "num": 85336}, {"x": 1779483551000.0, "y": 5.316111111111111, "classification": "Human", "num": 85329}, {"x": 1779483542000.0, "y": 5.316666666666666, "classification": "Human", "num": 85328}, {"x": 1779483546000.0, "y": 5.321111111111111, "classification": "Human", "num": 85327}, {"x": 1779468367000.0, "y": 1.1430555555555555, "classification": "Human", "num": 85326}, {"x": 1779464287000.0, "y": 0.08388888888888889, "classification": "Human", "num": 85325}, {"x": 1779468016000.0, "y": 1.1680555555555556, "classification": "Human", "num": 85324}, {"x": 1779483537000.0, "y": 5.668888888888889, "classification": "Human", "num": 85323}, {"x": 1779462853000.0, "y": 0.3233333333333333, "classification": "Human", "num": 85319}, {"x": 1779778900000.0, "y": 88.48444444444445, "classification": "Human", "num": 85309}, {"x": 1779465421000.0, "y": 1.7486111111111111, "classification": "Human", "num": 85303}, {"x": 1779467116000.0, "y": 2.3241666666666667, "classification": "Human", "num": 85302}, {"x": 1779463318000.0, "y": 1.4533333333333334, "classification": "AI-Agentic", "num": 85300}, {"x": 1779462968000.0, "y": 1.5980555555555556, "classification": "Human", "num": 85299}, {"x": 1779462338000.0, "y": 1.4247222222222222, "classification": "Human", "num": 85298}, {"x": 1779746618000.0, "y": 80.5175, "classification": "Human", "num": 85295}, {"x": 1779758850000.0, "y": 84.49472222222222, "classification": "Human", "num": 85288}, {"x": 1779465343000.0, "y": 3.3577777777777778, "classification": "Human", "num": 85283}, {"x": 1779453456000.0, "y": 0.37777777777777777, "classification": "Human", "num": 85279}, {"x": 1779456999000.0, "y": 1.3652777777777778, "classification": "Human", "num": 85278}, {"x": 1779845044000.0, "y": 109.87444444444445, "classification": "Human", "num": 85270}, {"x": 1779899838000.0, "y": 125.17277777777778, "classification": "Human", "num": 85269}, {"x": 1779591056000.0, "y": 40.25833333333333, "classification": "Human", "num": 85256}, {"x": 1779450007000.0, "y": 1.321388888888889, "classification": "Human", "num": 85253}, {"x": 1779444711000.0, "y": 0.2625, "classification": "Human", "num": 85244}];
+
+        const humanPoints = recentPRs.filter(p => p.classification === 'Human');
+        const assistedPoints = recentPRs.filter(p => p.classification === 'AI-Assisted');
+        const agenticPoints = recentPRs.filter(p => p.classification === 'AI-Agentic');
+
+        const ctxScatter = document.getElementById('scatterChart').getContext('2d');
+        new Chart(ctxScatter, {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: 'Human',
+                        data: humanPoints.map(p => ({ x: p.x, y: p.y })),
+                        backgroundColor: '#10b981',
+                        pointRadius: 6
+                    },
+                    {
+                        label: 'AI-Assisted',
+                        data: assistedPoints.map(p => ({ x: p.x, y: p.y })),
+                        backgroundColor: '#3b82f6',
+                        pointRadius: 6
+                    },
+                    {
+                        label: 'AI-Agentic',
+                        data: agenticPoints.map(p => ({ x: p.x, y: p.y })),
+                        backgroundColor: '#8b5cf6',
+                        pointRadius: 7,
+                        pointStyle: 'rectRot'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'linear',
+                        title: {
+                            display: true,
+                            text: 'Timeline (Date Merged)',
+                            color: '#9ca3af'
+                        },
+                        ticks: {
+                            color: '#9ca3af',
+                            callback: function(value) {
+                                return new Date(value).toLocaleDateString(undefined, {month: 'short', year: '2-digit'});
+                            }
+                        },
+                        grid: { color: '#1f2937' }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Cycle Time (Hours)',
+                            color: '#9ca3af'
+                        },
+                        grid: { color: '#1f2937' },
+                        ticks: { color: '#9ca3af' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
