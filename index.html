@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitHub Flow Analytics — Antigravity</title>
+  <meta name="description" content="Premium GitHub repository flow analytics dashboard with AI coaching. Analyze cycle time, WIP, throughput, and get AI-powered engineering insights." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    /* ── Design Tokens ─────────────────────────────────────────── */
+    :root {
+      --bg:        #080d18;
+      --surface:   #0f1628;
+      --card:      #141e35;
+      --card-hover:#18253f;
+      --border:    #1e2d4a;
+      --border-hi: rgba(139,92,246,.5);
+      --violet:    #8b5cf6;
+      --blue:      #3b82f6;
+      --cyan:      #06b6d4;
+      --green:     #10b981;
+      --amber:     #f59e0b;
+      --rose:      #f43f5e;
+      --text:      #e2e8f0;
+      --text-muted:#64748b;
+      --text-dim:  #94a3b8;
+      --radius:    14px;
+      --chat-w:    400px;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    html{scroll-behavior:smooth;}
+    body{
+      font-family:'Outfit',sans-serif;
+      background:var(--bg);
+      color:var(--text);
+      min-height:100vh;
+      overflow-x:hidden;
+    }
+
+    /* ── Scrollbar ──────────────────────────────────────────────── */
+    ::-webkit-scrollbar{width:6px;height:6px;}
+    ::-webkit-scrollbar-track{background:var(--surface);}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:99px;}
+
+    /* ── Noise & Gradient BG ────────────────────────────────────── */
+    body::before{
+      content:'';position:fixed;inset:0;
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, rgba(139,92,246,.12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 90% 110%, rgba(59,130,246,.10) 0%, transparent 60%);
+      pointer-events:none;z-index:0;
+    }
+
+    /* ── Layout Shell ───────────────────────────────────────────── */
+    #app{
+      position:relative;z-index:1;
+      max-width:1440px;margin:0 auto;
+      padding:2rem 2.5rem 4rem;
+      transition:padding-right .4s ease;
+    }
+    #app.chat-open{padding-right:calc(var(--chat-w) + 2rem);}
+
+    /* ── Top Header ─────────────────────────────────────────────── */
+    header{
+      display:flex;align-items:center;justify-content:space-between;
+      gap:1.5rem;margin-bottom:2.5rem;
+      padding-bottom:1.5rem;
+      border-bottom:1px solid var(--border);
+      flex-wrap:wrap;
+    }
+    .logo-area h1{
+      font-size:1.8rem;font-weight:800;
+      background:linear-gradient(135deg,#a78bfa,#60a5fa);
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+      line-height:1.1;
+    }
+    .logo-area .tagline{font-size:.85rem;color:var(--text-muted);margin-top:.3rem;}
+
+    /* ── Repo Input Bar ─────────────────────────────────────────── */
+    .repo-bar{
+      display:flex;align-items:center;gap:.75rem;flex:1;
+      max-width:600px;min-width:280px;
+    }
+    .repo-bar input{
+      flex:1;
+      padding:.7rem 1rem;
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      color:var(--text);font-family:inherit;font-size:.9rem;
+      outline:none;transition:border-color .2s,box-shadow .2s;
+    }
+    .repo-bar input:focus{
+      border-color:var(--violet);
+      box-shadow:0 0 0 3px rgba(139,92,246,.18);
+    }
+    .repo-bar input::placeholder{color:var(--text-muted);}
+    .btn{
+      display:inline-flex;align-items:center;gap:.5rem;
+      padding:.7rem 1.4rem;
+      border:none;border-radius:var(--radius);
+      font-family:inherit;font-size:.9rem;font-weight:600;
+      cursor:pointer;transition:all .2s;white-space:nowrap;
+    }
+    .btn-primary{
+      background:linear-gradient(135deg,var(--violet),var(--blue));
+      color:#fff;
+      box-shadow:0 4px 20px rgba(139,92,246,.35);
+    }
+    .btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 28px rgba(139,92,246,.5);}
+    .btn-primary:active{transform:translateY(0);}
+    .btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none;}
+    .btn-ghost{
+      background:var(--card);border:1px solid var(--border);
+      color:var(--text-dim);
+    }
+    .btn-ghost:hover{border-color:var(--violet);color:var(--text);}
+
+    /* Spinner */
+    .spinner{
+      width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
+      border-top-color:#fff;border-radius:50%;
+      animation:spin .7s linear infinite;
+      display:none;
+    }
+    .loading .spinner{display:block;}
+    .loading .btn-label{display:none;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+
+    /* ── Status Banner ──────────────────────────────────────────── */
+    #status-bar{
+      display:none;
+      padding:.75rem 1.2rem;
+      border-radius:var(--radius);
+      margin-bottom:1.5rem;
+      font-size:.9rem;font-weight:500;
+      border:1px solid transparent;
+    }
+    #status-bar.info{background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#93c5fd;}
+    #status-bar.error{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.3);color:#fda4af;}
+    #status-bar.success{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#6ee7b7;}
+
+    /* ── Placeholder State ──────────────────────────────────────── */
+    #placeholder{
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      min-height:55vh;gap:1rem;text-align:center;
+    }
+    .placeholder-icon{
+      width:80px;height:80px;
+      background:linear-gradient(135deg,rgba(139,92,246,.2),rgba(59,130,246,.2));
+      border:1px solid rgba(139,92,246,.3);
+      border-radius:50%;
+      display:flex;align-items:center;justify-content:center;
+      font-size:2.2rem;margin-bottom:.5rem;
+    }
+    #placeholder h2{font-size:1.5rem;font-weight:700;color:var(--text-dim);}
+    #placeholder p{font-size:.95rem;color:var(--text-muted);max-width:420px;line-height:1.6;}
+
+    /* ── Dashboard (hidden until data loads) ────────────────────── */
+    #dashboard{display:none;}
+
+    /* ── KPI Cards ──────────────────────────────────────────────── */
+    .kpi-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+      gap:1rem;margin-bottom:2rem;
+    }
+    .kpi{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:1.25rem 1.4rem;
+      position:relative;overflow:hidden;
+      transition:transform .2s,border-color .2s,box-shadow .2s;
+      cursor:default;
+    }
+    .kpi::before{
+      content:'';position:absolute;top:-30%;left:-30%;
+      width:80%;height:80%;
+      background:radial-gradient(circle,rgba(139,92,246,.08),transparent 70%);
+      pointer-events:none;
+    }
+    .kpi:hover{transform:translateY(-3px);border-color:var(--border-hi);box-shadow:0 8px 32px rgba(0,0,0,.3);}
+    .kpi-label{font-size:.75rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem;}
+    .kpi-value{font-size:1.9rem;font-weight:800;line-height:1;}
+    .kpi-sub{font-size:.78rem;color:var(--text-muted);margin-top:.35rem;}
+    .kpi-badge{
+      display:inline-block;
+      padding:.15rem .5rem;border-radius:99px;
+      font-size:.7rem;font-weight:600;margin-top:.5rem;
+    }
+    .badge-violet{background:rgba(139,92,246,.15);color:#c4b5fd;}
+    .badge-green{background:rgba(16,185,129,.15);color:#6ee7b7;}
+    .badge-amber{background:rgba(245,158,11,.15);color:#fcd34d;}
+    .badge-rose{background:rgba(244,63,94,.15);color:#fda4af;}
+    .badge-blue{background:rgba(59,130,246,.15);color:#93c5fd;}
+
+    /* ── Section Header ─────────────────────────────────────────── */
+    .section-header{
+      display:flex;align-items:center;gap:.75rem;
+      margin:2.5rem 0 1rem;
+    }
+    .section-header h2{font-size:1.15rem;font-weight:700;}
+    .section-header .section-line{flex:1;height:1px;background:var(--border);}
+
+    /* ── Charts Grid ────────────────────────────────────────────── */
+    .charts-2col{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem;}
+    .charts-full{margin-bottom:1.5rem;}
+    .charts-3col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;margin-bottom:1.5rem;}
+
+    @media(max-width:900px){
+      .charts-2col,.charts-3col{grid-template-columns:1fr;}
+    }
+
+    .chart-card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:1.5rem;
+      transition:border-color .2s;
+    }
+    .chart-card:hover{border-color:rgba(139,92,246,.3);}
+    .chart-title{
+      font-size:.85rem;font-weight:700;color:var(--text-dim);
+      text-transform:uppercase;letter-spacing:.05em;margin-bottom:1rem;
+    }
+    .chart-canvas-wrap{position:relative;}
+    .chart-canvas-wrap canvas{max-height:260px;}
+    .chart-canvas-wrap.tall canvas{max-height:340px;}
+    .chart-canvas-wrap.xtra-tall canvas{max-height:440px;}
+
+    /* ── Chat Drawer ────────────────────────────────────────────── */
+    #chat-drawer{
+      position:fixed;right:0;top:0;bottom:0;
+      width:var(--chat-w);
+      background:rgba(15,22,40,.92);
+      border-left:1px solid var(--border);
+      backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+      display:flex;flex-direction:column;
+      transform:translateX(100%);
+      transition:transform .4s cubic-bezier(.4,0,.2,1);
+      z-index:200;
+    }
+    #chat-drawer.open{transform:translateX(0);}
+
+    .chat-header{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:1.25rem 1.5rem;
+      border-bottom:1px solid var(--border);
+      flex-shrink:0;
+    }
+    .chat-header-info{display:flex;align-items:center;gap:.75rem;}
+    .chat-avatar{
+      width:36px;height:36px;border-radius:50%;
+      background:linear-gradient(135deg,var(--violet),var(--blue));
+      display:flex;align-items:center;justify-content:center;
+      font-size:1.1rem;flex-shrink:0;
+    }
+    .chat-header h3{font-size:1rem;font-weight:700;}
+    .chat-header p{font-size:.75rem;color:var(--text-muted);}
+    .chat-close{
+      background:none;border:none;color:var(--text-muted);
+      font-size:1.4rem;cursor:pointer;line-height:1;
+      transition:color .15s;padding:.25rem;
+    }
+    .chat-close:hover{color:var(--text);}
+
+    /* Quick chips */
+    .chip-area{
+      display:flex;flex-wrap:wrap;gap:.5rem;
+      padding:.75rem 1.25rem;
+      border-bottom:1px solid var(--border);
+      flex-shrink:0;
+    }
+    .chip{
+      padding:.3rem .8rem;
+      background:rgba(139,92,246,.1);
+      border:1px solid rgba(139,92,246,.25);
+      border-radius:99px;
+      font-size:.72rem;font-weight:500;color:#c4b5fd;
+      cursor:pointer;transition:all .15s;white-space:nowrap;
+    }
+    .chip:hover{background:rgba(139,92,246,.25);border-color:rgba(139,92,246,.5);}
+
+    /* Messages */
+    #chat-messages{
+      flex:1;overflow-y:auto;
+      padding:1rem 1.25rem;
+      display:flex;flex-direction:column;gap:.75rem;
+    }
+    .msg{
+      max-width:88%;line-height:1.55;
+      font-size:.875rem;
+      animation:msgIn .25s ease;
+    }
+    @keyframes msgIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+    .msg.user{
+      align-self:flex-end;
+      background:linear-gradient(135deg,rgba(139,92,246,.35),rgba(59,130,246,.25));
+      border:1px solid rgba(139,92,246,.3);
+      padding:.65rem 1rem;border-radius:14px 14px 4px 14px;
+      color:var(--text);
+    }
+    .msg.assistant{
+      align-self:flex-start;
+      background:var(--surface);
+      border:1px solid var(--border);
+      padding:.65rem 1rem;border-radius:14px 14px 14px 4px;
+      color:var(--text-dim);
+    }
+    .msg.assistant strong{color:var(--text);}
+    .msg.assistant code{
+      background:rgba(139,92,246,.15);
+      padding:.1em .35em;border-radius:4px;font-size:.82em;
+      font-family:ui-monospace,monospace;
+    }
+    .msg.thinking{
+      align-self:flex-start;
+      color:var(--text-muted);
+      font-style:italic;font-size:.8rem;
+      padding:.5rem 0;
+    }
+    .msg.thinking::after{
+      content:'...';animation:dots 1.2s infinite;
+    }
+    @keyframes dots{0%{content:'.';}33%{content:'..';}66%{content:'...';}100%{content:'.'}}
+
+    /* System message */
+    .msg.system-msg{
+      align-self:center;
+      color:var(--text-muted);font-size:.75rem;
+      text-align:center;padding:.25rem;
+    }
+
+    /* Chat input */
+    .chat-input-area{
+      display:flex;align-items:flex-end;gap:.6rem;
+      padding:1rem 1.25rem;
+      border-top:1px solid var(--border);
+      flex-shrink:0;
+    }
+    #chat-input{
+      flex:1;resize:none;
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:10px;
+      color:var(--text);font-family:inherit;font-size:.875rem;
+      padding:.65rem .9rem;max-height:120px;min-height:42px;
+      outline:none;transition:border-color .2s;line-height:1.4;
+    }
+    #chat-input:focus{border-color:var(--violet);}
+    #chat-send{
+      width:40px;height:40px;
+      background:linear-gradient(135deg,var(--violet),var(--blue));
+      border:none;border-radius:10px;
+      display:flex;align-items:center;justify-content:center;
+      cursor:pointer;transition:all .2s;flex-shrink:0;color:#fff;font-size:1rem;
+    }
+    #chat-send:hover{transform:scale(1.08);box-shadow:0 4px 16px rgba(139,92,246,.5);}
+    #chat-send:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none;}
+
+    /* ── Chat Toggle Button ─────────────────────────────────────── */
+    #chat-toggle{
+      position:fixed;right:1.5rem;bottom:2rem;
+      width:56px;height:56px;
+      background:linear-gradient(135deg,var(--violet),var(--blue));
+      border:none;border-radius:50%;
+      box-shadow:0 8px 32px rgba(139,92,246,.5);
+      display:flex;align-items:center;justify-content:center;
+      cursor:pointer;transition:all .25s;z-index:199;
+      font-size:1.5rem;color:#fff;
+    }
+    #chat-toggle:hover{transform:scale(1.1);box-shadow:0 12px 40px rgba(139,92,246,.7);}
+    #chat-toggle.open{right:calc(var(--chat-w) + 1rem);}
+    .chat-toggle-badge{
+      position:absolute;top:-3px;right:-3px;
+      width:18px;height:18px;
+      background:var(--rose);border-radius:50%;
+      display:none;align-items:center;justify-content:center;
+      font-size:.65rem;font-weight:700;color:#fff;border:2px solid var(--bg);
+    }
+    #chat-toggle.has-response .chat-toggle-badge{display:flex;}
+
+    /* ── Markdown in chat ───────────────────────────────────────── */
+    .msg.assistant p{margin-bottom:.5em;}
+    .msg.assistant ul,.msg.assistant ol{padding-left:1.2em;margin:.25em 0;}
+    .msg.assistant li{margin-bottom:.2em;}
+    .msg.assistant h3{font-size:.9rem;font-weight:700;margin:.5em 0 .2em;color:var(--text);}
+    .msg.assistant blockquote{border-left:3px solid var(--violet);padding-left:.75em;color:var(--text-muted);margin:.5em 0;}
+
+    /* ── Repo tag ───────────────────────────────────────────────── */
+    .repo-tag{
+      display:inline-flex;align-items:center;gap:.4rem;
+      padding:.3rem .8rem;
+      background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);
+      border-radius:99px;font-size:.8rem;color:#c4b5fd;font-weight:500;
+      margin-bottom:1.5rem;
+    }
+
+    /* ── Loading overlay for dashboard area ─────────────────────── */
+    #loading-overlay{
+      display:none;
+      position:fixed;inset:0;
+      background:rgba(8,13,24,.75);backdrop-filter:blur(4px);
+      z-index:100;align-items:center;justify-content:center;
+      flex-direction:column;gap:1rem;
+    }
+    #loading-overlay.visible{display:flex;}
+    .loading-ring{
+      width:64px;height:64px;
+      border:4px solid rgba(139,92,246,.2);
+      border-top-color:var(--violet);
+      border-radius:50%;
+      animation:spin .9s linear infinite;
+    }
+    #loading-overlay p{color:var(--text-dim);font-size:1rem;}
+
+    /* ── Responsive ─────────────────────────────────────────────── */
+    @media(max-width:640px){
+      #app{padding:1rem;}
+      header{flex-direction:column;align-items:flex-start;}
+      .repo-bar{max-width:100%;}
+      .kpi-grid{grid-template-columns:1fr 1fr;}
+      #chat-drawer{width:100vw;}
+      #chat-toggle.open{right:1rem;}
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay">
+  <div class="loading-ring"></div>
+  <p id="loading-msg">Fetching repository data…</p>
+</div>
+
+<div id="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-area">
+      <h1>⚡ GitHub Flow Analytics</h1>
+      <div class="tagline">Flow Coaching Metrics · AI-Powered Insights · by Antigravity</div>
+    </div>
+    <div class="repo-bar">
+      <input
+        id="repo-input"
+        type="text"
+        placeholder="github.com/owner/repo or owner/repo"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button id="analyze-btn" class="btn btn-primary" onclick="analyzeRepo()">
+        <span class="spinner" id="btn-spinner"></span>
+        <span class="btn-label">Analyze</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Status -->
+  <div id="status-bar"></div>
+
+  <!-- Placeholder -->
+  <div id="placeholder">
+    <div class="placeholder-icon">📊</div>
+    <h2>No repository loaded yet</h2>
+    <p>Enter a GitHub repository URL above and click <strong>Analyze</strong> to visualize flow metrics, cycle time, throughput, and get AI coaching insights.</p>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dashboard">
+    <div class="repo-tag" id="repo-tag">
+      <span>📁</span> <span id="repo-name-display">—</span>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid" id="kpi-grid"></div>
+
+    <!-- CFD & Control Chart -->
+    <div class="section-header">
+      <h2>Cumulative Flow & Control Chart</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="charts-2col">
+      <div class="chart-card">
+        <div class="chart-title">Cumulative Flow Diagram (CFD)</div>
+        <div class="chart-canvas-wrap tall"><canvas id="chart-cfd"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Cycle Time Control Chart + SLE Lines</div>
+        <div class="chart-canvas-wrap tall"><canvas id="chart-control"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Throughput & Active WIP -->
+    <div class="section-header">
+      <h2>Throughput & Active WIP</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="charts-2col">
+      <div class="chart-card">
+        <div class="chart-title">Weekly Throughput by Contributor Type</div>
+        <div class="chart-canvas-wrap tall"><canvas id="chart-throughput"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Active WIP Age by Stage</div>
+        <div class="chart-canvas-wrap tall"><canvas id="chart-wip"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Correlation & Comet -->
+    <div class="section-header">
+      <h2>Batch Size & Flow Timeline</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="charts-2col">
+      <div class="chart-card">
+        <div class="chart-title">PR Size vs Cycle Time (Spearman Correlation)</div>
+        <div class="chart-canvas-wrap tall"><canvas id="chart-correlation"></canvas></div>
+      </div>
+      <div class="chart-card charts-full">
+        <div class="chart-title">PR Flow Timeline (Tetris-Packed Comet Chart)</div>
+        <div class="chart-canvas-wrap xtra-tall"><canvas id="chart-comet"></canvas></div>
+      </div>
+    </div>
+
+  </div><!-- /dashboard -->
+</div><!-- /app -->
+
+<!-- AI Chat Toggle -->
+<button id="chat-toggle" onclick="toggleChat()" title="Open AI Coach">
+  🤖
+  <div class="chat-toggle-badge" id="chat-badge">!</div>
+</button>
+
+<!-- AI Chat Drawer -->
+<div id="chat-drawer" role="complementary" aria-label="AI Flow Coach">
+  <div class="chat-header">
+    <div class="chat-header-info">
+      <div class="chat-avatar">🤖</div>
+      <div>
+        <h3>Antigravity AI Coach</h3>
+        <p id="chat-repo-label">No repository loaded</p>
+      </div>
+    </div>
+    <button class="chat-close" onclick="toggleChat()" aria-label="Close chat">×</button>
+  </div>
+
+  <div class="chip-area" id="chip-area">
+    <span class="chip" onclick="sendChip(this)">What is our 85% SLE?</span>
+    <span class="chip" onclick="sendChip(this)">Where is our primary bottleneck?</span>
+    <span class="chip" onclick="sendChip(this)">Do larger PRs correlate with delays?</span>
+    <span class="chip" onclick="sendChip(this)">List the oldest open WIP</span>
+    <span class="chip" onclick="sendChip(this)">How is our throughput trend?</span>
+    <span class="chip" onclick="sendChip(this)">Give me 3 coaching actions</span>
+  </div>
+
+  <div id="chat-messages">
+    <div class="msg system-msg">Load a repository and start asking flow coaching questions.</div>
+  </div>
+
+  <div class="chat-input-area">
+    <textarea
+      id="chat-input"
+      placeholder="Ask about cycle time, WIP, throughput…"
+      rows="1"
+      onkeydown="chatKeydown(event)"
+      oninput="autoResize(this)"
+    ></textarea>
+    <button id="chat-send" onclick="sendChat()" title="Send">➤</button>
+  </div>
+</div>
+
+<!-- ================================================================
+     APP JAVASCRIPT
+================================================================ -->
+<script>
+  // ── State ──────────────────────────────────────────────────────────
+  let currentMetrics = null;
+  let currentRepo    = null;
+  let chatHistory    = [];
+  let chatOpen       = false;
+  let charts         = {};
+
+  // ── Analyze Repo ───────────────────────────────────────────────────
+  async function analyzeRepo() {
+    const input = document.getElementById('repo-input').value.trim();
+    if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
+
+    const btn = document.getElementById('analyze-btn');
+    btn.disabled = true;
+    btn.classList.add('loading');
+    showLoading('Fetching repository data… this may take 30–60 seconds');
+    clearStatus();
+
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ repo_url: input, force_refresh: false })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      currentMetrics = data;
+      currentRepo = data.repo;
+      chatHistory = [];
+
+      renderDashboard(data);
+      showStatus(`✓ Analysis complete for ${data.repo} — ${data.recent_stats?.total || 0} PRs analyzed`, 'success');
+      document.getElementById('chat-repo-label').textContent = data.repo;
+      document.getElementById('chat-toggle').classList.add('has-response');
+
+      // Welcome message in chat
+      addChatMessage('assistant', `🎉 **Repository loaded: \`${data.repo}\`**\n\nI now have full context of your flow metrics. Ask me anything about cycle time, WIP, throughput, batch size, or get specific coaching recommendations!`);
+
+    } catch(e) {
+      showStatus(`Error: ${e.message}`, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      hideLoading();
+    }
+  }
+
+  // ── Dashboard Renderer ──────────────────────────────────────────────
+  function renderDashboard(d) {
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    document.getElementById('repo-name-display').textContent = d.repo;
+
+    renderKPIs(d);
+    renderCFD(d.cfd_data);
+    renderControlChart(d.recent_scatter_points, d.p50_sle, d.p85_sle);
+    renderThroughput(d.throughput_data);
+    renderWIP(d.active_wip_points, d.stage_percentiles);
+    renderCorrelation(d.pr_size_scatter_points, d.spearman_corr);
+    renderComet(d.comet_points);
+  }
+
+  // ── KPIs ────────────────────────────────────────────────────────────
+  function renderKPIs(d) {
+    const rs = d.recent_stats || {};
+    const ps = d.pre_stats || {};
+    const p85h = d.p85_sle || 0;
+    const p50h = d.p50_sle || 0;
+    const corr = d.spearman_corr || 0;
+
+    const cycleDelta = ps.avg_cycle > 0 ? ((rs.avg_cycle - ps.avg_cycle) / ps.avg_cycle * 100) : 0;
+    const cycleArrow = cycleDelta < 0 ? '↓' : '↑';
+    const cycleBadge = cycleDelta < 0 ? 'badge-green' : 'badge-rose';
+
+    const corrLabel = corr > 0.5 ? 'Strong positive' : corr > 0.2 ? 'Moderate positive' : corr > -0.1 ? 'Negligible' : 'Negative';
+    const corrBadge = corr > 0.5 ? 'badge-rose' : corr > 0.2 ? 'badge-amber' : 'badge-green';
+
+    // Last 8 weeks avg throughput
+    const tp = (d.throughput_data || []).slice(-8);
+    const avgTp = tp.length ? (tp.reduce((s,w) => s + w.total, 0) / tp.length).toFixed(1) : '—';
+
+    const wip = (d.active_wip_points || []).length;
+
+    const kpis = [
+      { label:'Avg Cycle Time', value: fmt_days(rs.avg_cycle), sub:`85th pct: ${fmt_days(p85h)}`, badge: cycleDelta !== 0 ? `${cycleArrow} ${Math.abs(cycleDelta).toFixed(0)}% vs 2021` : null, badgeClass: cycleBadge },
+      { label:'50% SLE', value: fmt_days(p50h), sub:'Service Level Expectation', badge:'50th pct', badgeClass:'badge-blue' },
+      { label:'85% SLE', value: fmt_days(p85h), sub:'Primary SLE target', badge:'85th pct', badgeClass:'badge-violet' },
+      { label:'Flow Efficiency', value: `${(rs.flow_efficiency||0).toFixed(0)}%`, sub:'Active work / total cycle', badge: (rs.flow_efficiency||0) > 15 ? 'Good' : 'Improve', badgeClass: (rs.flow_efficiency||0) > 15 ? 'badge-green' : 'badge-amber' },
+      { label:'Size↔Cycle Corr', value: `${corr >= 0 ? '+' : ''}${corr.toFixed(2)}`, sub:'Spearman rank correlation', badge: corrLabel, badgeClass: corrBadge },
+      { label:'Weekly Throughput', value: avgTp, sub:'avg PRs/week (8w)', badge: `${rs.total||0} total`, badgeClass:'badge-blue' },
+      { label:'Active WIP', value: wip, sub:'open PRs in system', badge: wip > 10 ? 'High WIP' : 'In control', badgeClass: wip > 10 ? 'badge-rose' : 'badge-green' },
+      { label:'AI Mix', value: `${Math.round((rs.assisted_ratio||0)*100+( rs.agentic_ratio||0)*100)}%`, sub:`${Math.round((rs.assisted_ratio||0)*100)}% assisted · ${Math.round((rs.agentic_ratio||0)*100)}% agentic`, badge:'AI-authored', badgeClass:'badge-violet' },
+    ];
+
+    const grid = document.getElementById('kpi-grid');
+    grid.innerHTML = kpis.map(k => `
+      <div class="kpi">
+        <div class="kpi-label">${k.label}</div>
+        <div class="kpi-value" style="background:linear-gradient(135deg,#a78bfa,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">${k.value}</div>
+        <div class="kpi-sub">${k.sub}</div>
+        ${k.badge ? `<span class="kpi-badge ${k.badgeClass}">${k.badge}</span>` : ''}
+      </div>
+    `).join('');
+  }
+
+  function fmt_days(hours) {
+    if (hours === null || hours === undefined) return '—';
+    const d = hours / 24;
+    if (d >= 1) return d.toFixed(1) + 'd';
+    return hours.toFixed(1) + 'h';
+  }
+
+  // ── Destroy + Create Chart helpers ─────────────────────────────────
+  function mkChart(id, config) {
+    if (charts[id]) { charts[id].destroy(); }
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+    charts[id] = new Chart(ctx, config);
+  }
+
+  // ── Shared Chart Defaults ──────────────────────────────────────────
+  Chart.defaults.color = '#64748b';
+  Chart.defaults.borderColor = '#1e2d4a';
+  Chart.defaults.font.family = "'Outfit', sans-serif";
+
+  // ── CFD Chart ──────────────────────────────────────────────────────
+  function renderCFD(cfd) {
+    if (!cfd || !cfd.length) return;
+    // Show last 52 weeks max
+    const pts = cfd.slice(-52);
+    const labels = pts.map(c => c.month);
+
+    mkChart('chart-cfd', {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label:'Opened', data: pts.map(c=>c.opened), borderColor:'#8b5cf6', backgroundColor:'rgba(139,92,246,.15)', fill:true, tension:.3, pointRadius:0 },
+          { label:'Merged', data: pts.map(c=>c.merged), borderColor:'#10b981', backgroundColor:'rgba(16,185,129,.12)', fill:true, tension:.3, pointRadius:0 },
+          { label:'In Review', data: pts.map(c=>c.review), borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,.1)', fill:true, tension:.3, pointRadius:0 },
+        ]
+      },
+      options: {
+        responsive:true,maintainAspectRatio:true,
+        plugins:{ legend:{ position:'top', labels:{ boxWidth:10, padding:16 } }, tooltip:{ mode:'index', intersect:false } },
+        scales:{
+          x:{ grid:{color:'rgba(255,255,255,.04)'}, ticks:{ maxTicksLimit:8, maxRotation:0 } },
+          y:{ grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true }
+        }
+      }
+    });
+  }
+
+  // ── Control Chart ──────────────────────────────────────────────────
+  function renderControlChart(pts, p50, p85) {
+    if (!pts || !pts.length) return;
+    const sorted = pts.filter(p=>p.y !== null && p.y !== undefined).sort((a,b)=>a.x-b.x);
+
+    const colors = { Human:'rgba(139,92,246,.75)', 'AI-Assisted':'rgba(6,182,212,.75)', 'AI-Agentic':'rgba(244,63,94,.75)' };
+
+    mkChart('chart-control', {
+      type: 'scatter',
+      data: {
+        datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
+          label: cls,
+          data: sorted.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y/24, num:p.num})),
+          backgroundColor: colors[cls],
+          pointRadius: 3, pointHoverRadius:6,
+        }))
+      },
+      options: {
+        responsive:true,maintainAspectRatio:true,
+        plugins:{
+          legend:{ position:'top', labels:{ boxWidth:10, padding:12 } },
+          annotation:{
+            annotations:{
+              p50line:{
+                type:'line', yMin:p50/24, yMax:p50/24,
+                borderColor:'rgba(6,182,212,.7)', borderWidth:1.5, borderDash:[5,4],
+                label:{content:`P50 SLE: ${fmt_days(p50)}`, display:true, position:'end', color:'#67e8f9', font:{size:11}}
+              },
+              p85line:{
+                type:'line', yMin:p85/24, yMax:p85/24,
+                borderColor:'rgba(245,158,11,.8)', borderWidth:2,
+                label:{content:`P85 SLE: ${fmt_days(p85)}`, display:true, position:'end', color:'#fcd34d', font:{size:11}}
+              }
+            }
+          },
+          tooltip:{
+            callbacks:{
+              label: ctx => {
+                const d = ctx.raw;
+                return `PR #${d.num} · ${ctx.dataset.label} · ${d.y?.toFixed(1)}d`;
+              }
+            }
+          }
+        },
+        scales:{
+          x:{ type:'linear', grid:{color:'rgba(255,255,255,.04)'}, ticks:{ display:false } },
+          y:{ grid:{color:'rgba(255,255,255,.04)'}, title:{ display:true, text:'Cycle Time (days)', color:'#64748b' } }
+        }
+      }
+    });
+  }
+
+  // ── Throughput Chart ───────────────────────────────────────────────
+  function renderThroughput(tp) {
+    if (!tp || !tp.length) return;
+    const pts = tp.filter(w => w.total > 0).slice(-26);
+
+    mkChart('chart-throughput', {
+      type: 'bar',
+      data: {
+        labels: pts.map(w=>w.week),
+        datasets:[
+          { label:'Human', data:pts.map(w=>w.human), backgroundColor:'rgba(139,92,246,.75)', stack:'s' },
+          { label:'AI-Assisted', data:pts.map(w=>w.assisted), backgroundColor:'rgba(6,182,212,.75)', stack:'s' },
+          { label:'AI-Agentic', data:pts.map(w=>w.agentic), backgroundColor:'rgba(244,63,94,.75)', stack:'s' },
+        ]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:true,
+        plugins:{ legend:{position:'top',labels:{boxWidth:10,padding:12}}, tooltip:{mode:'index',intersect:false} },
+        scales:{
+          x:{ stacked:true, grid:{color:'rgba(255,255,255,.03)'}, ticks:{maxTicksLimit:8,maxRotation:0} },
+          y:{ stacked:true, grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true }
+        }
+      }
+    });
+  }
+
+  // ── Active WIP Age ─────────────────────────────────────────────────
+  function renderWIP(pts, stagePct) {
+    if (!pts || !pts.length) return;
+    const stageOrder = ['1. Active Coding','2. Review Queue','3. Merge Delay'];
+    const colors = { Human:'rgba(139,92,246,.8)', 'AI-Assisted':'rgba(6,182,212,.8)', 'AI-Agentic':'rgba(244,63,94,.8)' };
+
+    // p85 lines per stage
+    const annotations = {};
+    const p85vals = {
+      '1. Active Coding': stagePct?.coding?.p85,
+      '2. Review Queue': stagePct?.review?.p85,
+      '3. Merge Delay': stagePct?.merge?.p85,
+    };
+
+    mkChart('chart-wip', {
+      type: 'scatter',
+      data: {
+        datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
+          label: cls,
+          data: pts.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y, title:p.title, num:p.num})),
+          backgroundColor: colors[cls],
+          pointRadius:5, pointHoverRadius:9,
+        }))
+      },
+      options:{
+        responsive:true,maintainAspectRatio:true,
+        plugins:{
+          legend:{position:'top',labels:{boxWidth:10,padding:12}},
+          tooltip:{
+            callbacks:{
+              label: ctx => {
+                const d = ctx.raw;
+                return [`PR #${d.num}`, d.title?.slice(0,50), `${d.y?.toFixed(1)} days`];
+              }
+            }
+          }
+        },
+        scales:{
+          x:{ type:'category', categories: stageOrder, grid:{color:'rgba(255,255,255,.04)'} },
+          y:{ grid:{color:'rgba(255,255,255,.04)'}, title:{display:true,text:'Age (days)',color:'#64748b'}, beginAtZero:true }
+        }
+      }
+    });
+  }
+
+  // ── Correlation Scatter ────────────────────────────────────────────
+  function renderCorrelation(pts, corr) {
+    if (!pts || !pts.length) return;
+    const colors = { Human:'rgba(139,92,246,.65)', 'AI-Assisted':'rgba(6,182,212,.65)', 'AI-Agentic':'rgba(244,63,94,.65)' };
+
+    mkChart('chart-correlation', {
+      type: 'scatter',
+      data: {
+        datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
+          label: cls,
+          data: pts.filter(p=>p.classification===cls).map(p=>({x:Math.log10(Math.max(1,p.x)), y:p.y/24, num:p.num, title:p.title})),
+          backgroundColor: colors[cls],
+          pointRadius:3.5, pointHoverRadius:7,
+        }))
+      },
+      options:{
+        responsive:true,maintainAspectRatio:true,
+        plugins:{
+          legend:{position:'top',labels:{boxWidth:10,padding:12}},
+          title:{display:true,text:`Spearman ρ = ${corr>=0?'+':''}${corr.toFixed(2)}`,color:'#94a3b8',font:{size:12}},
+          tooltip:{
+            callbacks:{
+              label: ctx => {
+                const d = ctx.raw;
+                const sz = Math.round(Math.pow(10, d.x));
+                return `PR #${d.num} · ${sz} lines · ${d.y?.toFixed(1)}d`;
+              }
+            }
+          }
+        },
+        scales:{
+          x:{ grid:{color:'rgba(255,255,255,.04)'}, title:{display:true,text:'PR Size (log₁₀ lines)',color:'#64748b'} },
+          y:{ grid:{color:'rgba(255,255,255,.04)'}, title:{display:true,text:'Cycle Time (days)',color:'#64748b'} }
+        }
+      }
+    });
+  }
+
+  // ── Comet Chart ────────────────────────────────────────────────────
+  function renderComet(pts) {
+    if (!pts || !pts.length) return;
+
+    // Only render recent 300 items to keep it readable
+    const recent = pts.slice(-300);
+    const maxLane = Math.max(...recent.map(p=>p.lane));
+    const colors = { Human:'rgba(139,92,246,.7)', 'AI-Assisted':'rgba(6,182,212,.7)', 'AI-Agentic':'rgba(244,63,94,.7)' };
+
+    // Transform to scatter datasets where each point is (midpoint_ts, lane)
+    // with a custom draw to show horizontal bars
+    const datasets = ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
+      label: cls,
+      data: recent.filter(p=>p.classification===cls).map(p => ({
+        x: (p.start + p.end) / 2,
+        y: p.lane,
+        start: p.start, end: p.end,
+        key: p.key, summary: p.summary, size: p.size, cycle_time: p.cycle_time,
+        classification: cls,
+      })),
+      backgroundColor: colors[cls],
+      pointStyle: 'rect',
+      pointRadius: 3,
+      pointHoverRadius: 6,
+    }));
+
+    mkChart('chart-comet', {
+      type: 'scatter',
+      data: { datasets },
+      options:{
+        responsive:true,maintainAspectRatio:true,
+        plugins:{
+          legend:{position:'top',labels:{boxWidth:10,padding:12}},
+          tooltip:{
+            callbacks:{
+              label: ctx => {
+                const d = ctx.raw;
+                return [`PR #${d.key}: ${d.summary?.slice(0,45)}`, `${d.classification} · ${(d.cycle_time/24).toFixed(1)}d · ${d.size} lines`];
+              }
+            }
+          }
+        },
+        scales:{
+          x:{
+            type:'linear',
+            grid:{color:'rgba(255,255,255,.03)'},
+            ticks:{
+              maxTicksLimit:8,
+              callback: v => {
+                const d = new Date(v);
+                return d.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+              }
+            }
+          },
+          y:{
+            grid:{color:'rgba(255,255,255,.03)'},
+            title:{display:true,text:'Concurrent Lane',color:'#64748b'},
+            min:0, max: maxLane + 1,
+            ticks:{ stepSize:1 }
+          }
+        }
+      }
+    });
+  }
+
+  // ── Chat Functions ─────────────────────────────────────────────────
+  function toggleChat() {
+    chatOpen = !chatOpen;
+    const drawer = document.getElementById('chat-drawer');
+    const btn    = document.getElementById('chat-toggle');
+    const app    = document.getElementById('app');
+
+    drawer.classList.toggle('open', chatOpen);
+    btn.classList.toggle('open', chatOpen);
+    app.classList.toggle('chat-open', chatOpen);
+    btn.textContent = chatOpen ? '✕' : '🤖';
+    if (chatOpen) {
+      btn.classList.remove('has-response');
+      document.getElementById('chat-badge').style.display = 'none';
+      document.getElementById('chat-input').focus();
+    }
+  }
+
+  function sendChip(el) {
+    const text = el.textContent;
+    document.getElementById('chat-input').value = text;
+    sendChat();
+  }
+
+  function chatKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  }
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function addChatMessage(role, content) {
+    const msgs = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.innerHTML = simpleMarkdown(content);
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+
+    if (role === 'assistant') chatHistory.push({ role: 'assistant', content });
+    else if (role === 'user') chatHistory.push({ role: 'user', content });
+  }
+
+  function simpleMarkdown(text) {
+    return text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/`(.+?)`/g,'<code>$1</code>')
+      .replace(/^### (.+)$/gm,'<h3>$1</h3>')
+      .replace(/^## (.+)$/gm,'<h3>$1</h3>')
+      .replace(/^- (.+)$/gm,'<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/gs, m => `<ul>${m}</ul>`)
+      .replace(/\n{2,}/g,'</p><p>')
+      .replace(/\n/g,'<br>')
+      .replace(/^(?!<[hup])/,'<p>').replace(/(?<![>])$/,'</p>');
+  }
+
+  async function sendChat() {
+    if (!currentRepo || !currentMetrics) {
+      addChatMessage('assistant', '⚠️ Please analyze a repository first before chatting.');
+      return;
+    }
+    const inputEl = document.getElementById('chat-input');
+    const message = inputEl.value.trim();
+    if (!message) return;
+
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+
+    addChatMessage('user', message);
+
+    // Thinking indicator
+    const msgs = document.getElementById('chat-messages');
+    const thinking = document.createElement('div');
+    thinking.className = 'msg thinking';
+    thinking.textContent = 'Analyzing';
+    msgs.appendChild(thinking);
+    msgs.scrollTop = msgs.scrollHeight;
+
+    const sendBtn = document.getElementById('chat-send');
+    sendBtn.disabled = true;
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          repo: currentRepo,
+          message,
+          history: chatHistory.slice(-10), // keep last 10 turns for context
+        })
+      });
+
+      thinking.remove();
+
+      if (!res.ok) {
+        const err = await res.json();
+        addChatMessage('assistant', `⚠️ ${err.detail || 'Something went wrong.'}`);
+      } else {
+        const data = await res.json();
+        addChatMessage('assistant', data.reply);
+
+        // Badge if chat is closed
+        if (!chatOpen) {
+          document.getElementById('chat-toggle').classList.add('has-response');
+          document.getElementById('chat-badge').style.display = 'flex';
+        }
+      }
+    } catch(e) {
+      thinking.remove();
+      addChatMessage('assistant', `⚠️ Network error: ${e.message}`);
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  // ── UI Helpers ─────────────────────────────────────────────────────
+  function showStatus(msg, type='info') {
+    const bar = document.getElementById('status-bar');
+    bar.textContent = msg;
+    bar.className = type;
+    bar.style.display = 'block';
+    if (type === 'success') setTimeout(() => { bar.style.display='none'; }, 5000);
+  }
+  function clearStatus() {
+    const bar = document.getElementById('status-bar');
+    bar.style.display='none'; bar.textContent='';
+  }
+  function showLoading(msg='Loading…') {
+    document.getElementById('loading-overlay').classList.add('visible');
+    document.getElementById('loading-msg').textContent = msg;
+  }
+  function hideLoading() {
+    document.getElementById('loading-overlay').classList.remove('visible');
+  }
+
+  // Allow pressing Enter in the repo input
+  document.getElementById('repo-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') analyzeRepo();
+  });
+
+  // Pre-fill from URL param ?repo=
+  (function() {
+    const params = new URLSearchParams(window.location.search);
+    const r = params.get('repo');
+    if (r) {
+      document.getElementById('repo-input').value = r;
+    }
+  })();
+</script>
+</body>
+</html>

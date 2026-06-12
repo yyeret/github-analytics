@@ -1,6 +1,9 @@
+import os
+# Remove any invalid GITHUB_TOKEN to let the gh CLI use the active logged-in keyring
+os.environ.pop("GITHUB_TOKEN", None)
+
 import subprocess
 import json
-import os
 import datetime
 import sys
 import re
@@ -220,9 +223,53 @@ def collect_data(repo="sveltejs/svelte"):
             number
             title
             createdAt
+            additions
+            deletions
             author {
               login
               __typename
+            }
+            closingIssuesReferences(first: 1) {
+              nodes {
+                number
+                createdAt
+                title
+                closedAt
+              }
+            }
+            commits(first: 3) {
+              totalCount
+              nodes {
+                commit {
+                  committedDate
+                  authors(first: 2) {
+                    nodes {
+                      name
+                      email
+                      user {
+                        login
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            reviews(first: 2) {
+              totalCount
+              nodes {
+                createdAt
+                state
+                author {
+                  login
+                }
+              }
+            }
+            timelineItems(first: 5, itemTypes: [READY_FOR_REVIEW_EVENT]) {
+              nodes {
+                ... on ReadyForReviewEvent {
+                  createdAt
+                }
+              }
             }
           }
         }
@@ -345,10 +392,13 @@ def process_pr_metrics(pr):
     created = parse_date(pr.get("createdAt"))
     merged = parse_date(pr.get("mergedAt"))
     
-    if not created or not merged:
+    if not created:
         return None
         
-    cycle_time_hours = (merged - created).total_seconds() / 3600.0
+    cycle_time_hours = None
+    if merged:
+        cycle_time_hours = (merged - created).total_seconds() / 3600.0
+        
     pr_size = pr.get("additions", 0) + pr.get("deletions", 0)
     
     # Review loops
@@ -406,7 +456,11 @@ def process_pr_metrics(pr):
     if closing_issues:
         issue_created = parse_date(closing_issues[0].get("createdAt"))
         if issue_created:
-            upstream_issue_lead_time = (merged - issue_created).total_seconds() / 3600.0
+            if merged:
+                upstream_issue_lead_time = (merged - issue_created).total_seconds() / 3600.0
+            else:
+                upstream_issue_lead_time = (datetime.datetime.now() - issue_created).total_seconds() / 3600.0
+                
             # Backlog wait: from issue creation to first commit (start of work)
             if commits_nodes:
                 commit_dates = [parse_date(c.get("commit", {}).get("committedDate")) for c in commits_nodes if parse_date(c.get("commit", {}).get("committedDate"))]
@@ -444,10 +498,278 @@ def process_pr_metrics(pr):
         "upstream_backlog_wait_hours": upstream_backlog_wait_hours
     }
 
+def get_ranks(values):
+    n = len(values)
+    sorted_indices = sorted(range(n), key=lambda i: values[i])
+    ranks = [0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j < n - 1 and values[sorted_indices[j]] == values[sorted_indices[j+1]]:
+            j += 1
+        avg_rank = (i + j) / 2.0 + 1
+        for k in range(i, j + 1):
+            ranks[sorted_indices[k]] = avg_rank
+        i = j + 1
+    return ranks
+
+def spearman_rank_correlation(x, y):
+    if len(x) != len(y) or len(x) == 0:
+        return 0.0
+    n = len(x)
+    rx = get_ranks(x)
+    ry = get_ranks(y)
+    
+    mean_x = sum(rx) / n
+    mean_y = sum(ry) / n
+    
+    num = sum((rx[i] - mean_x) * (ry[i] - mean_y) for i in range(n))
+    den_x = sum((rx[i] - mean_x) ** 2 for i in range(n))
+    den_y = sum((ry[i] - mean_y) ** 2 for i in range(n))
+    
+    if den_x == 0 or den_y == 0:
+        return 0.0
+    return num / ((den_x * den_y) ** 0.5)
+
+def compute_flow_metrics(data):
+    """
+    Compute all flow coaching metrics from raw GitHub data.
+    Returns a structured dict that can be serialised to JSON and consumed by
+    the FastAPI backend or the legacy HTML report generator.
+    """
+    pre_prs = [process_pr_metrics(p) for p in data.get("pre_ai_prs", [])]
+    pre_prs = [p for p in pre_prs if p is not None]
+
+    recent_prs = [process_pr_metrics(p) for p in data.get("recent_prs", [])]
+    recent_prs = [p for p in recent_prs if p is not None]
+
+    open_prs = [process_pr_metrics(p) for p in data.get("open_prs", [])]
+    open_prs = [p for p in open_prs if p is not None]
+
+    merge_dates = [parse_date(p["mergedAt"]) for p in recent_prs if p["mergedAt"]]
+    if merge_dates:
+        start_date = min(merge_dates)
+    else:
+        start_date = datetime.datetime.now() - datetime.timedelta(days=365)
+
+    filtered_open = [p for p in open_prs if parse_date(p["createdAt"]) and parse_date(p["createdAt"]) >= start_date]
+    closed_system_prs = recent_prs + filtered_open
+
+    now = datetime.datetime.now()
+    weekly_bins = []
+    current_bin = start_date
+    while current_bin <= now:
+        weekly_bins.append(current_bin)
+        current_bin += datetime.timedelta(days=7)
+    weekly_bins.append(now)
+
+    cfd_data = []
+    for W in weekly_bins:
+        week_str = W.strftime("%Y-%m-%d")
+        merged_count = sum(1 for p in recent_prs if parse_date(p["mergedAt"]) and parse_date(p["mergedAt"]) <= W)
+        review_count = sum(1 for p in closed_system_prs if parse_date(p["createdAt"]) and parse_date(p["createdAt"]) <= W and (not parse_date(p["mergedAt"]) or parse_date(p["mergedAt"]) > W))
+        coding_count = 0
+        for p in closed_system_prs:
+            created_dt = parse_date(p["createdAt"])
+            if created_dt:
+                coding_h = p.get("coding_time_hours")
+                start_code_dt = created_dt - datetime.timedelta(hours=coding_h) if coding_h is not None else created_dt - datetime.timedelta(hours=2.0)
+                if start_code_dt <= W < created_dt:
+                    coding_count += 1
+        backlog_count = 0
+        for p in closed_system_prs:
+            if p.get("has_upstream") and p.get("upstream_issue_created"):
+                issue_created = parse_date(p["upstream_issue_created"])
+                created_dt = parse_date(p["createdAt"])
+                if issue_created and created_dt:
+                    coding_h = p.get("coding_time_hours")
+                    start_code_dt = created_dt - datetime.timedelta(hours=coding_h) if coding_h is not None else created_dt - datetime.timedelta(hours=2.0)
+                    if issue_created <= W < start_code_dt:
+                        backlog_count += 1
+        wip_count = review_count + coding_count + backlog_count
+        opened_count = merged_count + wip_count
+        cfd_data.append({"month": week_str, "merged": merged_count, "review": review_count, "coding": coding_count, "backlog": backlog_count, "wip": wip_count, "opened": opened_count})
+
+    def calc_era_stats(pr_list):
+        if not pr_list:
+            return {"avg_cycle": 0, "avg_size": 0, "avg_reviews": 0, "avg_loops": 0, "avg_coding": 0, "flow_efficiency": 0, "human_ratio": 0, "assisted_ratio": 0, "agentic_ratio": 0, "total": 0}
+        total = len(pr_list)
+        avg_cycle = sum(p["cycle_time_hours"] for p in pr_list) / total
+        avg_size = sum(p["pr_size"] for p in pr_list) / total
+        avg_reviews = sum(p["review_count"] for p in pr_list) / total
+        avg_loops = sum(p["changes_requested"] for p in pr_list) / total
+        coding_times = [p["coding_time_hours"] for p in pr_list if p["coding_time_hours"] is not None]
+        avg_coding = sum(coding_times) / len(coding_times) if coding_times else 0.0
+        eff_list = []
+        for p in pr_list:
+            coding = p["coding_time_hours"]
+            cycle = p["cycle_time_hours"]
+            if coding is not None and (coding + cycle) > 0:
+                eff_list.append((coding / (coding + cycle)) * 100.0)
+        flow_eff = sum(eff_list) / len(eff_list) if eff_list else (avg_coding / (avg_coding + avg_cycle)) * 100.0 if (avg_coding + avg_cycle) > 0 else 0.0
+        humans = sum(1 for p in pr_list if p["classification"] == "Human")
+        assisted = sum(1 for p in pr_list if p["classification"] == "AI-Assisted")
+        agentic = sum(1 for p in pr_list if p["classification"] == "AI-Agentic")
+        sdd_count = sum(1 for p in pr_list if p.get("is_sdd_workflow"))
+        sdd_ratio = sdd_count / total if total > 0 else 0.0
+        return {"avg_cycle": avg_cycle, "avg_size": avg_size, "avg_reviews": avg_reviews, "avg_loops": avg_loops, "avg_coding": avg_coding, "flow_efficiency": flow_eff, "sdd_ratio": sdd_ratio, "human_ratio": humans / total, "assisted_ratio": assisted / total, "agentic_ratio": agentic / total, "total": total}
+
+    pre_stats = calc_era_stats(pre_prs)
+    recent_stats = calc_era_stats(recent_prs)
+
+    recent_upstream = [p for p in recent_prs if p["has_upstream"] and p["upstream_issue_lead_time_hours"] is not None]
+    upstream_breakdown = {"backlog_wait": 0.0, "coding": 0.0, "review_wait": 0.0, "merge_delay": 0.0, "total": 0}
+    if recent_upstream:
+        total_u = len(recent_upstream)
+        upstream_breakdown["total"] = total_u
+        for p in recent_upstream:
+            issue_created = parse_date(p["upstream_issue_created"])
+            created_dt = parse_date(p["createdAt"])
+            first_commit = None
+            for rn in data.get("recent_prs", []):
+                if rn.get("number") == p["number"]:
+                    c_nodes = rn.get("commits", {}).get("nodes", [])
+                    if c_nodes:
+                        c_dates = [parse_date(c.get("commit", {}).get("committedDate")) for c in c_nodes if parse_date(c.get("commit", {}).get("committedDate"))]
+                        if c_dates:
+                            first_commit = min(c_dates)
+            if first_commit and first_commit > issue_created:
+                backlog_h = (first_commit - issue_created).total_seconds() / 3600.0
+            else:
+                backlog_h = 24.0
+            coding_h = max(0.0, (created_dt - first_commit).total_seconds() / 3600.0) if first_commit else p["cycle_time_hours"] * 0.3
+            review_h = p["wait_time_to_first_review"] if p["wait_time_to_first_review"] is not None else p["cycle_time_hours"] * 0.5
+            merge_h = max(0.0, p["cycle_time_hours"] - review_h)
+            upstream_breakdown["backlog_wait"] += backlog_h
+            upstream_breakdown["coding"] += coding_h
+            upstream_breakdown["review_wait"] += review_h
+            upstream_breakdown["merge_delay"] += merge_h
+        upstream_breakdown["backlog_wait"] /= total_u
+        upstream_breakdown["coding"] /= total_u
+        upstream_breakdown["review_wait"] /= total_u
+        upstream_breakdown["merge_delay"] /= total_u
+
+    sizes = [p["pr_size"] for p in recent_prs if p["cycle_time_hours"] is not None]
+    cycle_times_list = [p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None]
+    spearman_corr = spearman_rank_correlation(sizes, cycle_times_list) if sizes else 0.0
+
+    human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["classification"] == "Human" and p["cycle_time_hours"] is not None])
+    if not human_cycle_times:
+        human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None])
+    p50_sle = 12.0
+    p85_sle = 24.0
+    if human_cycle_times:
+        p50_sle = human_cycle_times[int(len(human_cycle_times) * 0.5)]
+        p85_sle = human_cycle_times[int(len(human_cycle_times) * 0.85)] if len(human_cycle_times) > 1 else p50_sle
+
+    coding_days_list = []
+    review_days_list = []
+    merge_days_list = []
+    for p in recent_prs:
+        ct = p["cycle_time_hours"]
+        if ct is not None:
+            coding_h = p.get("coding_time_hours")
+            if coding_h is not None:
+                coding_days_list.append(max(0.5, coding_h) / 24.0)
+            review_h = p.get("wait_time_to_first_review")
+            if review_h is not None:
+                review_days_list.append(max(0.5, review_h) / 24.0)
+                merge_days_list.append(max(0.5, ct - review_h) / 24.0)
+    coding_days_list.sort(); review_days_list.sort(); merge_days_list.sort()
+
+    def get_pct(lst, p):
+        if not lst: return 0.5
+        idx = min(int(len(lst) * p), len(lst) - 1)
+        return max(0.02, lst[idx])
+
+    stage_percentiles = {
+        "coding": {"p50": get_pct(coding_days_list, 0.5), "p70": get_pct(coding_days_list, 0.70), "p85": get_pct(coding_days_list, 0.85), "p95": get_pct(coding_days_list, 0.95)},
+        "review": {"p50": get_pct(review_days_list, 0.5), "p70": get_pct(review_days_list, 0.70), "p85": get_pct(review_days_list, 0.85), "p95": get_pct(review_days_list, 0.95)},
+        "merge": {"p50": get_pct(merge_days_list, 0.5), "p70": get_pct(merge_days_list, 0.70), "p85": get_pct(merge_days_list, 0.85), "p95": get_pct(merge_days_list, 0.95)},
+    }
+
+    active_wip_points = []
+    for p in filtered_open:
+        created_dt = parse_date(p["createdAt"])
+        if not created_dt: continue
+        age_days = max(0.02, (now - created_dt).total_seconds() / 86400.0)
+        ready_dt = p.get("ready_for_review_dt")
+        is_draft = p.get("title", "").lower().startswith("[draft]")
+        has_reviews = p.get("review_count", 0) > 0
+        has_approval = p.get("approvals", 0) > 0
+        if has_approval:
+            stage_name = "3. Merge Delay"
+        elif ready_dt or has_reviews or not is_draft:
+            stage_name = "2. Review Queue"
+        else:
+            stage_name = "1. Active Coding"
+        active_wip_points.append({"x": stage_name, "y": age_days, "num": p["number"], "title": p["title"], "classification": p["classification"], "size": p["pr_size"]})
+
+    pr_size_scatter_points = [{"x": p["pr_size"], "y": p["cycle_time_hours"], "classification": p["classification"], "num": p["number"], "title": p["title"]} for p in recent_prs if p["cycle_time_hours"] is not None]
+
+    comet_list = []
+    for p in recent_prs:
+        created_dt = parse_date(p["createdAt"])
+        merged_dt = parse_date(p["mergedAt"])
+        if not created_dt or not merged_dt: continue
+        coding_h = p.get("coding_time_hours")
+        start_dt = created_dt - datetime.timedelta(hours=coding_h) if coding_h is not None else created_dt - datetime.timedelta(hours=2.0)
+        comet_list.append({"start_ts": start_dt.timestamp() * 1000.0, "end_ts": merged_dt.timestamp() * 1000.0, "pr": p})
+    comet_list.sort(key=lambda item: item["start_ts"])
+    lanes = []
+    comet_points = []
+    for item in comet_list:
+        start_ts, end_ts, p = item["start_ts"], item["end_ts"], item["pr"]
+        assigned_lane = -1
+        for i in range(len(lanes)):
+            if lanes[i] <= start_ts:
+                assigned_lane = i; break
+        if assigned_lane == -1:
+            assigned_lane = len(lanes); lanes.append(end_ts)
+        else:
+            lanes[assigned_lane] = end_ts
+        comet_points.append({"key": p["number"], "summary": p["title"], "start": start_ts, "end": end_ts, "lane": assigned_lane + 1, "classification": p["classification"], "size": p["pr_size"], "cycle_time": p["cycle_time_hours"]})
+
+    throughput_data = []
+    for idx in range(1, len(weekly_bins)):
+        W_start, W_end = weekly_bins[idx-1], weekly_bins[idx]
+        bin_str = W_end.strftime("%Y-%m-%d")
+        human_completed = sum(1 for p in recent_prs if p["classification"] == "Human" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
+        assisted_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Assisted" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
+        agentic_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Agentic" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
+        throughput_data.append({"week": bin_str, "human": human_completed, "assisted": assisted_completed, "agentic": agentic_completed, "total": human_completed + assisted_completed + agentic_completed})
+
+    recent_scatter_points = [{"x": p["merged_ts"], "y": p["cycle_time_hours"], "classification": p["classification"], "num": p["number"]} for p in recent_prs]
+
+    return {
+        "repo": data.get("repo", ""),
+        "captured_at": data.get("captured_at", ""),
+        "pre_stats": pre_stats,
+        "recent_stats": recent_stats,
+        "upstream_breakdown": upstream_breakdown,
+        "spearman_corr": spearman_corr,
+        "p50_sle": p50_sle,
+        "p85_sle": p85_sle,
+        "stage_percentiles": stage_percentiles,
+        "active_wip_points": active_wip_points,
+        "pr_size_scatter_points": pr_size_scatter_points,
+        "comet_points": comet_points,
+        "throughput_data": throughput_data,
+        "cfd_data": cfd_data,
+        "recent_scatter_points": recent_scatter_points,
+        "recent_prs_summary": [
+            {"number": p["number"], "title": p["title"], "classification": p["classification"],
+             "cycle_time_hours": p["cycle_time_hours"], "pr_size": p["pr_size"],
+             "mergedAt": p["mergedAt"], "createdAt": p["createdAt"]}
+            for p in recent_prs[:50]  # top 50 for chat context
+        ],
+    }
+
+
 def analyze_and_build_report(data):
     pre_prs = [process_pr_metrics(p) for p in data.get("pre_ai_prs", [])]
     pre_prs = [p for p in pre_prs if p is not None]
-    
+
     recent_prs = [process_pr_metrics(p) for p in data.get("recent_prs", [])]
     recent_prs = [p for p in recent_prs if p is not None]
     
@@ -638,7 +960,194 @@ def analyze_and_build_report(data):
         upstream_breakdown["review_wait"] /= total_u
         upstream_breakdown["merge_delay"] /= total_u
 
+    # Mathematical calculations for flow coaching metrics
+    # 1. Spearman Rank Correlation: Size vs Cycle Time
+    sizes = [p["pr_size"] for p in recent_prs if p["cycle_time_hours"] is not None]
+    cycle_times = [p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None]
+    spearman_corr = spearman_rank_correlation(sizes, cycle_times) if sizes else 0.0
+
+    # 2. SLE Percentiles (based on completed Human PRs)
+    human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["classification"] == "Human" and p["cycle_time_hours"] is not None])
+    if not human_cycle_times:
+        human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None])
+        
+    p50_sle = 12.0
+    p85_sle = 24.0
+    if human_cycle_times:
+        p50_sle = human_cycle_times[int(len(human_cycle_times) * 0.5)]
+        p85_sle = human_cycle_times[int(len(human_cycle_times) * 0.85)] if len(human_cycle_times) > 1 else p50_sle
+
+    # 3. Historical Stage Percentiles (in days)
+    coding_days_list = []
+    review_days_list = []
+    merge_days_list = []
+    for p in recent_prs:
+        ct = p["cycle_time_hours"]
+        if ct is not None:
+            coding_h = p.get("coding_time_hours")
+            if coding_h is not None:
+                coding_days_list.append(max(0.5, coding_h) / 24.0)
+            
+            review_h = p.get("wait_time_to_first_review")
+            if review_h is not None:
+                review_days_list.append(max(0.5, review_h) / 24.0)
+                merge_days_list.append(max(0.5, ct - review_h) / 24.0)
+                
+    coding_days_list.sort()
+    review_days_list.sort()
+    merge_days_list.sort()
+    
+    def get_pct(lst, p):
+        if not lst:
+            return 0.5
+        idx = int(len(lst) * p)
+        idx = min(idx, len(lst) - 1)
+        return max(0.02, lst[idx])
+        
+    stage_percentiles = {
+        "coding": {
+            "p50": get_pct(coding_days_list, 0.5),
+            "p70": get_pct(coding_days_list, 0.70),
+            "p85": get_pct(coding_days_list, 0.85),
+            "p95": get_pct(coding_days_list, 0.95),
+        },
+        "review": {
+            "p50": get_pct(review_days_list, 0.5),
+            "p70": get_pct(review_days_list, 0.70),
+            "p85": get_pct(review_days_list, 0.85),
+            "p95": get_pct(review_days_list, 0.95),
+        },
+        "merge": {
+            "p50": get_pct(merge_days_list, 0.5),
+            "p70": get_pct(merge_days_list, 0.70),
+            "p85": get_pct(merge_days_list, 0.85),
+            "p95": get_pct(merge_days_list, 0.95),
+        }
+    }
+
+    # 4. Active WIP Stage & Age (in days)
+    active_wip_points = []
+    for p in filtered_open:
+        created_dt = parse_date(p["createdAt"])
+        if not created_dt:
+            continue
+        age_days = (now - created_dt).total_seconds() / 86400.0
+        age_days = max(0.02, age_days)
+        
+        ready_dt = p.get("ready_for_review_dt")
+        is_draft = p.get("title", "").lower().startswith("[draft]")
+        has_reviews = p.get("review_count", 0) > 0
+        has_approval = p.get("approvals", 0) > 0
+        
+        if has_approval:
+            stage_name = "3. Merge Delay"
+        elif ready_dt or has_reviews or not is_draft:
+            stage_name = "2. Review Queue"
+        else:
+            stage_name = "1. Active Coding"
+            
+        active_wip_points.append({
+            "x": stage_name,
+            "y": age_days,
+            "num": p["number"],
+            "title": p["title"],
+            "classification": p["classification"],
+            "size": p["pr_size"]
+        })
+
+    # 5. PR Size vs Cycle Time
+    pr_size_scatter_points = [
+        {
+            "x": p["pr_size"],
+            "y": p["cycle_time_hours"],
+            "classification": p["classification"],
+            "num": p["number"],
+            "title": p["title"]
+        }
+        for p in recent_prs if p["cycle_time_hours"] is not None
+    ]
+
+    # 6. Comet Timeline Packed via Tetris Algorithm
+    comet_list = []
+    for p in recent_prs:
+        created_dt = parse_date(p["createdAt"])
+        merged_dt = parse_date(p["mergedAt"])
+        if not created_dt or not merged_dt:
+            continue
+        coding_h = p.get("coding_time_hours")
+        if coding_h is not None:
+            start_dt = created_dt - datetime.timedelta(hours=coding_h)
+        else:
+            start_dt = created_dt - datetime.timedelta(hours=2.0)
+            
+        start_ts = start_dt.timestamp() * 1000.0
+        end_ts = merged_dt.timestamp() * 1000.0
+        
+        comet_list.append({
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "pr": p
+        })
+    comet_list.sort(key=lambda item: item["start_ts"])
+    
+    lanes = []
+    comet_points = []
+    for item in comet_list:
+        start_ts = item["start_ts"]
+        end_ts = item["end_ts"]
+        p = item["pr"]
+        
+        assigned_lane = -1
+        for i in range(len(lanes)):
+            if lanes[i] <= start_ts:
+                assigned_lane = i
+                break
+        if assigned_lane == -1:
+            assigned_lane = len(lanes)
+            lanes.append(end_ts)
+        else:
+            lanes[assigned_lane] = end_ts
+            
+        comet_points.append({
+            "key": p["number"],
+            "summary": p["title"],
+            "start": start_ts,
+            "end": end_ts,
+            "lane": assigned_lane + 1,
+            "classification": p["classification"],
+            "size": p["pr_size"],
+            "cycle_time": p["cycle_time_hours"]
+        })
+
+    # 7. PR Throughput by Week
+    throughput_data = []
+    for idx in range(1, len(weekly_bins)):
+        W_start = weekly_bins[idx-1]
+        W_end = weekly_bins[idx]
+        bin_str = W_end.strftime("%Y-%m-%d")
+        
+        human_completed = sum(1 for p in recent_prs if p["classification"] == "Human" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
+        assisted_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Assisted" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
+        agentic_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Agentic" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
+        
+        throughput_data.append({
+            "week": bin_str,
+            "human": human_completed,
+            "assisted": assisted_completed,
+            "agentic": agentic_completed,
+            "total": human_completed + assisted_completed + agentic_completed
+        })
+
     # Pre-serialize JSON variables to avoid f-string curly-brace parsing issues
+    spearman_corr_json = json.dumps(spearman_corr)
+    p50_sle_json = json.dumps(p50_sle)
+    p85_sle_json = json.dumps(p85_sle)
+    stage_percentiles_json = json.dumps(stage_percentiles)
+    active_wip_json = json.dumps(active_wip_points)
+    pr_size_scatter_json = json.dumps(pr_size_scatter_points)
+    comet_points_json = json.dumps(comet_points)
+    throughput_data_json = json.dumps(throughput_data)
+
     cfd_months_json = json.dumps([c['month'] for c in cfd_data])
     cfd_merged_json = json.dumps([c['merged'] for c in cfd_data])
     cfd_review_json = json.dumps([c['review'] for c in cfd_data])
@@ -925,17 +1434,17 @@ def analyze_and_build_report(data):
     <!-- Stat Metrics Row -->
     <div class="metrics-grid">
         <div class="metric-card">
-            <div class="metric-title">Avg Cycle Time (Last 18M)</div>
-            <div class="metric-value">{recent_stats['avg_cycle']:.1f} hrs</div>
+            <div class="metric-title">Avg / 85% SLE Cycle Time</div>
+            <div class="metric-value">{recent_stats['avg_cycle']:.1f}h / {p85_sle:.1f}h</div>
             <div class="metric-trend trend-up">
-                ▲ +{((recent_stats['avg_cycle'] - pre_stats['avg_cycle']) / max(1, pre_stats['avg_cycle']))*100:.1f}% vs Pre-AI
+                SLE (85% Confidence): {p85_sle:.1f} hrs
             </div>
         </div>
         <div class="metric-card">
-            <div class="metric-title">Review Loops per PR</div>
-            <div class="metric-value">{recent_stats['avg_loops']:.2f}</div>
-            <div class="metric-trend trend-up">
-                ▲ +{((recent_stats['avg_loops'] - pre_stats['avg_loops']) / max(1, pre_stats['avg_loops']))*100:.1f}% vs Pre-AI
+            <div class="metric-title">PR Churn Correlation (Spearman)</div>
+            <div class="metric-value">{spearman_corr:.2f}</div>
+            <div class="metric-trend" style="color: #c084fc;">
+                Batch size vs. Cycle time impact
             </div>
         </div>
         <div class="metric-card">
@@ -1064,6 +1573,78 @@ def analyze_and_build_report(data):
                 <strong>Active Constraint:</strong> The primary bottleneck in this value stream is the <strong>Review Queue ({upstream_breakdown['review_wait']:.1f} hours)</strong>. Locally optimizing coding time with AI (currently {upstream_breakdown['coding']:.1f} hours) will yield zero cycle-time reduction for the overall system, as the code will simply accumulate in the review queue.
             </div>
         </div>
+    <!-- Row 3: Active WIP Age & Batch Size Correlation -->
+    <div class="dashboard-row equal">
+        <div class="chart-card">
+            <div class="chart-title">
+                <span>Active PR Age Chart (Leading Flow Indicator)</span>
+                <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-mut);">Open WIP vs. Historical Percentiles</span>
+            </div>
+            <div style="height: 280px; position: relative;">
+                <canvas id="activeWipAgeChart"></canvas>
+            </div>
+            <div class="pov-callout">
+                <div class="pov-title">WIP Age as Leading Indicator</div>
+                This chart shows open PRs plotted against their current stage. Colored bands show historical percentile distributions (50%, 70%, 85%, 95%). PRs crossing into red are stalled bottlenecks.
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-title">
+                <span>PR Batch Size vs. Cycle Time Correlation</span>
+                <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-mut);">Spearman: {spearman_corr:.2f}</span>
+            </div>
+            <div style="height: 280px; position: relative;">
+                <canvas id="sizeCorrelationChart"></canvas>
+            </div>
+            <div class="pov-callout" style="background: rgba(139, 92, 246, 0.05); border-color: rgba(139, 92, 246, 0.2);">
+                <div class="pov-title" style="color: #c084fc;">Batch Size vs. Cycle Time Analysis</div>
+                <strong>Flow Coaching Rule:</strong> Smaller batches lead to shorter, more predictable review and integration times. A correlation closer to +1.0 proves size is driving cycle time delay.
+            </div>
+        </div>
+    </div>
+
+    <!-- Row 4: Weekly Throughput & Comet packed timeline -->
+    <div class="dashboard-row equal">
+        <div class="chart-card">
+            <div class="chart-title">
+                <span>Weekly PR Throughput</span>
+                <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-mut);">Volume by Contributor Type</span>
+            </div>
+            <div style="height: 280px; position: relative;">
+                <canvas id="throughputChart"></canvas>
+            </div>
+            <div class="pov-callout">
+                <div class="pov-title">Throughput Capacity</div>
+                Visualizes the weekly volume of merged PRs, showing whether the introduction of AI tools increases the finished throughput of the system or simply swells WIP queues.
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-title">
+                <span>PR Concurrency Timeline (Tetris Comet Chart)</span>
+                <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-mut);">Lifespans &amp; Contributor Type</span>
+            </div>
+            <div style="height: 280px; position: relative;">
+                <canvas id="prCometChartCanvas"></canvas>
+            </div>
+            <div style="display: flex; gap: 1rem; margin-top: 1rem; align-items: center; justify-content: center; font-size: 0.85rem;">
+                <div>
+                    <label for="cometSizeSelect" style="color: var(--text-mut);">Size By:</label>
+                    <select id="cometSizeSelect" style="background: var(--card-bg); border: 1px solid var(--border-color); color: #ffffff; border-radius: 4px; padding: 0.15rem 0.35rem;" onchange="updateCometChart()">
+                        <option value="uniform">Uniform</option>
+                        <option value="size">PR Churn Size</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="cometLayoutSelect" style="color: var(--text-mut);">Layout:</label>
+                    <select id="cometLayoutSelect" style="background: var(--card-bg); border: 1px solid var(--border-color); color: #ffffff; border-radius: 4px; padding: 0.15rem 0.35rem;" onchange="updateCometChart()">
+                        <option value="tetris">WIP Lanes (Tetris)</option>
+                        <option value="duration">Cycle Time (Hours)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Script Block for Charts -->
@@ -1143,6 +1724,50 @@ def analyze_and_build_report(data):
         const assistedPoints = recentPRs.filter(p => p.classification === 'AI-Assisted');
         const agenticPoints = recentPRs.filter(p => p.classification === 'AI-Agentic');
 
+        // Sle horizontal lines custom plugin
+        const slePlugin = {{
+            id: 'sleLines',
+            beforeDraw: (chart) => {{
+                const ctx = chart.canvas.getContext('2d');
+                const yAxis = chart.scales.y;
+                const chartArea = chart.chartArea;
+                
+                ctx.save();
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 4]);
+                
+                // 50% SLE Line
+                const y50 = yAxis.getPixelForValue({p50_sle_json});
+                if (y50 >= chartArea.top && y50 <= chartArea.bottom) {{
+                    ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+                    ctx.beginPath();
+                    ctx.moveTo(chartArea.left, y50);
+                    ctx.lineTo(chartArea.right, y50);
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = 'rgba(16, 185, 129, 0.8)';
+                    ctx.font = '10px Outfit';
+                    ctx.fillText('50% SLE ({p50_sle:.1f}h)', chartArea.left + 10, y50 - 4);
+                }}
+                
+                // 85% SLE Line
+                const y85 = yAxis.getPixelForValue({p85_sle_json});
+                if (y85 >= chartArea.top && y85 <= chartArea.bottom) {{
+                    ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+                    ctx.beginPath();
+                    ctx.moveTo(chartArea.left, y85);
+                    ctx.lineTo(chartArea.right, y85);
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = 'rgba(245, 158, 11, 0.8)';
+                    ctx.font = '10px Outfit';
+                    ctx.fillText('85% SLE ({p85_sle:.1f}h)', chartArea.left + 10, y85 - 4);
+                }}
+                
+                ctx.restore();
+            }}
+        }};
+
         const ctxScatter = document.getElementById('scatterChart').getContext('2d');
         new Chart(ctxScatter, {{
             type: 'scatter',
@@ -1150,19 +1775,19 @@ def analyze_and_build_report(data):
                 datasets: [
                     {{
                         label: 'Human',
-                        data: humanPoints.map(p => ({{ x: p.x, y: p.y }})),
+                        data: humanPoints.map(p => ({{ x: p.x, y: p.y, num: p.num }})),
                         backgroundColor: '#10b981',
                         pointRadius: 6
                     }},
                     {{
                         label: 'AI-Assisted',
-                        data: assistedPoints.map(p => ({{ x: p.x, y: p.y }})),
+                        data: assistedPoints.map(p => ({{ x: p.x, y: p.y, num: p.num }})),
                         backgroundColor: '#3b82f6',
                         pointRadius: 6
                     }},
                     {{
                         label: 'AI-Agentic',
-                        data: agenticPoints.map(p => ({{ x: p.x, y: p.y }})),
+                        data: agenticPoints.map(p => ({{ x: p.x, y: p.y, num: p.num }})),
                         backgroundColor: '#8b5cf6',
                         pointRadius: 7,
                         pointStyle: 'rectRot'
@@ -1199,10 +1824,389 @@ def analyze_and_build_report(data):
                     }}
                 }},
                 plugins: {{
-                    legend: {{ display: false }}
+                    legend: {{ display: true, labels: {{ color: '#f3f4f6' }} }}
+                }}
+            }},
+            plugins: [slePlugin]
+        }});
+
+        // New Chart 1: Active WIP Age Chart with Percentile Background bands
+        const activeWipData = {active_wip_json};
+        const stagePercentiles = {stage_percentiles_json};
+        const stages = ["1. Active Coding", "2. Review Queue", "3. Merge Delay"];
+        
+        const agePercentileBandsPlugin = {{
+            id: 'agePercentileBands',
+            beforeDraw: (chart) => {{
+                const ctx = chart.canvas.getContext('2d');
+                const xAxis = chart.scales.x;
+                const yAxis = chart.scales.y;
+                const chartArea = chart.chartArea;
+                
+                ctx.save();
+                const colWidth = chartArea.width / stages.length;
+                const yBot = yAxis.bottom;
+                const yTop = yAxis.top;
+                
+                stages.forEach((stage, i) => {{
+                    const left = chartArea.left + i * colWidth;
+                    let key = 'coding';
+                    if (stage.includes("Review")) key = 'review';
+                    else if (stage.includes("Merge")) key = 'merge';
+                    
+                    const p = stagePercentiles[key];
+                    
+                    const y50 = Math.max(yTop, Math.min(yBot, yAxis.getPixelForValue(p.p50)));
+                    const y70 = Math.max(yTop, Math.min(yBot, yAxis.getPixelForValue(p.p70)));
+                    const y85 = Math.max(yTop, Math.min(yBot, yAxis.getPixelForValue(p.p85)));
+                    const y95 = Math.max(yTop, Math.min(yBot, yAxis.getPixelForValue(p.p95)));
+                    
+                    // Green band: 0 to p50
+                    ctx.fillStyle = 'rgba(16, 185, 129, 0.07)';
+                    ctx.fillRect(left, y50, colWidth, yBot - y50);
+                    
+                    // Yellow band: p50 to p70
+                    ctx.fillStyle = 'rgba(250, 204, 21, 0.07)';
+                    ctx.fillRect(left, y70, colWidth, y50 - y70);
+                    
+                    // Orange band: p70 to p85
+                    ctx.fillStyle = 'rgba(245, 158, 11, 0.1)';
+                    ctx.fillRect(left, y85, colWidth, y70 - y85);
+                    
+                    // Red band: p85 to p95
+                    ctx.fillStyle = 'rgba(239, 68, 68, 0.1)';
+                    ctx.fillRect(left, y95, colWidth, y85 - y95);
+                    
+                    // Dark Red band: > p95
+                    ctx.fillStyle = 'rgba(185, 28, 28, 0.15)';
+                    ctx.fillRect(left, yTop, colWidth, y95 - yTop);
+                    
+                    if (i > 0) {{
+                        ctx.strokeStyle = '#1f2937';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(left, yTop);
+                        ctx.lineTo(left, yBot);
+                        ctx.stroke();
+                    }}
+                }});
+                ctx.restore();
+            }}
+        }};
+
+        const ctxWip = document.getElementById('activeWipAgeChart').getContext('2d');
+        new Chart(ctxWip, {{
+            type: 'scatter',
+            data: {{
+                datasets: [{{
+                    label: 'Active WIP',
+                    data: activeWipData.map(pt => ({{
+                        x: pt.x,
+                        y: pt.y,
+                        num: pt.num,
+                        title: pt.title,
+                        classification: pt.classification,
+                        size: pt.size
+                    }})),
+                    backgroundColor: (context) => {{
+                        const pt = context.raw;
+                        if (!pt) return '#3b82f6';
+                        let key = 'coding';
+                        if (pt.x.includes("Review")) key = 'review';
+                        else if (pt.x.includes("Merge")) key = 'merge';
+                        const p = stagePercentiles[key];
+                        const age = pt.y;
+                        if (age > p.p85) return '#ef4444'; // Red
+                        if (age > p.p70) return '#f59e0b'; // Orange
+                        if (age > p.p50) return '#eab308'; // Yellow
+                        return '#10b981'; // Green
+                    }},
+                    borderColor: '#141b2d',
+                    borderWidth: 1.5,
+                    pointRadius: 7,
+                    pointHoverRadius: 9
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {{
+                    x: {{
+                        type: 'category',
+                        labels: stages,
+                        grid: {{ display: false }},
+                        ticks: {{ color: '#9ca3af' }}
+                    }},
+                    y: {{
+                        type: 'logarithmic',
+                        title: {{ display: true, text: 'Age (Days, Log Scale)', color: '#9ca3af' }},
+                        grid: {{ color: '#1f2937' }},
+                        ticks: {{ 
+                            color: '#9ca3af',
+                            callback: function(value) {{
+                                return value + 'd';
+                            }}
+                        }},
+                        min: 0.02
+                    }}
+                }},
+                plugins: {{
+                    legend: {{ display: false }},
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(ctx) {{
+                                const pt = ctx.raw;
+                                return `[PR #${{pt.num}}] ${{pt.title}} | Age: ${{pt.y.toFixed(2)}}d | Size: ${{pt.size}} lines | Type: ${{pt.classification}}`;
+                            }}
+                        }}
+                    }}
+                }}
+            }},
+            plugins: [agePercentileBandsPlugin]
+        }});
+
+        // New Chart 2: PR Batch Size vs. Cycle Time Scatter Plot
+        const prSizeScatterData = {pr_size_scatter_json};
+        
+        const humanSizePoints = prSizeScatterData.filter(p => p.classification === 'Human');
+        const assistedSizePoints = prSizeScatterData.filter(p => p.classification === 'AI-Assisted');
+        const agenticSizePoints = prSizeScatterData.filter(p => p.classification === 'AI-Agentic');
+        
+        const ctxSizeCorr = document.getElementById('sizeCorrelationChart').getContext('2d');
+        new Chart(ctxSizeCorr, {{
+            type: 'scatter',
+            data: {{
+                datasets: [
+                    {{
+                        label: 'Human',
+                        data: humanSizePoints.map(p => ({{ x: p.x, y: p.y, num: p.num, title: p.title }})),
+                        backgroundColor: '#10b981',
+                        pointRadius: 6
+                    }},
+                    {{
+                        label: 'AI-Assisted',
+                        data: assistedSizePoints.map(p => ({{ x: p.x, y: p.y, num: p.num, title: p.title }})),
+                        backgroundColor: '#3b82f6',
+                        pointRadius: 6
+                    }},
+                    {{
+                        label: 'AI-Agentic',
+                        data: agenticSizePoints.map(p => ({{ x: p.x, y: p.y, num: p.num, title: p.title }})),
+                        backgroundColor: '#8b5cf6',
+                        pointRadius: 7,
+                        pointStyle: 'rectRot'
+                    }}
+                ]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {{
+                    x: {{
+                        title: {{ display: true, text: 'Batch Size (Lines Churned)', color: '#9ca3af' }},
+                        grid: {{ color: '#1f2937' }},
+                        ticks: {{ color: '#9ca3af' }}
+                    }},
+                    y: {{
+                        type: 'logarithmic',
+                        title: {{ display: true, text: 'Cycle Time (Hours, Log Scale)', color: '#9ca3af' }},
+                        grid: {{ color: '#1f2937' }},
+                        ticks: {{ color: '#9ca3af' }},
+                        min: 0.1
+                    }}
+                }},
+                plugins: {{
+                    legend: {{ display: true, labels: {{ color: '#f3f4f6' }} }},
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(ctx) {{
+                                const pt = ctx.raw;
+                                return `[PR #${{pt.num}}] ${{pt.title}} | Size: ${{pt.x}} lines | CT: ${{pt.y.toFixed(1)}} hrs`;
+                            }}
+                        }}
+                    }}
                 }}
             }}
         }});
+
+        // New Chart 3: Weekly Throughput Chart
+        const throughputData = {throughput_data_json};
+        
+        const tWeeks = throughputData.map(d => d.week);
+        const tHuman = throughputData.map(d => d.human);
+        const tAssisted = throughputData.map(d => d.assisted);
+        const tAgentic = throughputData.map(d => d.agentic);
+        
+        const ctxThroughput = document.getElementById('throughputChart').getContext('2d');
+        new Chart(ctxThroughput, {{
+            type: 'bar',
+            data: {{
+                labels: tWeeks,
+                datasets: [
+                    {{
+                        label: 'Human',
+                        data: tHuman,
+                        backgroundColor: '#10b981'
+                    }},
+                    {{
+                        label: 'AI-Assisted',
+                        data: tAssisted,
+                        backgroundColor: '#3b82f6'
+                    }},
+                    {{
+                        label: 'AI-Agentic',
+                        data: tAgentic,
+                        backgroundColor: '#8b5cf6'
+                    }}
+                ]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {{
+                    x: {{
+                        stacked: true,
+                        grid: {{ color: '#1f2937' }},
+                        ticks: {{ color: '#9ca3af' }}
+                    }},
+                    y: {{
+                        stacked: true,
+                        grid: {{ color: '#1f2937' }},
+                        ticks: {{ color: '#9ca3af' }},
+                        title: {{ display: true, text: 'Completed PRs', color: '#9ca3af' }}
+                    }}
+                }},
+                plugins: {{
+                    legend: {{ position: 'bottom', labels: {{ color: '#f3f4f6' }} }}
+                }}
+            }}
+        }});
+
+        // New Chart 4: PR Concurrency Timeline (Comet packed)
+        const cometRawData = {comet_points_json};
+        let cometChartInstance = null;
+        
+        function drawCometChart() {{
+            const sizeSelect = document.getElementById('cometSizeSelect').value;
+            const layoutSelect = document.getElementById('cometLayoutSelect').value;
+            
+            const groups = {{
+                'Human': [],
+                'AI-Assisted': [],
+                'AI-Agentic': []
+            }};
+            
+            cometRawData.forEach(p => {{
+                const yVal = (layoutSelect === 'tetris') ? p.lane : p.cycle_time;
+                
+                groups[p.classification].push(
+                    {{ x: p.start, y: yVal, num: p.key, summary: p.summary, classification: p.classification, size: p.size, cycle_time: p.cycle_time, isStart: true }},
+                    {{ x: p.end, y: yVal, num: p.key, summary: p.summary, classification: p.classification, size: p.size, cycle_time: p.cycle_time, isEnd: true }},
+                    {{ x: null, y: null }}
+                );
+            }});
+            
+            const datasets = [];
+            const colors = {{
+                'Human': {{ bg: 'rgba(16, 185, 129, 0.7)', border: '#10b981' }},
+                'AI-Assisted': {{ bg: 'rgba(59, 130, 246, 0.7)', border: '#3b82f6' }},
+                'AI-Agentic': {{ bg: 'rgba(139, 92, 246, 0.7)', border: '#8b5cf6' }}
+            }};
+            
+            Object.keys(groups).forEach(cls => {{
+                datasets.push({{
+                    label: cls,
+                    data: groups[cls],
+                    backgroundColor: colors[cls].bg,
+                    borderColor: colors[cls].border,
+                    borderWidth: 2,
+                    type: 'line',
+                    showLine: true,
+                    spanGaps: false,
+                    segment: {{
+                        borderWidth: (ctx) => {{
+                            if (sizeSelect !== 'size') return 2;
+                            const p0 = ctx.p0DataIndex;
+                            const pt = ctx.chart.data.datasets[ctx.datasetIndex].data[p0];
+                            if (pt && pt.size) {{
+                                return Math.max(1, Math.min(8, pt.size / 100));
+                            }}
+                            return 2;
+                        }}
+                    }},
+                    pointRadius: (ctx) => {{
+                        const pt = ctx.raw;
+                        if (!pt || !pt.isEnd) return 0;
+                        if (sizeSelect === 'size' && pt.size) {{
+                            return Math.max(3, Math.min(12, pt.size / 80));
+                        }}
+                        return 5;
+                    }},
+                    pointHoverRadius: (ctx) => {{
+                        const pt = ctx.raw;
+                        if (!pt || !pt.isEnd) return 0;
+                        if (sizeSelect === 'size' && pt.size) {{
+                            return Math.max(5, Math.min(16, pt.size / 60));
+                        }}
+                        return 7;
+                    }}
+                }});
+            }});
+            
+            if (cometChartInstance) cometChartInstance.destroy();
+            
+            const ctxComet = document.getElementById('prCometChartCanvas').getContext('2d');
+            cometChartInstance = new Chart(ctxComet, {{
+                data: {{ datasets }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {{
+                        x: {{
+                            type: 'linear',
+                            title: {{ display: true, text: 'Timeline (Date Merged)', color: '#9ca3af' }},
+                            ticks: {{
+                                color: '#9ca3af',
+                                callback: function(value) {{
+                                    return new Date(value).toLocaleDateString(undefined, {{month: 'short', day: 'numeric'}});
+                                }}
+                            }},
+                            grid: {{ color: '#1f2937' }}
+                        }},
+                        y: {{
+                            type: (layoutSelect === 'duration') ? 'logarithmic' : 'linear',
+                            title: {{ 
+                                display: true, 
+                                text: (layoutSelect === 'duration') ? 'Cycle Time (Hours, Log Scale)' : 'WIP Lanes (Concurrent)', 
+                                color: '#9ca3af' 
+                            }},
+                            grid: {{ color: (layoutSelect === 'duration') ? '#1f2937' : 'transparent' }},
+                            ticks: {{ 
+                                color: '#9ca3af',
+                                stepSize: (layoutSelect === 'tetris') ? 1 : undefined,
+                                display: (layoutSelect !== 'tetris')
+                            }},
+                            min: (layoutSelect === 'duration') ? 0.1 : 0
+                        }}
+                    }},
+                    plugins: {{
+                        legend: {{ display: true, labels: {{ color: '#f3f4f6' }} }},
+                        tooltip: {{
+                            callbacks: {{
+                                label: function(ctx) {{
+                                    const pt = ctx.raw;
+                                    if (!pt || pt.isStart) return '';
+                                    return `[PR #${{pt.num}}] ${{pt.summary}} | CT: ${{pt.cycle_time.toFixed(1)}}h | Size: ${{pt.size}} lines`;
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+        }}
+        
+        window.updateCometChart = drawCometChart;
+        drawCometChart();
     </script>
 </body>
 </html>
