@@ -37,3 +37,17 @@ python analyze.py openclaw/openclaw --refresh
 
 To view the generated dashboard, open `dashboard.html` directly in your web browser. Cache files are stored locally in `raw_data.json` to prevent API rate-limiting.
 
+
+## Testing
+
+CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`. To run the same checks locally:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+ruff check .
+pytest --cov            # fails below the coverage floor in pyproject.toml
+pytest -m unit          # or -m integration / -m e2e
+```
+
+Tests never touch the network, the `gh`/`bws` CLIs, or Gemini; `subprocess.run` is blocked by default and each test runs in a temp directory.
