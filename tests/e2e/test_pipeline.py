@@ -11,8 +11,7 @@ from freezegun import freeze_time
 
 import analyze
 import app as app_module
-from tests.factories import FakeGh, graphql_response, small_raw_data
-from tests.integration.test_api import FakeGenai
+from tests.factories import FakeGenai, FakeGh, graphql_response, small_raw_data
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WATCHED = ("raw_data.json", "dashboard.html", "index.html", "analyze.py", "app.py")

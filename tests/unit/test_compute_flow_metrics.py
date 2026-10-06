@@ -3,7 +3,7 @@ import datetime
 import pytest
 from freezegun import freeze_time
 
-from analyze import compute_flow_metrics, parse_date
+from analyze import compute_flow_metrics
 from tests.factories import make_commit, make_issue, make_pr, make_review
 
 NOW = "2024-03-01T00:00:00"

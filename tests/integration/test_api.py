@@ -1,45 +1,12 @@
 import sys
-import types
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+from tests.factories import FakeGenai
 
 SAMPLE_METRICS = {"repo": "o/r", "recent_stats": {"total": 3}, "p50_sle": 24, "p85_sle": 48}
-
-
-class FakeGenai(types.ModuleType):
-    """Stand-in for google.generativeai; records configuration and chat traffic."""
-
-    def __init__(self, reply="coach says hi", error=None):
-        super().__init__("google.generativeai")
-        self.reply, self.error = reply, error
-        self.api_key = self.model_kwargs = self.history = self.sent = None
-        outer = self
-
-        class _Resp:
-            text = reply
-
-        class _Chat:
-            def send_message(self, message):
-                if outer.error:
-                    raise outer.error
-                outer.sent = message
-                return _Resp()
-
-        class GenerativeModel:
-            def __init__(self, **kwargs):
-                outer.model_kwargs = kwargs
-
-            def start_chat(self, history):
-                outer.history = history
-                return _Chat()
-
-        self.GenerativeModel = GenerativeModel
-
-    def configure(self, api_key):
-        self.api_key = api_key
 
 
 @pytest.fixture

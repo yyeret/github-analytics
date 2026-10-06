@@ -1,6 +1,7 @@
 """Builders for GraphQL-shaped PR nodes with explicit timestamps."""
 import json
 import subprocess
+import types
 
 
 def make_commit(date, name="Dev", email="dev@example.com", login="dev"):
@@ -75,3 +76,36 @@ def small_raw_data(repo="o/r"):
             make_pr(202, "2024-02-25T00:00:00Z", None, reviews=[make_review("2024-02-26T00:00:00Z", "APPROVED")]),
         ],
     }
+
+
+class FakeGenai(types.ModuleType):
+    """Stand-in for google.generativeai; records configuration and chat traffic."""
+
+    def __init__(self, reply="coach says hi", error=None):
+        super().__init__("google.generativeai")
+        self.reply, self.error = reply, error
+        self.api_key = self.model_kwargs = self.history = self.sent = None
+        outer = self
+
+        class _Resp:
+            text = reply
+
+        class _Chat:
+            def send_message(self, message):
+                if outer.error:
+                    raise outer.error
+                outer.sent = message
+                return _Resp()
+
+        class GenerativeModel:
+            def __init__(self, **kwargs):
+                outer.model_kwargs = kwargs
+
+            def start_chat(self, history):
+                outer.history = history
+                return _Chat()
+
+        self.GenerativeModel = GenerativeModel
+
+    def configure(self, api_key):
+        self.api_key = api_key

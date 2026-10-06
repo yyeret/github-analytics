@@ -1,6 +1,5 @@
 import datetime
 
-import pytest
 from freezegun import freeze_time
 
 from analyze import process_pr_metrics
