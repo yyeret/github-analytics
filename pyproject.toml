@@ -1,0 +1,23 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -ra"
+markers = [
+    "unit: pure-logic tests, no I/O",
+    "integration: multiple components with the outermost boundary (gh, Gemini) faked",
+    "e2e: whole pipeline from raw GitHub payloads to API and dashboard output",
+]
+
+[tool.coverage.run]
+source = ["analyze", "app", "issues"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 200
+
+[tool.ruff.lint]
+# Errors only: syntax errors and undefined names. The legacy code was never linted.
+select = ["E9", "F63", "F7", "F82"]
