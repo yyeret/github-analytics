@@ -140,6 +140,8 @@ def _build_system_prompt(metrics: dict) -> str:
         for p in recent_prs_summary[:20] if p.get("cycle_time_hours")
     )
 
+    issue_block = _build_issue_block(metrics.get("issues"))
+
     return f"""You are the **Antigravity AI Flow Coach** — an expert in software engineering flow metrics, 
 Value Stream Mapping, and the Theory of Constraints. You help engineering teams use data to improve 
 delivery speed, predictability, and quality.
@@ -176,9 +178,40 @@ Your coaching philosophy:
 ### Sample of Recent PRs
 {pr_list_str or "  No recent PR data available"}
 
-Answer questions about this data with specific, actionable coaching insights. 
+{issue_block}Answer questions about this data with specific, actionable coaching insights. 
 Reference specific PR numbers or metric values when relevant.
 Keep answers concise but insightful. Use markdown formatting.
+"""
+
+
+def _build_issue_block(issues: Optional[dict]) -> str:
+    """Prompt section for the Issues analytics; empty string when issues are unavailable."""
+    if not issues:
+        return ""
+    ct = issues.get("cycle_time", {})
+    modern, baseline = ct.get("modern", {}), ct.get("baseline", {})
+    weekly = issues.get("weekly", [])[-8:]
+    net_8w = sum(w.get("net", 0) for w in weekly)
+    stale = issues.get("stale", {})
+    res = issues.get("resolution", {})
+    oldest = stale.get("items", [])[:3]
+    oldest_str = "\n".join(
+        f"  - #{i['number']}: {i['title'][:60]} | idle {i['days_since_activity']:.0f}d" for i in oldest
+    ) or "  None"
+    truncated = ""
+    if issues.get("closed_truncated") or issues.get("open_truncated"):
+        truncated = "\n- Note: issue sample was capped, so early weeks or the open count may be incomplete"
+    return f"""### Issue Backlog
+- **Open issues now**: {issues.get('open_now', 0)}
+- **Net backlog change (last 8 weeks)**: {net_8w:+d} issues (arrivals minus resolutions)
+- **Issue cycle time, modern era**: median {modern.get('median_hours', 0)/24:.1f}d, 85th pct {modern.get('p85_hours', 0)/24:.1f}d ({modern.get('n', 0)} closed)
+- **Issue cycle time, 2021 baseline**: median {baseline.get('median_hours', 0)/24:.1f}d, 85th pct {baseline.get('p85_hours', 0)/24:.1f}d ({baseline.get('n', 0)} closed)
+- **Stale issues** (no comment for {stale.get('threshold_days', 90)}+ days): {stale.get('count', 0)}
+- **Closed via a linked PR**: {res.get('pct_with_pr', 0):.0f}% ({res.get('with_pr', 0)} of {res.get('closed_total', 0)}){truncated}
+
+Oldest stale issues:
+{oldest_str}
+
 """
 
 
