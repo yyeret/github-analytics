@@ -7,6 +7,9 @@ import json
 import datetime
 import sys
 import re
+import concurrent.futures
+
+from issues import collect_issues, compute_issue_metrics, issue_weekly_bins
 
 # File paths
 RAW_DATA_FILE = "raw_data.json"
@@ -100,6 +103,11 @@ def run_graphql_query(search_query, count=100):
 
 def collect_data(repo="sveltejs/svelte"):
     print(f"Collecting data for {repo}...")
+
+    # Issues are independent of the PR queries, so fetch them alongside; fail-soft to None
+    issue_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    issues_future = issue_pool.submit(collect_issues, repo)
+    issue_pool.shutdown(wait=False)  # the submitted fetch still runs; this only releases the pool
     
     # 1. Pre-AI Era (2021) baseline
     print("Fetching Pre-AI Era (2021) sample...")
@@ -292,11 +300,16 @@ def collect_data(repo="sveltejs/svelte"):
     except Exception as e:
         print("Error fetching open PRs:", e)
     
+    # 4. Issues were fetched in parallel above, independent of PR linkage
+    print("Waiting for issues...")
+    issues_raw = issues_future.result()
+
     all_data = {
         "repo": repo,
         "pre_ai_prs": pre_ai_nodes,
         "recent_prs": recent_nodes,
         "open_prs": open_nodes,
+        "issues": issues_raw,
         "captured_at": datetime.datetime.now().isoformat()
     }
     
@@ -763,6 +776,7 @@ def compute_flow_metrics(data):
              "mergedAt": p["mergedAt"], "createdAt": p["createdAt"]}
             for p in recent_prs[:50]  # top 50 for chat context
         ],
+        "issues": compute_issue_metrics(data.get("issues"), issue_weekly_bins(now), now),
     }
 
 
