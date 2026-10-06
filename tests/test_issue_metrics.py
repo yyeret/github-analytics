@@ -66,6 +66,7 @@ def test_ae2_eight_weeks_of_net_arrivals_raise_the_open_count_every_week():
     assert all(w["net"] == 2 for w in weeks)
     counts = [w["open_count"] for w in weeks]
     assert counts == [2, 4, 6, 8, 10, 12, 14, 16]
+    assert out["net_8w"] == 16
 
 
 def test_ae3_open_issue_with_no_recent_activity_is_stale_with_its_age():

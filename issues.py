@@ -11,6 +11,7 @@ import subprocess
 
 STALE_DAYS = 90
 STALE_ITEM_LIMIT = 25
+NET_WINDOW_WEEKS = 8
 OPEN_CAP = 1000
 CLOSED_CAP = 1000
 ISSUE_WINDOW_WEEKS = 52
@@ -81,7 +82,7 @@ def _cycle_stats(issues):
 
 def _last_activity(it):
     nodes = (it.get("comments") or {}).get("nodes") or []
-    stamps = [_parse(n.get("createdAt")) for n in nodes if _parse(n.get("createdAt"))]
+    stamps = [s for s in (_parse(n.get("createdAt")) for n in nodes) if s]
     return max(stamps) if stamps else _parse(it.get("createdAt"))
 
 
@@ -103,22 +104,19 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
     open_issues = issues_raw.get("open") or []
     closed_issues = issues_raw.get("closed") or []
     window_start = _window_start(issues_raw, weekly_bins)
-    sampled = open_issues + closed_issues
-
-    created = {id(i): _parse(i.get("createdAt")) for i in sampled}
-    closed_at = {id(i): _parse(i.get("closedAt")) for i in sampled}
+    # (issue, created, closed) rows, parsed once
+    open_rows = [(i, _parse(i.get("createdAt")), None) for i in open_issues]
+    closed_rows = [(i, _parse(i.get("createdAt")), _parse(i.get("closedAt"))) for i in closed_issues]
+    sampled = open_rows + closed_rows
 
     weekly = []
     for idx in range(1, len(weekly_bins)):
         w_start, w_end = weekly_bins[idx - 1], weekly_bins[idx]
         if w_start < window_start:
             continue
-        arrived = sum(1 for i in sampled if created[id(i)] and w_start < created[id(i)] <= w_end)
-        resolved = sum(1 for i in closed_issues if closed_at[id(i)] and w_start < closed_at[id(i)] <= w_end)
-        open_count = sum(
-            1 for i in sampled
-            if created[id(i)] and created[id(i)] <= w_end and (not closed_at[id(i)] or closed_at[id(i)] > w_end)
-        )
+        arrived = sum(1 for _, made, _ in sampled if made and w_start < made <= w_end)
+        resolved = sum(1 for _, _, done in closed_rows if done and w_start < done <= w_end)
+        open_count = sum(1 for _, made, done in sampled if made and made <= w_end and (not done or done > w_end))
         weekly.append({
             "week": w_end.strftime("%Y-%m-%d"),
             "arrived": arrived,
@@ -127,12 +125,11 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
             "open_count": open_count,
         })
 
-    modern_closed = [i for i in closed_issues if closed_at[id(i)] and closed_at[id(i)] >= window_start]
+    modern_closed = [i for i, _, done in closed_rows if done and done >= window_start]
 
     age_counts = {label: 0 for label, _, _ in AGE_BUCKETS}
     stale_items = []
-    for it in open_issues:
-        made = created[id(it)]
+    for it, made, _ in open_rows:
         if not made:
             continue
         age_days = (now - made).total_seconds() / 86400.0
@@ -164,6 +161,7 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
             "modern": _cycle_stats(modern_closed),
         },
         "weekly": weekly,
+        "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]),
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
         "resolution": {
@@ -177,7 +175,7 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
 
 def _search_issues(search_query, cap, run):
     """Page through an issue search; returns (nodes, truncated). Raises on failure."""
-    nodes, cursor, truncated = [], None, False
+    nodes, cursor = [], None
     while len(nodes) < cap:
         cmd = [
             "gh", "api", "graphql",
@@ -194,8 +192,7 @@ def _search_issues(search_query, cap, run):
         if not info["hasNextPage"]:
             return nodes, False
         cursor = info["endCursor"]
-    truncated = True
-    return nodes[:cap], truncated
+    return nodes[:cap], True
 
 
 def collect_issues(repo, run=subprocess.run, now=None):

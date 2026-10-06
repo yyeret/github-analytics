@@ -712,7 +712,7 @@
     if (iss) {
       const im = iss.cycle_time.modern, ib = iss.cycle_time.baseline;
       const iDelta = ib.median_hours > 0 ? ((im.median_hours - ib.median_hours) / ib.median_hours * 100) : 0;
-      const net8 = (iss.weekly || []).slice(-8).reduce((sum, w) => sum + w.net, 0);
+      const net8 = iss.net_8w;
       kpis.push(
         { label:'Open Issues', value: iss.open_now, sub:'in the backlog now', badge: iss.open_truncated ? 'Capped' : null, badgeClass:'badge-amber' },
         { label:'Issue Cycle Time', value: fmt_days(im.median_hours), sub:`85th pct: ${fmt_days(im.p85_hours)}`, badge: iDelta !== 0 && ib.n > 0 ? `${iDelta < 0 ? '↓' : '↑'} ${Math.abs(iDelta).toFixed(0)}% vs 2021` : null, badgeClass: iDelta < 0 ? 'badge-green' : 'badge-rose' },
@@ -848,7 +848,7 @@
     if (iss.open_truncated) notes.push('More than 1,000 issues are open; the open count is understated.');
     document.getElementById('issues-note').textContent = notes.join(' ');
 
-    const pts = (iss.weekly || []).slice(-52);
+    const pts = iss.weekly.slice(-52);
     mkChart('chart-issue-flow', {
       type: 'bar',
       data: {

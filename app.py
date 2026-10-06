@@ -190,10 +190,10 @@ def _build_issue_block(issues: Optional[dict]) -> str:
         return ""
     ct = issues.get("cycle_time", {})
     modern, baseline = ct.get("modern", {}), ct.get("baseline", {})
-    weekly = issues.get("weekly", [])[-8:]
-    net_8w = sum(w.get("net", 0) for w in weekly)
+    net_8w = issues.get("net_8w", 0)
     stale = issues.get("stale", {})
     res = issues.get("resolution", {})
+    days = lambda hours: f"{hours / 24:.1f}d"
     oldest = stale.get("items", [])[:3]
     oldest_str = "\n".join(
         f"  - #{i['number']}: {i['title'][:60]} | idle {i['days_since_activity']:.0f}d" for i in oldest
@@ -204,8 +204,8 @@ def _build_issue_block(issues: Optional[dict]) -> str:
     return f"""### Issue Backlog
 - **Open issues now**: {issues.get('open_now', 0)}
 - **Net backlog change (last 8 weeks)**: {net_8w:+d} issues (arrivals minus resolutions)
-- **Issue cycle time, modern era**: median {modern.get('median_hours', 0)/24:.1f}d, 85th pct {modern.get('p85_hours', 0)/24:.1f}d ({modern.get('n', 0)} closed)
-- **Issue cycle time, 2021 baseline**: median {baseline.get('median_hours', 0)/24:.1f}d, 85th pct {baseline.get('p85_hours', 0)/24:.1f}d ({baseline.get('n', 0)} closed)
+- **Issue cycle time, modern era**: median {days(modern.get('median_hours', 0))}, 85th pct {days(modern.get('p85_hours', 0))} ({modern.get('n', 0)} closed)
+- **Issue cycle time, 2021 baseline**: median {days(baseline.get('median_hours', 0))}, 85th pct {days(baseline.get('p85_hours', 0))} ({baseline.get('n', 0)} closed)
 - **Stale issues** (no comment for {stale.get('threshold_days', 90)}+ days): {stale.get('count', 0)}
 - **Closed via a linked PR**: {res.get('pct_with_pr', 0):.0f}% ({res.get('with_pr', 0)} of {res.get('closed_total', 0)}){truncated}
 

@@ -107,6 +107,7 @@ def collect_data(repo="sveltejs/svelte"):
     # Issues are independent of the PR queries, so fetch them alongside; fail-soft to None
     issue_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     issues_future = issue_pool.submit(collect_issues, repo)
+    issue_pool.shutdown(wait=False)  # the submitted fetch still runs; this only releases the pool
     
     # 1. Pre-AI Era (2021) baseline
     print("Fetching Pre-AI Era (2021) sample...")
@@ -302,7 +303,6 @@ def collect_data(repo="sveltejs/svelte"):
     # 4. Issues were fetched in parallel above, independent of PR linkage
     print("Waiting for issues...")
     issues_raw = issues_future.result()
-    issue_pool.shutdown()
 
     all_data = {
         "repo": repo,
