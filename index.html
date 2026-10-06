@@ -233,6 +233,13 @@
     .chart-canvas-wrap.tall canvas{max-height:340px;}
     .chart-canvas-wrap.xtra-tall canvas{max-height:440px;}
 
+    /* ── Issues ─────────────────────────────────────────────────── */
+    .issue-note{font-size:.8rem;color:var(--text-dim);margin:-.5rem 0 1rem;}
+    .issue-table{width:100%;border-collapse:collapse;font-size:.85rem;}
+    .issue-table th{text-align:left;color:var(--text-dim);font-weight:600;padding:.4rem .5rem;border-bottom:1px solid var(--border);}
+    .issue-table td{padding:.4rem .5rem;border-bottom:1px solid rgba(255,255,255,.04);}
+    .issue-table td.num{white-space:nowrap;text-align:right;}
+
     /* ── Chat Drawer ────────────────────────────────────────────── */
     #chat-drawer{
       position:fixed;right:0;top:0;bottom:0;
@@ -528,6 +535,29 @@
       </div>
     </div>
 
+    <!-- Issues -->
+    <div id="issues-section" style="display:none;">
+      <div class="section-header">
+        <h2>Issue Flow &amp; Backlog Health</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="issue-note" id="issues-note"></div>
+      <div class="charts-2col">
+        <div class="chart-card">
+          <div class="chart-title">Weekly Issue Arrivals vs Resolutions + Open Backlog</div>
+          <div class="chart-canvas-wrap tall"><canvas id="chart-issue-flow"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Open Issue Age Distribution</div>
+          <div class="chart-canvas-wrap tall"><canvas id="chart-issue-age"></canvas></div>
+        </div>
+      </div>
+      <div class="chart-card charts-full">
+        <div class="chart-title">Stale Issues (oldest first)</div>
+        <table class="issue-table" id="issue-stale-table"></table>
+      </div>
+    </div>
+
   </div><!-- /dashboard -->
 </div><!-- /app -->
 
@@ -643,6 +673,7 @@
     renderWIP(d.active_wip_points, d.stage_percentiles);
     renderCorrelation(d.pr_size_scatter_points, d.spearman_corr);
     renderComet(d.comet_points);
+    renderIssues(d.issues);
   }
 
   // ── KPIs ────────────────────────────────────────────────────────────
@@ -676,6 +707,20 @@
       { label:'Active WIP', value: wip, sub:'open PRs in system', badge: wip > 10 ? 'High WIP' : 'In control', badgeClass: wip > 10 ? 'badge-rose' : 'badge-green' },
       { label:'AI Mix', value: `${Math.round((rs.assisted_ratio||0)*100+( rs.agentic_ratio||0)*100)}%`, sub:`${Math.round((rs.assisted_ratio||0)*100)}% assisted · ${Math.round((rs.agentic_ratio||0)*100)}% agentic`, badge:'AI-authored', badgeClass:'badge-violet' },
     ];
+
+    const iss = d.issues;
+    if (iss) {
+      const im = iss.cycle_time.modern, ib = iss.cycle_time.baseline;
+      const iDelta = ib.median_hours > 0 ? ((im.median_hours - ib.median_hours) / ib.median_hours * 100) : 0;
+      const net8 = (iss.weekly || []).slice(-8).reduce((sum, w) => sum + w.net, 0);
+      kpis.push(
+        { label:'Open Issues', value: iss.open_now, sub:'in the backlog now', badge: iss.open_truncated ? 'Capped' : null, badgeClass:'badge-amber' },
+        { label:'Issue Cycle Time', value: fmt_days(im.median_hours), sub:`85th pct: ${fmt_days(im.p85_hours)}`, badge: iDelta !== 0 && ib.n > 0 ? `${iDelta < 0 ? '↓' : '↑'} ${Math.abs(iDelta).toFixed(0)}% vs 2021` : null, badgeClass: iDelta < 0 ? 'badge-green' : 'badge-rose' },
+        { label:'Net Backlog (8w)', value: `${net8 >= 0 ? '+' : ''}${net8}`, sub:'arrivals minus resolutions', badge: net8 > 0 ? 'Growing' : 'Shrinking', badgeClass: net8 > 0 ? 'badge-rose' : 'badge-green' },
+        { label:'Stale Issues', value: iss.stale.count, sub:`no comment for ${iss.stale.threshold_days}+ days`, badge: iss.stale.count > 0 ? 'Needs triage' : 'Clean', badgeClass: iss.stale.count > 0 ? 'badge-amber' : 'badge-green' },
+        { label:'Closed via PR', value: `${iss.resolution.pct_with_pr.toFixed(0)}%`, sub:`${iss.resolution.with_pr} of ${iss.resolution.closed_total} closed issues`, badge:'linked PR', badgeClass:'badge-blue' },
+      );
+    }
 
     const grid = document.getElementById('kpi-grid');
     grid.innerHTML = kpis.map(k => `
@@ -786,6 +831,64 @@
         }
       }
     });
+  }
+
+  // ── Issues ─────────────────────────────────────────────────────────
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+
+  function renderIssues(iss) {
+    const sec = document.getElementById('issues-section');
+    if (!iss) { sec.style.display = 'none'; return; }
+    sec.style.display = 'block';
+
+    const notes = [];
+    if (iss.closed_truncated) notes.push(`Closed-issue sample was capped; issue charts start ${iss.window_start.slice(0, 10)}.`);
+    if (iss.open_truncated) notes.push('More than 1,000 issues are open; the open count is understated.');
+    document.getElementById('issues-note').textContent = notes.join(' ');
+
+    const pts = (iss.weekly || []).slice(-52);
+    mkChart('chart-issue-flow', {
+      type: 'bar',
+      data: {
+        labels: pts.map(w => w.week),
+        datasets: [
+          { type:'bar', label:'Arrived', data: pts.map(w => w.arrived), backgroundColor:'rgba(244,63,94,.7)', yAxisID:'y' },
+          { type:'bar', label:'Resolved', data: pts.map(w => w.resolved), backgroundColor:'rgba(16,185,129,.7)', yAxisID:'y' },
+          { type:'line', label:'Open backlog', data: pts.map(w => w.open_count), borderColor:'#8b5cf6', tension:.3, pointRadius:0, yAxisID:'y2' },
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:true,
+        plugins:{ legend:{ position:'top', labels:{ boxWidth:10, padding:12 } }, tooltip:{ mode:'index', intersect:false } },
+        scales:{
+          x:{ grid:{color:'rgba(255,255,255,.03)'}, ticks:{ maxTicksLimit:8, maxRotation:0 } },
+          y:{ grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true, title:{ display:true, text:'per week' } },
+          y2:{ position:'right', grid:{ drawOnChartArea:false }, beginAtZero:true, title:{ display:true, text:'open' } }
+        }
+      }
+    });
+
+    mkChart('chart-issue-age', {
+      type: 'bar',
+      data: {
+        labels: iss.age_buckets.map(b => b.label),
+        datasets: [{ label:'Open issues', data: iss.age_buckets.map(b => b.count), backgroundColor:'rgba(245,158,11,.75)' }]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:true,
+        plugins:{ legend:{ display:false } },
+        scales:{ x:{ grid:{display:false} }, y:{ grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true } }
+      }
+    });
+
+    const rows = iss.stale.items.map(i =>
+      `<tr><td class="num">#${i.number}</td><td>${escapeHtml(i.title)}</td><td class="num">${Math.round(i.days_since_activity)}d idle</td><td class="num">${Math.round(i.age_days)}d old</td></tr>`
+    ).join('');
+    document.getElementById('issue-stale-table').innerHTML = rows
+      ? `<thead><tr><th>Issue</th><th>Title</th><th>Idle</th><th>Age</th></tr></thead><tbody>${rows}</tbody>`
+      : '<tbody><tr><td>No stale issues.</td></tr></tbody>';
   }
 
   // ── Throughput Chart ───────────────────────────────────────────────

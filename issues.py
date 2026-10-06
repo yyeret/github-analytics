@@ -4,6 +4,7 @@ Collection shells out to the `gh` CLI like analyze.py does; computation is a
 pure function so it can be tested without GitHub.
 """
 
+import concurrent.futures
 import datetime
 import json
 import subprocess
@@ -11,7 +12,8 @@ import subprocess
 STALE_DAYS = 90
 STALE_ITEM_LIMIT = 25
 OPEN_CAP = 1000
-CLOSED_CAP = 600
+CLOSED_CAP = 1000
+ISSUE_WINDOW_WEEKS = 52
 BASELINE_CAP = 100
 PAGE_SIZE = 100
 BASELINE_WINDOW = "2021-06-01..2021-12-31"
@@ -45,6 +47,11 @@ AGE_BUCKETS = [
     ("180-365d", 180, 365),
     (">365d", 365, None),
 ]
+
+
+def issue_weekly_bins(now, weeks=ISSUE_WINDOW_WEEKS):
+    """Weekly bin edges ending at `now`, independent of the PR window."""
+    return [now - datetime.timedelta(days=7 * i) for i in range(weeks, -1, -1)]
 
 
 def _parse(date_str):
@@ -191,16 +198,23 @@ def _search_issues(search_query, cap, run):
     return nodes[:cap], truncated
 
 
-def collect_issues(repo, run=subprocess.run):
+def collect_issues(repo, run=subprocess.run, now=None):
     """Fetch open, recent-closed, and baseline-era issues; None on any failure."""
+    now = now or datetime.datetime.now()
+    since = (now - datetime.timedelta(weeks=ISSUE_WINDOW_WEEKS)).strftime("%Y-%m-%d")
+    searches = {
+        "open": (f"repo:{repo} is:issue is:open", OPEN_CAP),
+        "closed": (f"repo:{repo} is:issue is:closed closed:>={since} sort:updated-desc", CLOSED_CAP),
+        "baseline": (f"repo:{repo} is:issue is:closed closed:{BASELINE_WINDOW}", BASELINE_CAP),
+    }
     try:
-        open_nodes, open_truncated = _search_issues(f"repo:{repo} is:issue is:open", OPEN_CAP, run)
-        closed_nodes, closed_truncated = _search_issues(
-            f"repo:{repo} is:issue is:closed sort:updated-desc", CLOSED_CAP, run
-        )
-        baseline_nodes, _ = _search_issues(
-            f"repo:{repo} is:issue is:closed closed:{BASELINE_WINDOW}", BASELINE_CAP, run
-        )
+        # The searches are independent, and each pages sequentially, so run them side by side
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(searches)) as pool:
+            futures = {name: pool.submit(_search_issues, q, cap, run) for name, (q, cap) in searches.items()}
+            results = {name: f.result() for name, f in futures.items()}
+        open_nodes, open_truncated = results["open"]
+        closed_nodes, closed_truncated = results["closed"]
+        baseline_nodes, _ = results["baseline"]
     except Exception as e:
         print("Error fetching issues:", e)
         return None

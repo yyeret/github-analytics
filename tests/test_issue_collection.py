@@ -59,8 +59,8 @@ def test_hitting_the_closed_cap_with_more_pages_sets_closed_truncated():
         return page([], False)
 
     out = collect_issues("o/r", run=fake)
-    assert len(closed_calls) == 6
-    assert len(out["closed"]) == 600
+    assert len(closed_calls) == 10
+    assert len(out["closed"]) == 1000
     assert out["closed_truncated"] is True
 
 
@@ -83,3 +83,26 @@ def test_result_feeds_compute_issue_metrics():
     assert set(out) == {"open", "closed", "pre_ai", "closed_truncated", "open_truncated"}
     bins = [dt.datetime(2026, 7, 1) + dt.timedelta(days=7 * i) for i in range(10)]
     assert compute_issue_metrics(out, bins, dt.datetime(2026, 10, 1))["open_now"] == 1
+
+
+def test_closed_query_is_bounded_by_the_issue_window_start_date():
+    seen = []
+
+    def fake(cmd, **kwargs):
+        seen.append(arg(cmd, "searchQuery"))
+        return page([], False)
+
+    collect_issues("o/r", run=fake, now=dt.datetime(2026, 10, 1))
+    closed = [q for q in seen if "sort:updated-desc" in q]
+    assert closed == ["repo:o/r is:issue is:closed closed:>=2025-10-02 sort:updated-desc"]
+
+
+def test_issue_weekly_bins_cover_52_weeks_ending_at_now():
+    from issues import issue_weekly_bins
+
+    now = dt.datetime(2026, 10, 1)
+    bins = issue_weekly_bins(now)
+    assert len(bins) == 53
+    assert bins[-1] == now
+    assert bins[0] == now - dt.timedelta(weeks=52)
+    assert all(b2 - b1 == dt.timedelta(days=7) for b1, b2 in zip(bins, bins[1:]))
