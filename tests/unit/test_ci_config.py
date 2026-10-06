@@ -33,3 +33,20 @@ def test_runs_lint_and_tests_on_a_python_matrix(wf):
 
 def test_cancels_superseded_runs(wf):
     assert wf["concurrency"]["cancel-in-progress"] is True
+
+
+def test_no_step_can_be_silently_skipped_or_ignored(wf):
+    for step in wf["jobs"]["test"]["steps"]:
+        assert "continue-on-error" not in step, step
+    job = wf["jobs"]["test"]
+    assert "continue-on-error" not in job
+    for step in job["steps"]:
+        if "pytest" in str(step.get("run", "")) or "ruff" in str(step.get("run", "")):
+            assert "if" not in step, step
+
+
+def test_coverage_floor_is_enforced_by_config():
+    import tomllib
+    cfg = tomllib.loads((WORKFLOW.parents[2] / "pyproject.toml").read_text(encoding="utf-8"))
+    assert cfg["tool"]["coverage"]["report"]["fail_under"] >= 90
+    assert "--cov" in str(WORKFLOW.read_text(encoding="utf-8"))

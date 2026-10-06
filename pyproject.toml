@@ -8,7 +8,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["analyze", "app"]
+source = ["analyze", "app", "issues"]
 branch = true
 
 [tool.coverage.report]

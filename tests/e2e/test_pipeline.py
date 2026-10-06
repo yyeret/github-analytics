@@ -1,6 +1,7 @@
 """Whole pipeline with only the outermost boundaries faked: the `gh` CLI and Gemini."""
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,13 @@ from tests.factories import FakeGenai, FakeGh, graphql_response, small_raw_data
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WATCHED = ("raw_data.json", "dashboard.html", "index.html", "analyze.py", "app.py")
+
+
+def _embedded(name, html):
+    """Parse the JSON literal assigned to `const <name> = ...;` in the generated dashboard."""
+    m = re.search(rf"const {name} = (.*?);\n", html)
+    assert m, f"{name} not found in dashboard"
+    return json.loads(m.group(1))
 
 
 def _digest():
@@ -69,6 +77,12 @@ def test_collect_analyze_chat_and_dashboard(monkeypatch):
     for canvas in ("cfdChart", "scatterChart", "activeWipAgeChart", "sizeCorrelationChart", "throughputChart", "prCometChartCanvas"):
         assert f'id="{canvas}"' in html
     assert "acme/widgets" in html
+    # the embedded data blobs carry the analysed PRs, not empty placeholders
+    assert len(_embedded("recentPRs", html)) == 4
+    assert len(_embedded("cometRawData", html)) == 4
+    assert {p["num"] for p in _embedded("activeWipData", html)} == {201, 202}
+    assert len(_embedded("throughputData", html)) == 9
+    assert len(_embedded("cfdMerged", html)) == 10
 
     # 4. nothing leaked into the repository checkout
     assert _digest() == before
