@@ -8,6 +8,8 @@ import datetime
 import sys
 import re
 
+from issues import collect_issues, compute_issue_metrics
+
 # File paths
 RAW_DATA_FILE = "raw_data.json"
 DASHBOARD_FILE = "dashboard.html"
@@ -292,11 +294,16 @@ def collect_data(repo="sveltejs/svelte"):
     except Exception as e:
         print("Error fetching open PRs:", e)
     
+    # 4. Issues are fetched independently of PR linkage; a failure leaves issues as None
+    print("Fetching issues...")
+    issues_raw = collect_issues(repo)
+
     all_data = {
         "repo": repo,
         "pre_ai_prs": pre_ai_nodes,
         "recent_prs": recent_nodes,
         "open_prs": open_nodes,
+        "issues": issues_raw,
         "captured_at": datetime.datetime.now().isoformat()
     }
     
@@ -763,6 +770,7 @@ def compute_flow_metrics(data):
              "mergedAt": p["mergedAt"], "createdAt": p["createdAt"]}
             for p in recent_prs[:50]  # top 50 for chat context
         ],
+        "issues": compute_issue_metrics(data.get("issues"), weekly_bins, now),
     }
 
 

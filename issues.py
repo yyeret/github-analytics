@@ -5,9 +5,38 @@ pure function so it can be tested without GitHub.
 """
 
 import datetime
+import json
+import subprocess
 
 STALE_DAYS = 90
 STALE_ITEM_LIMIT = 25
+OPEN_CAP = 1000
+CLOSED_CAP = 600
+BASELINE_CAP = 100
+PAGE_SIZE = 100
+BASELINE_WINDOW = "2021-06-01..2021-12-31"
+
+ISSUE_QUERY = """
+query($searchQuery: String!, $first: Int!, $cursor: String) {
+  search(query: $searchQuery, type: ISSUE, first: $first, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on Issue {
+        number
+        title
+        createdAt
+        closedAt
+        updatedAt
+        state
+        stateReason
+        comments(last: 1) { totalCount nodes { createdAt } }
+        closedByPullRequestsReferences(first: 1, includeClosedPrs: true) { totalCount }
+      }
+    }
+  }
+}
+"""
+
 AGE_BUCKETS = [
     ("<7d", 0, 7),
     ("7-30d", 7, 30),
@@ -136,4 +165,49 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
             "without_pr": total_closed - with_pr,
             "pct_with_pr": (with_pr / total_closed * 100.0) if total_closed else 0.0,
         },
+    }
+
+
+def _search_issues(search_query, cap, run):
+    """Page through an issue search; returns (nodes, truncated). Raises on failure."""
+    nodes, cursor, truncated = [], None, False
+    while len(nodes) < cap:
+        cmd = [
+            "gh", "api", "graphql",
+            "-F", f"query={ISSUE_QUERY}",
+            "-f", f"searchQuery={search_query}",
+            "-F", f"first={PAGE_SIZE}",
+        ]
+        if cursor:
+            cmd.extend(["-f", f"cursor={cursor}"])
+        res = run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
+        search = json.loads(res.stdout)["data"]["search"]
+        nodes.extend(n for n in search["nodes"] if n)
+        info = search["pageInfo"]
+        if not info["hasNextPage"]:
+            return nodes, False
+        cursor = info["endCursor"]
+    truncated = True
+    return nodes[:cap], truncated
+
+
+def collect_issues(repo, run=subprocess.run):
+    """Fetch open, recent-closed, and baseline-era issues; None on any failure."""
+    try:
+        open_nodes, open_truncated = _search_issues(f"repo:{repo} is:issue is:open", OPEN_CAP, run)
+        closed_nodes, closed_truncated = _search_issues(
+            f"repo:{repo} is:issue is:closed sort:updated-desc", CLOSED_CAP, run
+        )
+        baseline_nodes, _ = _search_issues(
+            f"repo:{repo} is:issue is:closed closed:{BASELINE_WINDOW}", BASELINE_CAP, run
+        )
+    except Exception as e:
+        print("Error fetching issues:", e)
+        return None
+    return {
+        "open": open_nodes,
+        "closed": closed_nodes,
+        "pre_ai": baseline_nodes,
+        "closed_truncated": closed_truncated,
+        "open_truncated": open_truncated,
     }
