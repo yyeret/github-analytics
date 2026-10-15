@@ -568,6 +568,11 @@
       <p class="issue-note">Classifies the stated intent in titles and bodies. These labels do not verify achieved outcomes.
         Input: resources · Activity: work · Output: deliverable · Outcome: user capability · Impact: business result.</p>
       <div class="chart-card charts-full">
+        <div class="chart-title">Framing mix by item type</div>
+        <p class="issue-note">Share of sampled items, including Unknown. Click a segment to inspect those items below.</p>
+        <div style="position:relative;height:230px"><canvas id="chart-value-framing" role="img" aria-label="Content framing distribution for PRs and issues. Exact counts are in the table below."></canvas></div>
+      </div>
+      <div class="chart-card charts-full">
         <p class="issue-note" id="value-note"></p>
         <div style="overflow-x:auto"><table class="issue-table" id="value-counts"></table></div>
         <p><label for="value-kind">Items </label><select id="value-kind" onchange="renderValueItems()"><option value="prs">PRs</option><option value="issues">Issues</option></select>
@@ -794,6 +799,7 @@
     document.getElementById('value-counts').innerHTML = '<thead><tr><th>Sample</th>' +
       value.levels.map(level => `<th>${escapeHtml(level)}</th>`).join('') + '</tr></thead><tbody>' +
       groups.map(([name, group]) => `<tr><td>${name}</td>` + value.levels.map(level => `<td>${group ? group.counts[level] : '—'}</td>`).join('') + '</tr>').join('') + '</tbody>';
+    renderFramingChart(value);
     renderValueItems();
   }
   function renderValueItems() {
@@ -805,6 +811,55 @@
     document.getElementById('value-items').innerHTML = '<thead><tr><th>Item</th><th>State</th><th>Framing</th><th>Rationale</th></tr></thead><tbody>' +
       (items.map(item => `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.level)}</td><td>${escapeHtml(item.rationale)}${item.body_available ? '' : ' (Title only)'}</td></tr>`).join('') ||
        '<tr><td colspan="4">No items in this selection.</td></tr>') + '</tbody>';
+  }
+
+  function outcomeFramingSummary(value) {
+    const groups = [value?.prs, value?.issues].filter(Boolean);
+    const counts = groups.reduce((result, group) => {
+      for (const [level, count] of Object.entries(group.counts || {})) result[level] = (result[level] || 0) + count;
+      return result;
+    }, {});
+    const unknown = counts.Unknown || 0;
+    const classified = Object.entries(counts).reduce((total, [level, count]) => total + (level === 'Unknown' ? 0 : count), 0);
+    const oriented = (counts.Outcome || 0) + (counts.Impact || 0);
+    return {oriented, classified, unknown, percent: classified ? oriented / classified * 100 : null};
+  }
+
+  function renderFramingChart(value) {
+    const groups = [['PRs', 'prs'], ['Issues', 'issues']].filter(([, key]) => value[key]?.total > 0);
+    const colors = {Input:'#94a3b8', Activity:'#f59e0b', Output:'#8b5cf6', Outcome:'#06b6d4', Impact:'#10b981', Unknown:'#475569'};
+    const canvas = document.getElementById('chart-value-framing');
+    canvas.setAttribute('aria-label', groups.length ?
+      groups.map(([label, key]) => `${label}: ${value.levels.map(level => `${level} ${value[key].counts[level] || 0}`).join(', ')}`).join('. ') : 'No sampled items available.');
+    mkChart('chart-value-framing', {
+      type:'bar',
+      data:{ labels:groups.map(([label]) => label), datasets:value.levels.map(level => ({
+        label:level, backgroundColor:colors[level], borderWidth:0, barThickness:38,
+        data:groups.map(([, key]) => (value[key].counts[level] || 0) / value[key].total * 100)
+      })) },
+      options:{
+        indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        onClick:(_event, elements) => {
+          if (!elements.length) return;
+          const point = elements[0];
+          document.getElementById('value-kind').value = groups[point.index][1];
+          document.getElementById('value-level').value = value.levels[point.datasetIndex];
+          renderValueItems();
+        },
+        plugins:{
+          legend:{position:'bottom', labels:{boxWidth:10, padding:14}},
+          tooltip:{callbacks:{label:context => {
+            const group = value[groups[context.dataIndex][1]];
+            const level = value.levels[context.datasetIndex];
+            return `${level}: ${context.raw.toFixed(1)}% (${group.counts[level] || 0} of ${group.total})`;
+          }}}
+        },
+        scales:{
+          x:{stacked:true, min:0, max:100, ticks:{callback:value => `${value}%`}, grid:{color:'rgba(255,255,255,.04)'}},
+          y:{stacked:true, grid:{display:false}}
+        }
+      }
+    });
   }
 
   // ── KPIs ────────────────────────────────────────────────────────────
@@ -839,6 +894,17 @@
       { label:'AI Mix', value: `${Math.round((rs.assisted_ratio||0)*100+( rs.agentic_ratio||0)*100)}%`, sub:`${Math.round((rs.assisted_ratio||0)*100)}% assisted · ${Math.round((rs.agentic_ratio||0)*100)}% agentic`, badge:'AI-authored', badgeClass:'badge-violet' },
     ];
 
+    if (d.value_classification) {
+      const summary = outcomeFramingSummary(d.value_classification);
+      const source = d.value_classification.issues ? 'Issues + PRs' : 'PRs';
+      kpis.unshift({
+        label:'Outcome-oriented', value:summary.percent === null ? '—' : `${summary.percent.toFixed(1)}%`,
+        sub:`${summary.oriented} of ${summary.classified} classified · ${source}`,
+        badge:`Outcome + Impact${summary.unknown ? ` · ${summary.unknown} unknown excluded` : ''}`, badgeClass:'badge-green',
+        title:'Outcome + Impact divided by classified sampled items. Unknown is excluded. Measures content framing, not achieved outcomes.'
+      });
+    }
+
     const iss = d.issues;
     if (iss) {
       const im = iss.cycle_time.modern, ib = iss.cycle_time.baseline;
@@ -855,7 +921,7 @@
 
     const grid = document.getElementById('kpi-grid');
     grid.innerHTML = kpis.map(k => `
-      <div class="kpi">
+      <div class="kpi"${k.title ? ` title="${escapeHtml(k.title)}"` : ''}>
         <div class="kpi-label">${k.label}</div>
         <div class="kpi-value" style="background:linear-gradient(135deg,#a78bfa,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">${k.value}</div>
         <div class="kpi-sub">${k.sub}</div>

@@ -40,7 +40,11 @@ sampled issues and PRs from their own titles and bodies as **Input, Activity,
 Output, Outcome, or Impact**. Empty content is **Unknown**. This describes stated
 intent, not achieved customer or business value. Counts represent items, not effort.
 The dashboard shows separate PR and issue distributions plus filterable items and
-classification rationales. Historical baseline items are excluded from this view.
+classification rationales. A stacked percentage chart compares framing across PRs
+and issues; clicking a segment filters the item table. The hero **Outcome-oriented**
+card shows `(Outcome + Impact) / classified items`, excluding Unknown and combining
+the available issue and PR samples. It shows no percentage when nothing is classified.
+Historical baseline items are excluded from this view.
 
 `value_classification.py` vendors the rule core from
 `jira-flow-coaching-dashboard/offline_analysis_value.py`, following the shared
