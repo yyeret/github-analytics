@@ -233,6 +233,12 @@
     .chart-canvas-wrap.tall canvas{max-height:340px;}
     .chart-canvas-wrap.xtra-tall canvas{max-height:440px;}
 
+    #value-section select { background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 8px 10px 8px 0; }
+    #value-section label { white-space: nowrap; }
+    #value-section td { vertical-align: top; }
+    #value-counts { min-width: 540px; }
+    #value-items { min-width: 660px; }
+
     /* ── Issues ─────────────────────────────────────────────────── */
     .issue-note{font-size:.8rem;color:var(--text-dim);margin:-.5rem 0 1rem;}
     .issue-table{width:100%;border-collapse:collapse;font-size:.85rem;}
@@ -535,6 +541,19 @@
       </div>
     </div>
 
+    <section id="value-section" style="display:none">
+      <div class="section-header"><h2>Content framing</h2><div class="section-line"></div></div>
+      <p class="issue-note">Classifies the stated intent in titles and bodies. These labels do not verify achieved outcomes.
+        Input: resources · Activity: work · Output: deliverable · Outcome: user capability · Impact: business result.</p>
+      <div class="chart-card charts-full">
+        <p class="issue-note" id="value-note"></p>
+        <div style="overflow-x:auto"><table class="issue-table" id="value-counts"></table></div>
+        <p><label for="value-kind">Items </label><select id="value-kind" onchange="renderValueItems()"><option value="prs">PRs</option><option value="issues">Issues</option></select>
+        <label for="value-level"> Framing </label><select id="value-level" onchange="renderValueItems()"><option value="">All</option></select></p>
+        <div style="overflow-x:auto;max-height:420px"><table class="issue-table" id="value-items"></table></div>
+      </div>
+    </section>
+
     <!-- Issues -->
     <div id="issues-section" style="display:none;">
       <div class="section-header">
@@ -674,6 +693,36 @@
     renderCorrelation(d.pr_size_scatter_points, d.spearman_corr);
     renderComet(d.comet_points);
     renderIssues(d.issues);
+    renderValueClassification(d.value_classification);
+  }
+
+  let valueClassification = null;
+  function renderValueClassification(value) {
+    valueClassification = value;
+    document.getElementById('value-section').style.display = value ? 'block' : 'none';
+    if (!value) return;
+    const groups = [['PRs', value.prs], ['Issues', value.issues]];
+    const filter = document.getElementById('value-level');
+    const selected = filter.value;
+    filter.innerHTML = '<option value="">All</option>' + value.levels.map(level => `<option>${escapeHtml(level)}</option>`).join('');
+    filter.value = value.levels.includes(selected) ? selected : '';
+    document.getElementById('value-note').textContent = value.scope + ' Rule-based classification. ' +
+      groups.map(([name, group]) => group ? `${name}: ${group.total} sampled, ${group.body_available} with bodies available, ${group.defaulted} defaulted.` : `${name}: not collected.`).join(' ') +
+      ' Older caches may contain titles only; refresh to collect bodies. Review the rationale before drawing conclusions.';
+    document.getElementById('value-counts').innerHTML = '<thead><tr><th>Sample</th>' +
+      value.levels.map(level => `<th>${escapeHtml(level)}</th>`).join('') + '</tr></thead><tbody>' +
+      groups.map(([name, group]) => `<tr><td>${name}</td>` + value.levels.map(level => `<td>${group ? group.counts[level] : '—'}</td>`).join('') + '</tr>').join('') + '</tbody>';
+    renderValueItems();
+  }
+  function renderValueItems() {
+    if (!valueClassification) return;
+    const kind = document.getElementById('value-kind').value;
+    const level = document.getElementById('value-level').value;
+    const group = valueClassification[kind];
+    const items = (group?.items || []).filter(item => !level || item.level === level);
+    document.getElementById('value-items').innerHTML = '<thead><tr><th>Item</th><th>State</th><th>Framing</th><th>Rationale</th></tr></thead><tbody>' +
+      (items.map(item => `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.level)}</td><td>${escapeHtml(item.rationale)}${item.body_available ? '' : ' (Title only)'}</td></tr>`).join('') ||
+       '<tr><td colspan="4">No items in this selection.</td></tr>') + '</tbody>';
   }
 
   // ── KPIs ────────────────────────────────────────────────────────────

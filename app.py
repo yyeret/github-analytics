@@ -140,6 +140,19 @@ def _build_system_prompt(metrics: dict) -> str:
         for p in recent_prs_summary[:20] if p.get("cycle_time_hours")
     )
 
+    value = metrics.get("value_classification") or {}
+    value_lines = []
+    for label, key in [("PRs", "prs"), ("Issues", "issues")]:
+        group = value.get(key)
+        if group is not None:
+            value_lines.append(f"{label}: {group['counts']}; bodies available {group['body_available']}/{group['total']}; defaulted {group['defaulted']}.")
+            value_lines.extend(f"{label} #{i['number']}: {i['level']} — {i['rationale']}" for i in group['items'][:10])
+    value_block = ""
+    if value_lines:
+        value_block = ("\n### Content framing (rule-based title/body classification)\n"
+                       "Input: resources; Activity: work; Output: deliverable; Outcome: user capability; Impact: business result.\n"
+                       "These describe stated intent, not achieved outcomes. Keyword rules can misclassify; missing bodies limit evidence.\n"
+                       + value.get("scope", "") + "\n" + "\n".join(value_lines) + "\n")
     issue_block = _build_issue_block(metrics.get("issues"))
 
     return f"""You are the **Antigravity AI Flow Coach** — an expert in software engineering flow metrics, 
@@ -178,7 +191,7 @@ Your coaching philosophy:
 ### Sample of Recent PRs
 {pr_list_str or "  No recent PR data available"}
 
-{issue_block}Answer questions about this data with specific, actionable coaching insights. 
+{issue_block}{value_block}Answer questions about this data with specific, actionable coaching insights.
 Reference specific PR numbers or metric values when relevant.
 Keep answers concise but insightful. Use markdown formatting.
 """

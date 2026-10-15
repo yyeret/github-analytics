@@ -51,3 +51,26 @@ pytest -m unit          # or -m integration / -m e2e
 ```
 
 Tests never touch the network, the `gh`/`bws` CLIs, or Gemini; `subprocess.run` is blocked by default and each test runs in a temp directory.
+
+
+## Issue and PR content framing
+
+The API, web dashboard, AI coach context, and generated static report classify
+sampled issues and PRs from their own titles and bodies as **Input, Activity,
+Output, Outcome, or Impact**. Empty content is **Unknown**. This describes stated
+intent, not achieved customer or business value. Counts represent items, not effort.
+The dashboard shows separate PR and issue distributions plus filterable items and
+classification rationales. Historical baseline items are excluded from this view.
+
+`value_classification.py` vendors the rule core from
+`jira-flow-coaching-dashboard/offline_analysis_value.py`, following the shared
+`outcome-framing-coach` taxonomy (v1.1.0). Its source commit is recorded in the
+module. There is no runtime dependency on either checkout and no model/API cost.
+GitHub adapters add title/body input, explicit fix-title and quarterly-container
+handling, provenance, defaults, and missing-body coverage. The rules retain the
+Jira classifier's semantic limits: ambiguous items default to Activity, and keyword
+matches can misread context. Review rationales before interpreting distributions.
+
+Existing caches remain usable with title-only classification. Use `python analyze.py OWNER/REPO --refresh` to collect bodies.
+`/api/analyze` exposes the additive `value_classification` field; AI contribution
+classification remains in `classification`.

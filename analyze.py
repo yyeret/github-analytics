@@ -9,6 +9,7 @@ import sys
 import re
 import concurrent.futures
 
+from value_classification import compute_value_classification, render_value_report
 from issues import collect_issues, compute_issue_metrics, issue_weekly_bins
 
 # File paths
@@ -21,6 +22,7 @@ def run_graphql_query(search_query, count=100):
       search(query: $searchQuery, type: ISSUE, first: $first) {
         nodes {
           ... on PullRequest {
+            body
             number
             title
             createdAt
@@ -132,6 +134,7 @@ def collect_data(repo="sveltejs/svelte"):
             }
             nodes {
               ... on PullRequest {
+                body
                 number
                 title
                 createdAt
@@ -228,6 +231,7 @@ def collect_data(repo="sveltejs/svelte"):
       search(query: $searchQuery, type: ISSUE, first: $first) {
         nodes {
           ... on PullRequest {
+            body
             number
             title
             createdAt
@@ -752,11 +756,15 @@ def compute_flow_metrics(data):
         agentic_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Agentic" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
         throughput_data.append({"week": bin_str, "human": human_completed, "assisted": assisted_completed, "agentic": agentic_completed, "total": human_completed + assisted_completed + agentic_completed})
 
+    value_classification = compute_value_classification(data)
+    pr_framing = {p["number"]: p for p in value_classification["prs"]["items"]}
+
     recent_scatter_points = [{"x": p["merged_ts"], "y": p["cycle_time_hours"], "classification": p["classification"], "num": p["number"]} for p in recent_prs]
 
     return {
         "repo": data.get("repo", ""),
         "captured_at": data.get("captured_at", ""),
+        "value_classification": value_classification,
         "pre_stats": pre_stats,
         "recent_stats": recent_stats,
         "upstream_breakdown": upstream_breakdown,
@@ -773,11 +781,17 @@ def compute_flow_metrics(data):
         "recent_prs_summary": [
             {"number": p["number"], "title": p["title"], "classification": p["classification"],
              "cycle_time_hours": p["cycle_time_hours"], "pr_size": p["pr_size"],
+             "value_classification": pr_framing.get(p["number"]),
              "mergedAt": p["mergedAt"], "createdAt": p["createdAt"]}
             for p in recent_prs[:50]  # top 50 for chat context
         ],
         "issues": compute_issue_metrics(data.get("issues"), issue_weekly_bins(now), now),
     }
+
+
+def _script_json(value):
+    # Titles embedded in a script must not terminate its HTML element.
+    return json.dumps(value).replace("<", "\\u003c")
 
 
 def analyze_and_build_report(data):
@@ -1153,20 +1167,20 @@ def analyze_and_build_report(data):
         })
 
     # Pre-serialize JSON variables to avoid f-string curly-brace parsing issues
-    spearman_corr_json = json.dumps(spearman_corr)
-    p50_sle_json = json.dumps(p50_sle)
-    p85_sle_json = json.dumps(p85_sle)
-    stage_percentiles_json = json.dumps(stage_percentiles)
-    active_wip_json = json.dumps(active_wip_points)
-    pr_size_scatter_json = json.dumps(pr_size_scatter_points)
-    comet_points_json = json.dumps(comet_points)
-    throughput_data_json = json.dumps(throughput_data)
+    spearman_corr_json = _script_json(spearman_corr)
+    p50_sle_json = _script_json(p50_sle)
+    p85_sle_json = _script_json(p85_sle)
+    stage_percentiles_json = _script_json(stage_percentiles)
+    active_wip_json = _script_json(active_wip_points)
+    pr_size_scatter_json = _script_json(pr_size_scatter_points)
+    comet_points_json = _script_json(comet_points)
+    throughput_data_json = _script_json(throughput_data)
 
-    cfd_months_json = json.dumps([c['month'] for c in cfd_data])
-    cfd_merged_json = json.dumps([c['merged'] for c in cfd_data])
-    cfd_review_json = json.dumps([c['review'] for c in cfd_data])
-    cfd_coding_json = json.dumps([c['coding'] for c in cfd_data])
-    cfd_backlog_json = json.dumps([c['backlog'] for c in cfd_data])
+    cfd_months_json = _script_json([c['month'] for c in cfd_data])
+    cfd_merged_json = _script_json([c['merged'] for c in cfd_data])
+    cfd_review_json = _script_json([c['review'] for c in cfd_data])
+    cfd_coding_json = _script_json([c['coding'] for c in cfd_data])
+    cfd_backlog_json = _script_json([c['backlog'] for c in cfd_data])
     
     recent_scatter_points = [
         {
@@ -1177,7 +1191,7 @@ def analyze_and_build_report(data):
         }
         for p in recent_prs
     ]
-    recent_scatter_json = json.dumps(recent_scatter_points)
+    recent_scatter_json = _script_json(recent_scatter_points)
 
     # HTML Template generation
     html_content = f"""<!DOCTYPE html>
@@ -2222,6 +2236,7 @@ def analyze_and_build_report(data):
         window.updateCometChart = drawCometChart;
         drawCometChart();
     </script>
+{render_value_report(data)}
 </body>
 </html>
 """

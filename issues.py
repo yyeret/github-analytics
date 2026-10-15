@@ -25,6 +25,7 @@ query($searchQuery: String!, $first: Int!, $cursor: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on Issue {
+        body
         number
         title
         createdAt
