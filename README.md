@@ -37,6 +37,8 @@ python analyze.py openclaw/openclaw --refresh
 
 To view the generated dashboard, open `dashboard.html` directly in your web browser. Cache files are stored locally in `raw_data.json` to prevent API rate-limiting.
 
+The web UI keeps each analyzed repository's GitHub data under `.cache/repositories/` on the server. Reopening a repository, including after a browser reload or server restart, uses that saved data without querying GitHub again. The UI remembers the last repository in the browser and displays when its data was captured. Use **Refresh data** to fetch the latest GitHub data; saved data otherwise remains until the server cache is removed. Hosts with an ephemeral filesystem need persistent storage for the cache to survive a deployment restart. The CLI's `raw_data.json` cache is separate.
+
 
 ## Testing
 
@@ -48,6 +50,7 @@ pip install -r requirements-dev.txt
 ruff check .
 pytest --cov            # fails below the coverage floor in pyproject.toml
 pytest -m unit          # or -m integration / -m e2e
+node --test tests/frontend/*.test.cjs  # UI reload and refresh logic, no browser
 ```
 
 Tests never touch the network, the `gh`/`bws` CLIs, or Gemini; `subprocess.run` is blocked by default and each test runs in a temp directory.

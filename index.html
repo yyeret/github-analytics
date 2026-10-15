@@ -119,6 +119,8 @@
       color:var(--text-dim);
     }
     .btn-ghost:hover{border-color:var(--violet);color:var(--text);}
+    #refresh-btn:disabled{opacity:.5;cursor:not-allowed;}
+    #capture-note{color:var(--text-muted);font-size:.82rem;margin:.35rem 0 1rem;}
 
     /* Spinner */
     .spinner{
@@ -436,7 +438,8 @@
     @media(max-width:640px){
       #app{padding:1rem;}
       header{flex-direction:column;align-items:flex-start;}
-      .repo-bar{max-width:100%;}
+      .repo-bar{max-width:100%;flex-wrap:wrap;}
+      .repo-bar input{flex-basis:100%;}
       .kpi-grid{grid-template-columns:1fr 1fr;}
       #chat-drawer{width:100vw;}
       #chat-toggle.open{right:1rem;}
@@ -471,6 +474,7 @@
         <span class="spinner" id="btn-spinner"></span>
         <span class="btn-label">Analyze</span>
       </button>
+      <button id="refresh-btn" class="btn btn-ghost" onclick="refreshRepo()" disabled>Refresh data</button>
     </div>
   </header>
 
@@ -489,6 +493,7 @@
     <div class="repo-tag" id="repo-tag">
       <span>📁</span> <span id="repo-name-display">—</span>
     </div>
+    <div id="capture-note"></div>
 
     <!-- KPI Cards -->
     <div class="kpi-grid" id="kpi-grid"></div>
@@ -637,21 +642,23 @@
   let charts         = {};
 
   // ── Analyze Repo ───────────────────────────────────────────────────
-  async function analyzeRepo() {
-    const input = document.getElementById('repo-input').value.trim();
+  async function analyzeRepo(forceRefresh = false, repoOverride = null) {
+    const input = repoOverride || document.getElementById('repo-input').value.trim();
     if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
 
     const btn = document.getElementById('analyze-btn');
+    const refreshBtn = document.getElementById('refresh-btn');
     btn.disabled = true;
+    refreshBtn.disabled = true;
     btn.classList.add('loading');
-    showLoading('Fetching repository data… this may take 30–60 seconds');
+    showLoading(forceRefresh ? 'Fetching fresh repository data…' : 'Loading repository data…');
     clearStatus();
 
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ repo_url: input, force_refresh: false })
+        body: JSON.stringify({ repo_url: input, force_refresh: forceRefresh })
       });
       if (!res.ok) {
         const err = await res.json();
@@ -661,9 +668,14 @@
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
+      document.getElementById('repo-input').value = data.repo;
+      try { localStorage.setItem('lastAnalyzedRepo', data.repo); } catch (_) {}
 
       renderDashboard(data);
-      showStatus(`✓ Analysis complete for ${data.repo} — ${data.recent_stats?.total || 0} PRs analyzed`, 'success');
+      const captured = data.captured_at ? new Date(data.captured_at).toLocaleString() : 'unknown time';
+      const source = data.cache_hit ? 'Saved GitHub data' : 'Fresh GitHub data';
+      document.getElementById('capture-note').textContent = `${source} · captured ${captured}`;
+      showStatus(`✓ ${source} loaded for ${data.repo} — ${data.recent_stats?.total || 0} PRs analyzed`, 'success');
       document.getElementById('chat-repo-label').textContent = data.repo;
       document.getElementById('chat-toggle').classList.add('has-response');
 
@@ -674,9 +686,14 @@
       showStatus(`Error: ${e.message}`, 'error');
     } finally {
       btn.disabled = false;
+      refreshBtn.disabled = !currentRepo;
       btn.classList.remove('loading');
       hideLoading();
     }
+  }
+
+  function refreshRepo() {
+    if (currentRepo) return analyzeRepo(true, currentRepo);
   }
 
   // ── Dashboard Renderer ──────────────────────────────────────────────
@@ -1266,6 +1283,13 @@
     const r = params.get('repo');
     if (r) {
       document.getElementById('repo-input').value = r;
+      return;
+    }
+    let lastRepo = null;
+    try { lastRepo = localStorage.getItem('lastAnalyzedRepo'); } catch (_) {}
+    if (lastRepo) {
+      document.getElementById('repo-input').value = lastRepo;
+      analyzeRepo();
     }
   })();
 </script>
