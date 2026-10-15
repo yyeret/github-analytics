@@ -2,6 +2,8 @@
 name = "github-flow-analytics"
 version = "0.1.0"
 description = "Public GitHub flow analytics hosted on Cloudflare Workers"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.115,<1",

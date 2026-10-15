@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from cloudflare_app import ChatRequest, chat, chat_prompt
 
@@ -83,7 +83,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_reads_cached_metrics_without_client_payload(self):
         req = ChatRequest(repo="github/spec-kit", message="How is throughput trending?")
         cache = FakeCache(METRICS)
-        env = SimpleNamespace(AUTH_REQUIRED="false", ANALYTICS_CACHE=cache, GEMINI_API_KEY="test")
+        env = SimpleNamespace(AUTH_REQUIRED="false", ANALYTICS_CACHE=cache, GEMINI_API_KEY="test",
+                              CHAT_LIMIT=SimpleNamespace(limit=AsyncMock(return_value={"success": True})))
         fake_request = SimpleNamespace(scope={"env": env}, headers={})
         client = FakeAIClient()
         with patch("cloudflare_app.httpx.AsyncClient", return_value=client):

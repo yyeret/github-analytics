@@ -1,3 +1,4 @@
+from html import escape
 import os
 import json
 import datetime
@@ -81,7 +82,7 @@ def run_graphql_query(search_query, count=100):
     """
     
     cmd = [
-        "gh", "api", "graphql",
+        "gh", "api", "graphql", "--hostname", "github.com",
         "-F", f"query={query}",
         "-f", f"searchQuery={search_query}",
         "-F", f"first={count}"
@@ -193,7 +194,7 @@ def collect_data(repo="sveltejs/svelte"):
         """
         
         cmd = [
-            "gh", "api", "graphql",
+            "gh", "api", "graphql", "--hostname", "github.com",
             "-F", f"query={query}",
             "-f", f"searchQuery={search_query}",
             "-F", "first=100"
@@ -288,7 +289,7 @@ def collect_data(repo="sveltejs/svelte"):
     """
     open_nodes = []
     cmd = [
-        "gh", "api", "graphql",
+        "gh", "api", "graphql", "--hostname", "github.com",
         "-F", f"query={lightweight_query}",
         "-f", f"searchQuery={open_query}",
         "-F", "first=100"
@@ -1252,11 +1253,11 @@ def analyze_and_build_report(data):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitHub Flow & Value Stream Dashboard: {data['repo']}</title>
+    <title>GitHub Flow & Value Stream Dashboard: {escape(str(data['repo']))}</title>
     <!-- Google Fonts Outfit -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js" integrity="sha384-e6cc9LaIG7xZ3XD5B+jtr1NhTWPQGQdRCh6xiZ+ZFUtWCpg4ycv3Sh+SkZoopvUY" crossorigin="anonymous"></script>
     <style>
         :root {{
             --bg-color: #0b0f19;
@@ -1505,7 +1506,7 @@ def analyze_and_build_report(data):
     <header>
         <div>
             <h1>GitHub Flow &amp; Value Stream Analytics</h1>
-            <div class="subtitle">Feasibility Proof &amp; Metric Correlation Report for <strong>{data['repo']}</strong></div>
+            <div class="subtitle">Feasibility Proof &amp; Metric Correlation Report for <strong>{escape(str(data['repo']))}</strong></div>
         </div>
         <div>
             <span class="badge">EBM &amp; TOC Compliance Validated</span>
