@@ -145,3 +145,17 @@ Thumbs.db
 
 # Local Cache / Data
 raw_data.json
+.dev.vars
+.venv/
+node_modules/
+
+.wrangler/
+python_modules/
+pylock.toml
+
+.cloudflare-build/
+.venv-workers/
+
+# Compound Engineering: machine overrides and generated scratch
+.compound-engineering/*.local.yaml
+.context/compound-engineering/

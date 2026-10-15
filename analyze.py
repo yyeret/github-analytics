@@ -1,8 +1,4 @@
 import os
-# Remove any invalid GITHUB_TOKEN to let the gh CLI use the active logged-in keyring
-os.environ.pop("GITHUB_TOKEN", None)
-
-import subprocess
 import json
 import datetime
 import sys
@@ -17,6 +13,7 @@ RAW_DATA_FILE = "raw_data.json"
 DASHBOARD_FILE = "dashboard.html"
 
 def run_graphql_query(search_query, count=100, strict=False):
+    import subprocess
     query = """
     query($searchQuery: String!, $first: Int!) {
       search(query: $searchQuery, type: ISSUE, first: $first) {
@@ -110,6 +107,7 @@ def run_graphql_query(search_query, count=100, strict=False):
         return []
 
 def collect_data(repo="sveltejs/svelte", strict=False):
+    import subprocess
     print(f"Collecting data for {repo}...")
 
     # Issues are independent of the PR queries, so fetch them alongside; fail-soft to None
@@ -339,6 +337,61 @@ def collect_data(repo="sveltejs/svelte", strict=False):
         json.dump(all_data, f, indent=2)
     print(f"Successfully cached data to {RAW_DATA_FILE}.")
     return all_data
+
+async def collect_public_data(repo, token=None):
+    """Collect public-repository data through GitHub's REST API.
+
+    Cloudflare Workers cannot run the local `gh` subprocess. This async version
+    keeps the analytics pipeline intact while using the platform's fetch API.
+    """
+    from github_api import request_json
+    import asyncio
+    import urllib.parse
+
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "github-flow-analytics/0.1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    def normalized(pr):
+        user = pr.get("user") or {}
+        commits = pr.get("commits", 0)
+        return {
+            "number": pr.get("number"), "title": pr.get("title"), "body": pr.get("body"),
+            "createdAt": pr.get("created_at"), "mergedAt": pr.get("merged_at"),
+            "closedAt": pr.get("closed_at"), "additions": pr.get("additions", 0),
+            "deletions": pr.get("deletions", 0),
+            "author": {"login": user.get("login", ""), "__typename": user.get("type", "User")},
+            "closingIssuesReferences": {"nodes": []},
+            "commits": {"totalCount": commits, "nodes": []},
+            "reviews": {"totalCount": 0, "nodes": []}, "timelineItems": {"nodes": []},
+        }
+
+    async def get_json(url):
+        status, _, payload = await request_json(url, headers=headers, timeout=20)
+        if status in (401, 403):
+            raise ValueError("GitHub rejected the request. Check the token or API rate limit.")
+        if status < 200 or status >= 300:
+            raise ValueError(payload.get("message", "GitHub API request failed"))
+        return payload
+
+    base = f"https://api.github.com/repos/{repo}"
+    closed_pages, open_data = await asyncio.gather(
+        asyncio.gather(*(get_json(f"{base}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={n}")
+                          for n in range(1, 7))),
+        get_json(f"{base}/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1"),
+    )
+    recent = [normalized(pr) for batch in closed_pages for pr in batch if pr.get("merged_at")]
+
+    search_url = "https://api.github.com/search/issues?" + urllib.parse.urlencode({
+        "q": f"repo:{repo} is:pr is:merged merged:2021-06-01..2021-12-31",
+        "sort": "created", "order": "asc", "per_page": 30,
+    })
+    historical_search = await get_json(search_url)
+    historical = await asyncio.gather(*(
+        get_json(f"{base}/pulls/{item['number']}") for item in historical_search.get("items", [])
+    ))
+    return {"repo": repo, "pre_ai_prs": [normalized(pr) for pr in historical],
+        "recent_prs": recent, "open_prs": [normalized(pr) for pr in open_data],
+        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
 def load_or_collect(repo="sveltejs/svelte", force=False):
     if not force and os.path.exists(RAW_DATA_FILE):

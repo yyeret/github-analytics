@@ -1,0 +1,3 @@
+# Optional during development. Never commit a populated .dev.vars file.
+GITHUB_TOKEN=
+GEMINI_API_KEY=

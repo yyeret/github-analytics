@@ -1,3 +1,25 @@
+[project]
+name = "github-flow-analytics"
+version = "0.1.0"
+description = "Public GitHub flow analytics hosted on Cloudflare Workers"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "pydantic>=2.8,<3",
+]
+
+[dependency-groups]
+dev = ["workers-py", "workers-runtime-sdk"]
+
+[project.optional-dependencies]
+local = [
+  "google-generativeai>=0.5.0",
+  "python-dotenv>=1.0",
+  "python-multipart>=0.0.9",
+  "uvicorn[standard]>=0.29",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers -ra"

@@ -76,3 +76,23 @@ def test_issue_collector_requests_body_and_excludes_baseline_from_framing():
     assert result['issues']['counts']['Outcome'] == 1
     assert result['issues']['total'] == 1
     assert compute_value_classification({'issues': {'pre_ai': raw['pre_ai']}})['issues']['total'] == 0
+
+
+def test_hosted_rest_collection_preserves_content_for_classification(monkeypatch):
+    import asyncio
+    import github_api
+    async def fake(url, **kwargs):
+        if '/search/issues?' in url:
+            payload = {'items': []}
+        elif 'state=open' in url:
+            payload = []
+        elif 'page=1' in url:
+            payload = [{'number': 91, 'title': 'Add exports', 'body': 'Users can download their data.',
+                        'created_at': '2026-10-01T00:00:00Z', 'merged_at': '2026-10-02T00:00:00Z'}]
+        else:
+            payload = []
+        return 200, {}, payload
+    monkeypatch.setattr(github_api, 'request_json', fake)
+    raw = asyncio.run(analyze.collect_public_data('acme/widgets'))
+    assert raw['recent_prs'][0]['body'] == 'Users can download their data.'
+    assert analyze.compute_flow_metrics(raw)['value_classification']['prs']['counts']['Outcome'] == 1
