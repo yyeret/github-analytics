@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const html = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
 const script = html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
 
-function loadPage(storage, requests, cacheHit = false, failRequest = false) {
+function loadPage(storage, requests, cacheHit = false, failRequest = false, authState = 'none') {
   const elements = new Map();
   let renderCalls = 0;
   const element = id => {
@@ -22,11 +22,27 @@ function loadPage(storage, requests, cacheHit = false, failRequest = false) {
   };
   const context = {
     window: { location: { search: '' } },
-    document: { getElementById: element },
+    document: {
+      getElementById: element,
+      createElement: () => ({}),
+      head: { appendChild() {} },
+    },
     localStorage: storage,
     URLSearchParams,
     Chart: class { static defaults = { font: {} }; destroy() {} },
-    fetch: async (_url, options) => {
+    fetch: async (url, options) => {
+      if (url === '/api/auth/config') {
+        return { json: async () => ({
+          required: authState !== 'none',
+          client_id: authState !== 'none' ? 'test-client' : '',
+        }) };
+      }
+      if (url === '/api/auth/session') {
+        return { json: async () => ({ signed_in: authState === 'signed-in', email: 'test@example.com' }) };
+      }
+      if (url === '/api/auth/nonce') {
+        return { json: async () => ({ nonce: 'test-nonce' }) };
+      }
       const request = JSON.parse(options.body);
       requests.push(request);
       if (failRequest) {
@@ -92,4 +108,16 @@ test('failed automatic restore leaves the form available', async () => {
   assert.equal(page.element('analyze-btn').disabled, false);
   assert.match(page.element('status-bar').textContent, /GitHub unavailable/);
   assert.equal(page.element('repo-input').value, 'owner/alpha');
+});
+
+test('signed-out reload waits for sign-in before reopening saved analysis', async () => {
+  const storage = { getItem: () => 'owner/alpha', setItem() {} };
+  const requests = [];
+  const page = loadPage(storage, requests, true, false, 'signed-out');
+  await new Promise(setImmediate);
+  assert.equal(requests.length, 0);
+
+  page.context.completeSignIn('test@example.com');
+  await new Promise(setImmediate);
+  assert.deepEqual(requests[0], { repo_url: 'owner/alpha', force_refresh: false });
 });

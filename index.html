@@ -673,7 +673,10 @@
     try {
       const response = await fetch('/api/auth/config');
       authConfig = await response.json();
-      if (!authConfig.required) return;
+      if (!authConfig.required) {
+        restoreLastRepository();
+        return;
+      }
       document.getElementById('login-gate').classList.add('visible');
       if (!authConfig.client_id) {
         document.getElementById('login-error').textContent = 'Google sign-in is being configured.';
@@ -715,6 +718,7 @@
     document.getElementById('login-gate').classList.remove('visible');
     document.getElementById('account-actions').style.display = 'flex';
     document.getElementById('account-email').textContent = email;
+    restoreLastRepository();
   }
 
   async function signOut() {
@@ -1426,21 +1430,18 @@
     if (e.key === 'Enter') analyzeRepo();
   });
 
-  // Pre-fill from URL param ?repo=
-  (function() {
-    const params = new URLSearchParams(window.location.search);
-    const r = params.get('repo');
-    if (r) {
-      document.getElementById('repo-input').value = r;
-      return;
-    }
+  function restoreLastRepository() {
+    if (currentRepo || new URLSearchParams(window.location.search).get('repo')) return;
     let lastRepo = null;
     try { lastRepo = localStorage.getItem('lastAnalyzedRepo'); } catch (_) {}
     if (lastRepo) {
       document.getElementById('repo-input').value = lastRepo;
       analyzeRepo();
     }
-  })();
+  }
+
+  const repoFromUrl = new URLSearchParams(window.location.search).get('repo');
+  if (repoFromUrl) document.getElementById('repo-input').value = repoFromUrl;
   configureAuthentication();
 </script>
 </body>
