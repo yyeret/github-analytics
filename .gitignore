@@ -155,3 +155,7 @@ pylock.toml
 
 .cloudflare-build/
 .venv-workers/
+
+# Compound Engineering: machine overrides and generated scratch
+.compound-engineering/*.local.yaml
+.context/compound-engineering/
