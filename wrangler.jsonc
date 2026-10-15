@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "github-flow-analytics",
-  "main": "cloudflare_worker.py",
+  "main": ".wrangler/worker/cloudflare_worker.py",
   "compatibility_date": "2026-10-05",
   "compatibility_flags": [
     "python_workers"
@@ -58,5 +58,9 @@
       "pattern": "github-analytics.yuvalyeret.com",
       "custom_domain": true
     }
-  ]
+  ],
+  "build": {
+    "command": "python3 scripts/prepare-cloudflare-build.py"
+  },
+  "base_dir": ".wrangler/worker"
 }

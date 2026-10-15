@@ -70,6 +70,14 @@ python3 scripts/configure-google-auth.py --client-id YOUR_WEB_CLIENT_ID.apps.goo
 bash scripts/deploy-cloudflare.sh
 ```
 
+Cloudflare Builds can keep the deploy command `npx wrangler deploy`. The repository's
+Wrangler build hook runs `scripts/prepare-cloudflare-build.py` first: it installs
+workspace-local uv tooling, uses Pywrangler to package the locked Python
+runtime dependencies and SDK, and stages only the runtime source files under
+`.wrangler/worker`. Virtual environments and test files stay out of the upload.
+Local and CI pip dependencies live in `requirements-local.txt` and
+`requirements-dev.txt`; Pywrangler rejects a root `requirements.txt`.
+
 The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
 
 Cloudflare Workers Paid is already active on this account. The Worker uses its 30-second default CPU allowance because analyzing hundreds of pull requests is heavier than the Free plan's 10 ms allowance. The plan has a $5/month minimum; usage above included allowances can add charges.
