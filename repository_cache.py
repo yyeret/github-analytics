@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 _OWNER = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
-_REPO = re.compile(r"[a-z0-9_][a-z0-9_.-]*\Z")
+_REPO = re.compile(r"[a-z0-9_.-]+\Z")
 _RAW_LISTS = ("pre_ai_prs", "recent_prs", "open_prs")
 
 

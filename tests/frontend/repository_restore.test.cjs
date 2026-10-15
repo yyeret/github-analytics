@@ -15,7 +15,8 @@ function loadPage(storage, requests, cacheHit = false, failRequest = false, auth
       elements.set(id, {
         value: '', textContent: '', disabled: false, style: {},
         classList: { add() {}, remove() {} },
-        addEventListener() {},
+        listeners: {},
+        addEventListener(type, callback) { this.listeners[type] = callback; },
       });
     }
     return elements.get(id);
@@ -120,4 +121,56 @@ test('signed-out reload waits for sign-in before reopening saved analysis', asyn
   page.context.completeSignIn('test@example.com');
   await new Promise(setImmediate);
   assert.deepEqual(requests[0], { repo_url: 'owner/alpha', force_refresh: false });
+});
+
+test('a newer repository request wins if the restored request finishes later', async () => {
+  const saved = [];
+  const storage = {
+    getItem: () => null,
+    setItem: (_key, value) => saved.push(value),
+  };
+  const page = loadPage(storage, []);
+  await new Promise(setImmediate);
+  const pending = [];
+  page.context.fetch = async (url, options) => new Promise(resolve => {
+    pending.push({ request: JSON.parse(options.body), resolve });
+  });
+
+  page.element('repo-input').value = 'owner/alpha';
+  const first = page.context.analyzeRepo();
+  page.element('repo-input').value = 'owner/beta';
+  const second = page.context.analyzeRepo();
+
+  pending[1].resolve({
+    ok: true,
+    json: async () => ({
+      repo: 'owner/beta', recent_stats: { total: 2 },
+      captured_at: '2026-10-15T10:00:00', cache_hit: false,
+    }),
+  });
+  await second;
+  pending[0].resolve({
+    ok: true,
+    json: async () => ({
+      repo: 'owner/alpha', recent_stats: { total: 1 },
+      captured_at: '2026-10-15T09:00:00', cache_hit: true,
+    }),
+  });
+  await first;
+
+  assert.deepEqual(pending.map(item => item.request.repo_url), ['owner/alpha', 'owner/beta']);
+  assert.equal(page.element('repo-input').value, 'owner/beta');
+  assert.equal(saved.at(-1), 'owner/beta');
+  assert.equal(page.renderCalls(), 1);
+});
+
+test('editing the input before auth finishes suppresses automatic restore', async () => {
+  const storage = { getItem: () => 'owner/alpha', setItem() {} };
+  const requests = [];
+  const page = loadPage(storage, requests);
+  page.element('repo-input').value = 'owner/beta';
+  page.element('repo-input').listeners.input();
+  await new Promise(setImmediate);
+  assert.equal(page.element('repo-input').value, 'owner/beta');
+  assert.equal(requests.length, 0);
 });

@@ -12,6 +12,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** A returning visitor can reopen a previously analyzed GitHub repository in the UI without waiting for another GitHub scan, including after a page reload or server restart.
+- **Leading indicators:** A second API analysis of the same repository makes zero collection calls; a simulated page reload requests the saved repository once; explicit refresh makes exactly one new collection and preserves other repositories' entries.
 - **Means:** Store raw analysis data by repository on disk and let the UI reopen its last repository through the existing analysis API (KTD1, KTD3).
 - **Authority:** The user's clarification that this concerns the UI. Existing API and metric behavior remain the compatibility baseline.
 - **Execution profile:** Add integration coverage for a cache hit before changing the request path; verify the browser reload flow after the server path works.
@@ -161,3 +162,9 @@ flowchart TB
 - A cache hit leaves GitHub untouched; force refresh collects and replaces one repository's entry; a bad entry cannot leak another repository's data.
 - The README explains where the UI cache lives, how long data remains saved, how to refresh it, and the limitation of ephemeral server storage.
 - The final diff contains no abandoned cache formats or experimental paths.
+
+---
+
+## Suggested Goal Loop
+
+`/goal Implement the persisted UI repository analysis in this plan for local and deployed APIs. Verify cache reuse across reloads, explicit refresh, repository isolation, and failure-safe replacement with the repo's Python, Node, lint, and coverage checks. Keep Chromium unused and leave unrelated working-tree changes untouched. Open a focused PR for review; do not merge it.`

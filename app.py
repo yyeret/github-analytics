@@ -98,12 +98,14 @@ def _run_analysis(repo: str, force: bool) -> dict:
     cache_hit = raw is not None
     if raw is None:
         raw = collect_data(repo, strict=True)
-        if raw.get("issues") is not None:
-            try:
-                cache.save(repo, raw)
-            except OSError as exc:
-                print(f"Could not save repository cache for {repo}: {exc}")
+        if raw.get("issues") is None:
+            raise RuntimeError(f"Incomplete GitHub collection for {repo}")
     metrics = compute_flow_metrics(raw)
+    if not cache_hit:
+        try:
+            cache.save(repo, raw)
+        except OSError as exc:
+            print(f"Could not save repository cache for {repo}: {exc}")
     metrics["cache_hit"] = cache_hit
     return metrics
 

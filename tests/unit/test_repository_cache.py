@@ -68,3 +68,12 @@ def test_failed_replacement_keeps_previous_entry(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         cache.save("owner/alpha", cacheable_raw("owner/alpha"))
     assert cache.load("owner/alpha") == old
+
+
+def test_cache_accepts_dot_prefixed_repository_name(tmp_path):
+    from repository_cache import RepositoryCache
+
+    cache = RepositoryCache(tmp_path)
+    raw = cacheable_raw("github/.github")
+    cache.save("github/.github", raw)
+    assert cache.load("github/.github") == raw

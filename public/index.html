@@ -668,6 +668,8 @@
   let chatOpen       = false;
   let charts         = {};
   let authConfig     = {required:false, client_id:''};
+  let latestAnalysisRequest = 0;
+  let repoInputTouched = false;
 
   async function configureAuthentication() {
     try {
@@ -734,8 +736,10 @@
 
   // ── Analyze Repo ───────────────────────────────────────────────────
   async function analyzeRepo(forceRefresh = false, repoOverride = null) {
+    if (repoOverride === null) repoInputTouched = true;
     const input = repoOverride || document.getElementById('repo-input').value.trim();
     if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
+    const requestId = ++latestAnalysisRequest;
 
     const btn = document.getElementById('analyze-btn');
     const refreshBtn = document.getElementById('refresh-btn');
@@ -756,6 +760,7 @@
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
+      if (requestId !== latestAnalysisRequest) return;
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
@@ -774,12 +779,14 @@
       addChatMessage('assistant', `🎉 **Repository loaded: \`${data.repo}\`**\n\nAsk me about cycle time, aging work, or throughput. Review timing and batch size are not yet available from this hosted data source.`);
 
     } catch(e) {
-      showStatus(`Error: ${e.message}`, 'error');
+      if (requestId === latestAnalysisRequest) showStatus(`Error: ${e.message}`, 'error');
     } finally {
-      btn.disabled = false;
-      refreshBtn.disabled = !currentRepo;
-      btn.classList.remove('loading');
-      hideLoading();
+      if (requestId === latestAnalysisRequest) {
+        btn.disabled = false;
+        refreshBtn.disabled = !currentRepo;
+        btn.classList.remove('loading');
+        hideLoading();
+      }
     }
   }
 
@@ -1426,17 +1433,18 @@
   }
 
   // Allow pressing Enter in the repo input
+  document.getElementById('repo-input').addEventListener('input', () => { repoInputTouched = true; });
   document.getElementById('repo-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') analyzeRepo();
   });
 
   function restoreLastRepository() {
-    if (currentRepo || new URLSearchParams(window.location.search).get('repo')) return;
+    if (currentRepo || repoInputTouched || new URLSearchParams(window.location.search).get('repo')) return;
     let lastRepo = null;
     try { lastRepo = localStorage.getItem('lastAnalyzedRepo'); } catch (_) {}
     if (lastRepo) {
       document.getElementById('repo-input').value = lastRepo;
-      analyzeRepo();
+      analyzeRepo(false, lastRepo);
     }
   }
 

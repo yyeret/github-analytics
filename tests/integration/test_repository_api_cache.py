@@ -93,9 +93,24 @@ def test_issue_collection_failure_keeps_prior_cache(monkeypatch):
 
     monkeypatch.setattr(app, "collect_data", lambda repo, **kwargs: small_raw_data(repo))
     partial = client.post("/api/analyze", json={"repo_url": "owner/alpha", "force_refresh": True})
-    assert partial.status_code == 200
-    assert partial.json()["cache_hit"] is False
+    assert partial.status_code == 500
     cached = client.post("/api/analyze", json={"repo_url": "owner/alpha"})
     assert cached.status_code == 200
     assert cached.json()["cache_hit"] is True
     assert cached.json()["issues"] is not None
+
+
+def test_metric_failure_keeps_prior_cache(monkeypatch):
+    monkeypatch.setattr(app, "collect_data", lambda repo, **kwargs: cacheable_raw(repo))
+    client = TestClient(app.app)
+    assert client.post("/api/analyze", json={"repo_url": "owner/alpha"}).status_code == 200
+
+    original = app.compute_flow_metrics
+    monkeypatch.setattr(app, "compute_flow_metrics", lambda raw: (_ for _ in ()).throw(RuntimeError("metric failure")))
+    failed = client.post("/api/analyze", json={"repo_url": "owner/alpha", "force_refresh": True})
+    assert failed.status_code == 500
+
+    monkeypatch.setattr(app, "compute_flow_metrics", original)
+    cached = client.post("/api/analyze", json={"repo_url": "owner/alpha"})
+    assert cached.status_code == 200
+    assert cached.json()["cache_hit"] is True

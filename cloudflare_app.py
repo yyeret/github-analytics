@@ -287,6 +287,8 @@ async def chat(req: ChatRequest, request: Request):
     if not key:
         raise HTTPException(status_code=503, detail="AI chat is not configured yet.")
     repo = parse_repo(req.repo)
+    token = getattr(env, "GITHUB_TOKEN", None) if env else None
+    await public_repo_exists(repo, token)
     cache = getattr(env, "ANALYTICS_CACHE", None) if env else None
     if cache is None:
         raise HTTPException(status_code=503, detail="Analysis cache is not configured yet.")

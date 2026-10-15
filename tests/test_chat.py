@@ -1,7 +1,7 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from cloudflare_app import ChatRequest, chat, chat_prompt
 
@@ -86,13 +86,34 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         env = SimpleNamespace(AUTH_REQUIRED="false", ANALYTICS_CACHE=cache, GEMINI_API_KEY="test")
         fake_request = SimpleNamespace(scope={"env": env}, headers={})
         client = FakeAIClient()
-        with patch("cloudflare_app.httpx.AsyncClient", return_value=client):
+        with patch("cloudflare_app.httpx.AsyncClient", return_value=client), patch(
+            "cloudflare_app.public_repo_exists", new_callable=AsyncMock
+        ) as public_check:
             result = await chat(req, fake_request)
+        public_check.assert_awaited_once_with("github/spec-kit", None)
         self.assertEqual(result["reply"], "Throughput rose.")
         self.assertEqual(cache.keys, ["metrics:v2:github/spec-kit"])
         self.assertIn("throughput", client.body["system_instruction"]["parts"][0]["text"].lower())
         self.assertIn("gemini-3.5-flash-lite", client.url)
         self.assertEqual(client.headers["x-goog-api-key"], "test")
+
+
+    async def test_chat_rejects_repository_that_became_private(self):
+        from fastapi import HTTPException
+
+        req = ChatRequest(repo="github/spec-kit", message="How is throughput trending?")
+        cache = FakeCache(METRICS)
+        env = SimpleNamespace(AUTH_REQUIRED="false", ANALYTICS_CACHE=cache, GEMINI_API_KEY="test")
+        fake_request = SimpleNamespace(scope={"env": env}, headers={})
+
+        async def reject_private(repo, token):
+            raise HTTPException(status_code=404, detail="Repository not found or not public.")
+
+        with patch("cloudflare_app.public_repo_exists", side_effect=reject_private):
+            with self.assertRaises(HTTPException) as result:
+                await chat(req, fake_request)
+        self.assertEqual(result.exception.status_code, 404)
+        self.assertEqual(cache.keys, [])
 
 
 if __name__ == "__main__":
