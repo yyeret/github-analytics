@@ -145,3 +145,10 @@ Thumbs.db
 
 # Local Cache / Data
 raw_data.json
+.dev.vars
+.venv/
+node_modules/
+
+.wrangler/
+python_modules/
+pylock.toml

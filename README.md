@@ -1,41 +1,21 @@
 # GitHub Flow & Value Stream Analytics
 
-A framework and dashboard prototype designed to extract and analyze flow metrics from public GitHub repositories, specifically focusing on the relationship between local AI usage, moving system bottlenecks (Theory of Constraints), and high-level strategic outcomes mapped to Scrum.org's Evidence-Based Management (EBM) framework.
+A dashboard that analyzes pull request flow in public GitHub repositories and maps it to Theory of Constraints and Evidence-Based Management metrics.
 
-## Overview
+## Try it
 
-Modern developer dashboards (such as Jellyfish or DX) focus heavily on engineering-centric activity metrics (DORA metrics, pull request cycle times, developer satisfaction). 
+Enter a public repository such as `sveltejs/svelte` or `https://github.com/owner/repo`. Analysis runs on Cloudflare Workers; results are cached for six hours. Chat reads that cache on the server and sends Gemini a compact summary of cycle time, complete-week throughput, and aging work. Reanalyze the repository when the cache expires. Private repositories are rejected. Each visitor's IP is limited to six analyses and twelve AI questions per minute. Gemini chat is enabled when `GEMINI_API_KEY` is configured.
 
-This project implements a higher-level perspective:
-1. **AI Adoption is Local Optimization**: Measuring how local coding acceleration affects downstream stages.
-2. **Theory of Constraints (TOC)**: Visualizing whether AI code generation accelerates time-to-market or merely shifts the system bottleneck to review, QA, and release phases.
-3. **Evidence-Based Management (EBM)**: Translating flow efficiency directly into Ability to Innovate (A2I), Time-to-Market (T2M), and Value metrics.
+## Local development
 
-## Documentation
-
-- **[Feasibility Study](file:///c:/Users/yuval/Github/github-analytics/feasibility_study.md)**: A detailed analysis of public GitHub API capabilities, data extraction strategies, AI footprint detection (explicit and heuristic), and the EBM metric mapping.
-
-## Dashboard Capabilities
-
-The visual dashboard (`dashboard.html`) renders a premium dark-themed developer intelligence interface featuring:
-1. **Multi-Stage Kanban CFD (Stacked Line Chart)**: Maps the complete closed value stream system from the bottom up: Merged Code (resolved), PR Review Queue (QA/gates), Active Coding (work-in-progress), and Backlog Queue (upstream demand).
-2. **Chronological Scatter Plot**: Chronologically plots pull requests against their actual merge dates on a linear time scale, color-coded by Human, AI-Assisted, and AI-Agentic contributors.
-3. **Upstream-to-Merge Value Stream Map**: Visually parses the end-to-end issue lifecycle, calculating Backlog Wait, Coding Time, Review Queue Delay, and Merge Delay to pinpoint the system constraint.
-4. **Era Comparison Scorecard**: Contrasts historical baselines against modern metrics, including a mathematically calculated **Flow Efficiency (Active/Total)** ratio.
-
-## Usage
-
-To fetch fresh data and compile the dashboard for any public GitHub repository, run the `analyze.py` script:
+The existing FastAPI app remains available locally:
 
 ```bash
-# Analyze Svelte (traditional framework with rich history)
-python analyze.py sveltejs/svelte --refresh
-
-# Analyze OpenClaw (modern agentic AI system created in late 2025)
-python analyze.py openclaw/openclaw --refresh
+uv sync --extra local
+uv run uvicorn app:app --reload
 ```
 
-To view the generated dashboard, open `dashboard.html` directly in your web browser. Cache files are stored locally in `raw_data.json` to prevent API rate-limiting.
+Open `http://localhost:8000`. The local server uses the GitHub CLI and reads Gemini credentials from the environment or local setup.
 
 
 ## Testing
@@ -74,3 +54,22 @@ matches can misread context. Review rationales before interpreting distributions
 Existing caches remain usable with title-only classification. Use `python analyze.py OWNER/REPO --refresh` to collect bodies.
 `/api/analyze` exposes the additive `value_classification` field; AI contribution
 classification remains in `classification`.
+## Cloudflare deployment
+
+This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.
+
+1. Install the Cloudflare Worker dependencies with `uv sync` (Wrangler requires uv 0.12.3 or newer).
+2. The `ANALYTICS_CACHE` KV namespace is already configured for this Cloudflare account.
+3. Run `bash scripts/deploy-cloudflare.sh` on macOS/Linux or `./scripts/deploy-cloudflare.ps1` in PowerShell. Each wrapper refreshes the Bitwarden session and calls the deployment script. It resets the development environment to the small Worker dependency set, then passes secrets to Wrangler in a temporary file that is deleted after deployment.
+4. Wrangler deploys the app to `github-analytics.yuvalyeret.com` and its `workers.dev` address.
+
+Google sign-in uses Cloudflare D1 for account records and hashed, short-lived sessions. The migration is applied by the deployment script. Configure the Google Auth Platform external app as **GitHub Flow Analytics**, with `https://github-analytics.yuvalyeret.com/` as its homepage, `https://github-analytics.yuvalyeret.com/privacy.html` as its privacy policy, and `yuvalyeret.com` as an authorized domain. Create a **Web application** OAuth client with the authorized JavaScript origin `https://github-analytics.yuvalyeret.com`. No redirect URI or Google API scopes are needed. Publish the app for external users; an app left in Testing only works for its listed test users. Then run:
+
+```bash
+python3 scripts/configure-google-auth.py --client-id YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
+bash scripts/deploy-cloudflare.sh
+```
+
+The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
+
+Cloudflare Workers Paid is already active on this account. The Worker uses its 30-second default CPU allowance because analyzing hundreds of pull requests is heavier than the Free plan's 10 ms allowance. The plan has a $5/month minimum; usage above included allowances can add charges.
