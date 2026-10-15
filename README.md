@@ -4,7 +4,7 @@ A dashboard that analyzes pull request flow in public GitHub repositories and ma
 
 ## Try it
 
-Enter a public repository such as `sveltejs/svelte` or `https://github.com/owner/repo`. Analysis runs on Cloudflare Workers; results are cached for six hours. Chat reads that cache on the server and sends Gemini a compact summary of cycle time, complete-week throughput, and aging work. Reanalyze the repository when the cache expires. Private repositories are rejected. Each visitor's IP is limited to six analyses and twelve AI questions per minute. Gemini chat is enabled when `GEMINI_API_KEY` is configured.
+Enter a public repository such as `sveltejs/svelte` or `https://github.com/owner/repo`. Analysis runs on Cloudflare Workers; results are kept per repository in Cloudflare KV until explicitly refreshed. Chat reads that cache on the server and sends Gemini a compact summary of cycle time, complete-week throughput, and aging work. Opening a saved repository still checks that it is public, but does not repeat the full analysis scan. Private repositories are rejected. Each visitor's IP is limited to six analyses and twelve AI questions per minute. Gemini chat is enabled when `GEMINI_API_KEY` is configured.
 
 ## Local development
 
@@ -17,6 +17,8 @@ uv run uvicorn app:app --reload
 
 Open `http://localhost:8000`. The local server uses the GitHub CLI and reads Gemini credentials from the environment or local setup.
 
+The web UI remembers the last repository in the browser and displays when its data was captured. Use **Refresh data** to fetch the latest GitHub data. In local development, raw GitHub data is saved under `.cache/repositories/` and reused across page reloads and server restarts. Keep that directory on persistent storage if the local server is redeployed. The CLI's `raw_data.json` cache is separate.
+
 
 ## Testing
 
@@ -28,6 +30,7 @@ pip install -r requirements-dev.txt
 ruff check .
 pytest --cov            # fails below the coverage floor in pyproject.toml
 pytest -m unit          # or -m integration / -m e2e
+node --test tests/frontend/*.test.cjs  # UI reload and refresh logic, no browser
 ```
 
 Tests never touch the network, the `gh`/`bws` CLIs, or Gemini; `subprocess.run` is blocked by default and each test runs in a temp directory.

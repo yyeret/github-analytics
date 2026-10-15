@@ -119,6 +119,8 @@
       color:var(--text-dim);
     }
     .btn-ghost:hover{border-color:var(--violet);color:var(--text);}
+    #refresh-btn:disabled{opacity:.5;cursor:not-allowed;}
+    #capture-note{color:var(--text-muted);font-size:.82rem;margin:.35rem 0 1rem;}
 
     /* Spinner */
     .spinner{
@@ -436,7 +438,8 @@
     @media(max-width:640px){
       #app{padding:1rem;}
       header{flex-direction:column;align-items:flex-start;}
-      .repo-bar{max-width:100%;}
+      .repo-bar{max-width:100%;flex-wrap:wrap;}
+      .repo-bar input{flex-basis:100%;}
       .kpi-grid{grid-template-columns:1fr 1fr;}
       #chat-drawer{width:100vw;}
       #chat-toggle.open{right:1rem;}
@@ -492,6 +495,7 @@
         <span class="spinner" id="btn-spinner"></span>
         <span class="btn-label">Analyze</span>
       </button>
+      <button id="refresh-btn" class="btn btn-ghost" onclick="refreshRepo()" disabled>Refresh data</button>
     </div>
     <div id="account-actions"><span id="account-email"></span><button onclick="signOut()">Sign out</button><button onclick="deleteAccount()">Delete account</button></div>
   </header>
@@ -511,6 +515,7 @@
     <div class="repo-tag" id="repo-tag">
       <span>📁</span> <span id="repo-name-display">—</span>
     </div>
+    <div id="capture-note"></div>
 
     <!-- KPI Cards -->
     <div class="kpi-grid" id="kpi-grid"></div>
@@ -663,12 +668,17 @@
   let chatOpen       = false;
   let charts         = {};
   let authConfig     = {required:false, client_id:''};
+  let latestAnalysisRequest = 0;
+  let repoInputTouched = false;
 
   async function configureAuthentication() {
     try {
       const response = await fetch('/api/auth/config');
       authConfig = await response.json();
-      if (!authConfig.required) return;
+      if (!authConfig.required) {
+        restoreLastRepository();
+        return;
+      }
       document.getElementById('login-gate').classList.add('visible');
       if (!authConfig.client_id) {
         document.getElementById('login-error').textContent = 'Google sign-in is being configured.';
@@ -710,6 +720,7 @@
     document.getElementById('login-gate').classList.remove('visible');
     document.getElementById('account-actions').style.display = 'flex';
     document.getElementById('account-email').textContent = email;
+    restoreLastRepository();
   }
 
   async function signOut() {
@@ -724,33 +735,43 @@
   }
 
   // ── Analyze Repo ───────────────────────────────────────────────────
-  async function analyzeRepo() {
-    const input = document.getElementById('repo-input').value.trim();
+  async function analyzeRepo(forceRefresh = false, repoOverride = null) {
+    if (repoOverride === null) repoInputTouched = true;
+    const input = repoOverride || document.getElementById('repo-input').value.trim();
     if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
+    const requestId = ++latestAnalysisRequest;
 
     const btn = document.getElementById('analyze-btn');
+    const refreshBtn = document.getElementById('refresh-btn');
     btn.disabled = true;
+    refreshBtn.disabled = true;
     btn.classList.add('loading');
-    showLoading('Fetching repository data… this may take 30–60 seconds');
+    showLoading(forceRefresh ? 'Fetching fresh repository data…' : 'Loading repository data…');
     clearStatus();
 
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ repo_url: input, force_refresh: false })
+        body: JSON.stringify({ repo_url: input, force_refresh: forceRefresh })
       });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
+      if (requestId !== latestAnalysisRequest) return;
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
+      document.getElementById('repo-input').value = data.repo;
+      try { localStorage.setItem('lastAnalyzedRepo', data.repo); } catch (_) {}
 
       renderDashboard(data);
-      showStatus(`✓ Analysis complete for ${data.repo} — ${data.recent_stats?.total || 0} PRs analyzed`, 'success');
+      const captured = data.captured_at ? new Date(data.captured_at).toLocaleString() : 'unknown time';
+      const source = data.cache_hit ? 'Saved GitHub data' : 'Fresh GitHub data';
+      document.getElementById('capture-note').textContent = `${source} · captured ${captured}`;
+      showStatus(`✓ ${source} loaded for ${data.repo} — ${data.recent_stats?.total || 0} PRs analyzed`, 'success');
       document.getElementById('chat-repo-label').textContent = data.repo;
       document.getElementById('chat-toggle').classList.add('has-response');
 
@@ -758,12 +779,19 @@
       addChatMessage('assistant', `🎉 **Repository loaded: \`${data.repo}\`**\n\nAsk me about cycle time, aging work, or throughput. Review timing and batch size are not yet available from this hosted data source.`);
 
     } catch(e) {
-      showStatus(`Error: ${e.message}`, 'error');
+      if (requestId === latestAnalysisRequest) showStatus(`Error: ${e.message}`, 'error');
     } finally {
-      btn.disabled = false;
-      btn.classList.remove('loading');
-      hideLoading();
+      if (requestId === latestAnalysisRequest) {
+        btn.disabled = false;
+        refreshBtn.disabled = !currentRepo;
+        btn.classList.remove('loading');
+        hideLoading();
+      }
     }
+  }
+
+  function refreshRepo() {
+    if (currentRepo) return analyzeRepo(true, currentRepo);
   }
 
   // ── Dashboard Renderer ──────────────────────────────────────────────
@@ -1405,18 +1433,23 @@
   }
 
   // Allow pressing Enter in the repo input
+  document.getElementById('repo-input').addEventListener('input', () => { repoInputTouched = true; });
   document.getElementById('repo-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') analyzeRepo();
   });
 
-  // Pre-fill from URL param ?repo=
-  (function() {
-    const params = new URLSearchParams(window.location.search);
-    const r = params.get('repo');
-    if (r) {
-      document.getElementById('repo-input').value = r;
+  function restoreLastRepository() {
+    if (currentRepo || repoInputTouched || new URLSearchParams(window.location.search).get('repo')) return;
+    let lastRepo = null;
+    try { lastRepo = localStorage.getItem('lastAnalyzedRepo'); } catch (_) {}
+    if (lastRepo) {
+      document.getElementById('repo-input').value = lastRepo;
+      analyzeRepo(false, lastRepo);
     }
-  })();
+  }
+
+  const repoFromUrl = new URLSearchParams(window.location.search).get('repo');
+  if (repoFromUrl) document.getElementById('repo-input').value = repoFromUrl;
   configureAuthentication();
 </script>
 </body>

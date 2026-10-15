@@ -217,7 +217,10 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
     if cache and not req.force_refresh:
         saved = await cache.get(cache_key)
         if saved:
-            return json.loads(saved)
+            metrics = json.loads(saved)
+            if metrics.get("repo", "").lower() == repo.lower():
+                metrics["cache_hit"] = True
+                return metrics
     try:
         raw = await collect_public_data(repo, token)
         metrics = compute_flow_metrics(raw)
@@ -225,8 +228,9 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not metrics.get("recent_stats", {}).get("total"):
         raise HTTPException(status_code=422, detail="No merged pull requests were found for this public repository.")
+    metrics["cache_hit"] = False
     if cache:
-        await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=21600)
+        await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")))
     return metrics
 
 
@@ -283,6 +287,8 @@ async def chat(req: ChatRequest, request: Request):
     if not key:
         raise HTTPException(status_code=503, detail="AI chat is not configured yet.")
     repo = parse_repo(req.repo)
+    token = getattr(env, "GITHUB_TOKEN", None) if env else None
+    await public_repo_exists(repo, token)
     cache = getattr(env, "ANALYTICS_CACHE", None) if env else None
     if cache is None:
         raise HTTPException(status_code=503, detail="Analysis cache is not configured yet.")

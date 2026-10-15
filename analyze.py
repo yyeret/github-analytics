@@ -12,7 +12,7 @@ from issues import collect_issues, compute_issue_metrics, issue_weekly_bins
 RAW_DATA_FILE = "raw_data.json"
 DASHBOARD_FILE = "dashboard.html"
 
-def run_graphql_query(search_query, count=100):
+def run_graphql_query(search_query, count=100, strict=False):
     import subprocess
     query = """
     query($searchQuery: String!, $first: Int!) {
@@ -90,17 +90,23 @@ def run_graphql_query(search_query, count=100):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
         data = json.loads(res.stdout)
+        if strict and data.get("errors"):
+            raise RuntimeError("GraphQL error in pull request search")
         if "data" in data and "search" in data["data"]:
             return data["data"]["search"]["nodes"]
         else:
+            if strict:
+                raise RuntimeError("Invalid GraphQL response for pull request search")
             print("GraphQL Error or empty response:", data)
             return []
     except subprocess.CalledProcessError as e:
+        if strict:
+            raise
         print("Error executing query:", e)
         print("Stderr:", e.stderr)
         return []
 
-def collect_data(repo="sveltejs/svelte"):
+def collect_data(repo="sveltejs/svelte", strict=False):
     import subprocess
     print(f"Collecting data for {repo}...")
 
@@ -112,7 +118,7 @@ def collect_data(repo="sveltejs/svelte"):
     # 1. Pre-AI Era (2021) baseline
     print("Fetching Pre-AI Era (2021) sample...")
     pre_ai_query = f"repo:{repo} is:pr is:merged merged:2021-06-01..2021-12-31"
-    pre_ai_nodes = run_graphql_query(pre_ai_query, 30)
+    pre_ai_nodes = run_graphql_query(pre_ai_query, 30, strict=strict) if strict else run_graphql_query(pre_ai_query, 30)
     print(f"Retrieved {len(pre_ai_nodes)} Pre-AI PRs.")
     
     # 2. Modern Era: Fetch 600 most recent merged PRs in pages of 100
@@ -204,6 +210,8 @@ def collect_data(repo="sveltejs/svelte"):
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
             data = json.loads(res.stdout)
+            if strict and data.get("errors"):
+                raise RuntimeError("GraphQL error in merged pull request search")
             if "data" in data and "search" in data["data"]:
                 page_nodes = data["data"]["search"]["nodes"]
                 recent_nodes.extend(page_nodes)
@@ -215,9 +223,13 @@ def collect_data(repo="sveltejs/svelte"):
                 else:
                     break
             else:
+                if strict:
+                    raise RuntimeError("Invalid GraphQL response for merged pull requests")
                 print("Error or empty response:", data)
                 break
         except Exception as e:
+            if strict:
+                raise
             print("Exception during merged PR fetch:", e)
             break
             
@@ -296,10 +308,16 @@ def collect_data(repo="sveltejs/svelte"):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
         data = json.loads(res.stdout)
+        if strict and data.get("errors"):
+            raise RuntimeError("GraphQL error in open pull request search")
         if "data" in data and "search" in data["data"]:
             open_nodes = data["data"]["search"]["nodes"]
             print(f"Retrieved {len(open_nodes)} active open PRs.")
+        elif strict:
+            raise RuntimeError("Invalid GraphQL response for open pull requests")
     except Exception as e:
+        if strict:
+            raise
         print("Error fetching open PRs:", e)
     
     # 4. Issues were fetched in parallel above, independent of PR linkage

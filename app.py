@@ -33,6 +33,7 @@ from pydantic import BaseModel
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze import collect_data, compute_flow_metrics
+from repository_cache import RepositoryCache
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -76,20 +77,36 @@ def _parse_repo_slug(repo_url: str) -> str:
         url = url[len("https://github.com/"):]
     if url.startswith("http://github.com/"):
         url = url[len("http://github.com/"):]
+    if url.startswith("github.com/"):
+        url = url[len("github.com/"):]
     # Remove trailing .git if present
     if url.endswith(".git"):
         url = url[:-4]
     # Remove any /tree/... or /blob/... path segments
     parts = url.split("/")
     if len(parts) >= 2:
-        return f"{parts[0]}/{parts[1]}"
+        repo = f"{parts[0].lower()}/{parts[1].lower()}"
+        RepositoryCache().path_for(repo)
+        return repo
     raise ValueError(f"Cannot parse repo slug from: {repo_url!r}")
 
 
 def _run_analysis(repo: str, force: bool) -> dict:
     """Blocking function that collects raw data and computes metrics."""
-    raw = collect_data(repo)
+    cache = RepositoryCache()
+    raw = None if force else cache.load(repo)
+    cache_hit = raw is not None
+    if raw is None:
+        raw = collect_data(repo, strict=True)
+        if raw.get("issues") is None:
+            raise RuntimeError(f"Incomplete GitHub collection for {repo}")
     metrics = compute_flow_metrics(raw)
+    if not cache_hit:
+        try:
+            cache.save(repo, raw)
+        except OSError as exc:
+            print(f"Could not save repository cache for {repo}: {exc}")
+    metrics["cache_hit"] = cache_hit
     return metrics
 
 

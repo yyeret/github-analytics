@@ -11,7 +11,13 @@ from tests.factories import FakeGh, graphql_response, make_pr, small_raw_data
 def gh(monkeypatch):
     def install(responses):
         fake = FakeGh(responses)
-        monkeypatch.setattr(subprocess, "run", fake)
+
+        def run(cmd, *args, **kwargs):
+            if any("is:issue" in part for part in cmd):
+                return subprocess.CompletedProcess(cmd, 0, stdout=graphql_response([]), stderr="")
+            return fake(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", run)
         return fake
     return install
 
@@ -97,3 +103,19 @@ def test_load_or_collect_recollects_when_cache_is_corrupt(gh):
         f.write("{not json")
     gh([graphql_response([]), graphql_response([]), graphql_response([])])
     assert analyze.load_or_collect("o/r")["repo"] == "o/r"
+
+
+def test_strict_collection_rejects_query_failure_before_writing_cache(gh, monkeypatch):
+    monkeypatch.setattr(analyze, "collect_issues", lambda repo: {"open": [], "closed": [], "pre_ai": []})
+    gh([graphql_response([]), _err()])
+    with pytest.raises(subprocess.CalledProcessError):
+        analyze.collect_data("o/r", strict=True)
+    assert not analyze.os.path.exists(analyze.RAW_DATA_FILE)
+
+
+def test_strict_query_rejects_partial_graphql_error(gh):
+    payload = json.loads(graphql_response([make_pr(1)]))
+    payload["errors"] = [{"message": "partial failure"}]
+    gh([json.dumps(payload)])
+    with pytest.raises(RuntimeError, match="GraphQL error"):
+        analyze.run_graphql_query("repo:o/r is:pr", strict=True)

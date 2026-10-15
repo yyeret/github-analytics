@@ -36,6 +36,7 @@ def _digest():
 @freeze_time("2024-03-01T00:00:00")
 def test_collect_analyze_chat_and_dashboard(monkeypatch):
     raw = small_raw_data("acme/widgets")
+    monkeypatch.setattr(analyze, "collect_issues", lambda repo: {"open": [], "closed": [], "pre_ai": []})
     monkeypatch.setattr(subprocess, "run", FakeGh([
         graphql_response(raw["pre_ai_prs"]),
         graphql_response(raw["recent_prs"]),
