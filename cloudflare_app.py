@@ -4,7 +4,7 @@ import json
 import re
 import secrets
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -22,13 +22,24 @@ NONCE_COOKIE = "gha_nonce"
 SESSION_SECONDS = 60 * 60 * 24 * 14
 
 
+@app.middleware("http")
+async def response_security(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 class AnalyzeRequest(BaseModel):
     repo_url: str = Field(max_length=300)
     force_refresh: bool = False
 
 
 class ChatMessage(BaseModel):
-    role: str
+    role: Literal["user", "assistant"]
     content: str = Field(max_length=4000)
 
 
@@ -44,8 +55,8 @@ class GoogleLoginRequest(BaseModel):
 
 def parse_repo(value: str) -> str:
     value = value.strip().rstrip("/")
-    match = re.fullmatch(r"(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?", value)
-    if not match:
+    match = re.fullmatch(r"(?:https?://github\.com/)?([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_][A-Za-z0-9_.-]*?)(?:\.git)?", value)
+    if not match or match.group(2) in (".", ".."):
         raise HTTPException(status_code=400, detail="Enter a GitHub repository as owner/name or a github.com URL.")
     return f"{match.group(1)}/{match.group(2)}"
 
@@ -59,10 +70,14 @@ async def enforce_limit(request: Request, kind: str, limit: int) -> None:
     binding_name = "ANALYZE_LIMIT" if kind == "analyze" else "CHAT_LIMIT"
     binding = getattr(env, binding_name, None) if env else None
     if binding is None:
-        return
+        raise HTTPException(status_code=503, detail="Request rate limiting is not configured.")
     result = await binding.limit({"key": client_ip(request)})
     if not result.get("success", False):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again shortly.")
+
+
+def auth_required(request: Request) -> bool:
+    return getattr(environment(request), "AUTH_REQUIRED", "true") != "false"
 
 
 def environment(request: Request):
@@ -102,7 +117,7 @@ async def auth_config(request: Request):
     env = environment(request)
     return {
         "client_id": getattr(env, "GOOGLE_OAUTH_CLIENT_ID", "") if env else "",
-        "required": getattr(env, "AUTH_REQUIRED", "false") == "true" if env else False,
+        "required": auth_required(request),
     }
 
 
@@ -205,7 +220,7 @@ async def health():
 
 @app.post("/api/analyze")
 async def analyze_repo(req: AnalyzeRequest, request: Request):
-    if getattr(environment(request), "AUTH_REQUIRED", "false") == "true":
+    if auth_required(request):
         await signed_in_user(request)
     await enforce_limit(request, "analyze", 10)
     repo = parse_repo(req.repo_url)
@@ -222,7 +237,7 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
         raw = await collect_public_data(repo, token)
         metrics = compute_flow_metrics(raw)
     except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
     if not metrics.get("recent_stats", {}).get("total"):
         raise HTTPException(status_code=422, detail="No merged pull requests were found for this public repository.")
     if cache:
@@ -275,7 +290,7 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, request: Request):
-    if getattr(environment(request), "AUTH_REQUIRED", "false") == "true":
+    if auth_required(request):
         await signed_in_user(request)
     await enforce_limit(request, "chat", 20)
     env = request.scope.get("env")

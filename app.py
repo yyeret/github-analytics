@@ -6,26 +6,22 @@ Serves the premium SPA and provides REST endpoints for:
 """
 
 import os
-# Remove any invalid GITHUB_TOKEN to let the gh CLI use the active logged-in keyring
-os.environ.pop("GITHUB_TOKEN", None)
 
-import json
 import asyncio
 import subprocess
 import concurrent.futures
-import datetime
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from dotenv import load_dotenv
 
-# Load environment variables from home directory or local environment files
-load_dotenv(Path.home() / ".env")
-load_dotenv()
+# Load only the explicit project file; preserve credentials supplied by the caller.
+load_dotenv(Path(__file__).parent / ".env")
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Import our analytics engine
@@ -38,6 +34,20 @@ from analyze import collect_data, compute_flow_metrics
 # App Setup
 # ---------------------------------------------------------------------------
 app = FastAPI(title="GitHub Flow Analytics", version="1.0.0")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
+
+
+@app.middleware("http")
+async def local_request_boundary(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin and origin != f"{request.url.scheme}://{request.url.netloc}":
+        return JSONResponse(status_code=403, content={"detail": "Cross-origin requests are not allowed."})
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 # In-memory cache: repo -> metrics dict
 _metrics_cache: dict[str, dict] = {}
@@ -50,19 +60,19 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 # Pydantic Models
 # ---------------------------------------------------------------------------
 class AnalyzeRequest(BaseModel):
-    repo_url: str          # e.g. "https://github.com/sveltejs/svelte" or "sveltejs/svelte"
+    repo_url: str = Field(max_length=300)  # e.g. "https://github.com/sveltejs/svelte" or "sveltejs/svelte"
     force_refresh: bool = False
 
 
 class ChatMessage(BaseModel):
-    role: str              # "user" or "assistant"
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
 
 
 class ChatRequest(BaseModel):
-    repo: str              # "owner/name" slug used as cache key
-    message: str
-    history: list[ChatMessage] = []
+    repo: str = Field(max_length=200)
+    message: str = Field(max_length=2000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=10)
 
 
 # ---------------------------------------------------------------------------
@@ -82,33 +92,29 @@ def _parse_repo_slug(repo_url: str) -> str:
     # Remove any /tree/... or /blob/... path segments
     parts = url.split("/")
     if len(parts) >= 2:
-        return f"{parts[0]}/{parts[1]}"
+        owner, repo = parts[:2]
+        if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", owner)
+                and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", repo)
+                and repo not in (".", "..")):
+            return f"{owner}/{repo}"
     raise ValueError(f"Cannot parse repo slug from: {repo_url!r}")
 
 
 def _run_analysis(repo: str, force: bool) -> dict:
     """Blocking function that collects raw data and computes metrics."""
+    result = subprocess.run(
+        ["gh", "api", "--hostname", "github.com", f"repos/{repo}", "--jq", ".private"],
+        capture_output=True, text=True, check=True, timeout=15,
+    )
+    if result.stdout.strip() != "false":
+        raise HTTPException(status_code=400, detail="Only public repositories are supported.")
     raw = collect_data(repo)
     metrics = compute_flow_metrics(raw)
     return metrics
 
 
 def _get_gemini_key() -> Optional[str]:
-    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if key:
-        return key
-    # Try fetching via bws CLI
-    try:
-        result = subprocess.run(
-            ["bws", "secret", "get", "GEMINI_API_KEY"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            return data.get("value")
-    except Exception:
-        pass
-    return None
+    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
 
 def _build_system_prompt(metrics: dict) -> str:
@@ -256,8 +262,10 @@ async def analyze_repo(req: AnalyzeRequest):
     loop = asyncio.get_event_loop()
     try:
         metrics = await loop.run_in_executor(_executor, _run_analysis, repo, req.force_refresh)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Analysis failed. Check the local server configuration.")
 
     # Store in cache keyed by slug
     _metrics_cache[repo] = metrics
@@ -301,8 +309,8 @@ async def chat(req: ChatRequest):
         response = chat_session.send_message(req.message)
         answer = response.text
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI error: {e}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="AI service failed. Please try again.")
 
     return JSONResponse(content={"reply": answer})
 
@@ -326,4 +334,4 @@ async def root():
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)

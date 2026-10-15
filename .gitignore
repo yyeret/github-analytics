@@ -159,3 +159,23 @@ pylock.toml
 # Compound Engineering: machine overrides and generated scratch
 .compound-engineering/*.local.yaml
 .context/compound-engineering/
+
+# Credentials, local databases, generated analyses, and agent worktrees
+.env.*
+!.env.example
+.dev.vars.*
+!.dev.vars.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+.wrangler/
+.claude/worktrees/
+.worktrees/
+.ruff_cache/
+release_lag.json
+telemetry_findings.json
+traceability.json

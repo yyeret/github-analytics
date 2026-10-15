@@ -19,7 +19,7 @@ This plan details the transition of `github-analytics` from a static Python scri
 
 ## Proposed Changes
 
-### [github-analytics](file:///Users/yuvalyeret/Github/github-analytics)
+### [github-analytics](.)
 
 To convert this into a web application, we will build a FastAPI backend and a premium single-page frontend.
 
@@ -29,16 +29,16 @@ To convert this into a web application, we will build a FastAPI backend and a pr
 
 We will create a FastAPI Python web server that serves endpoints for repository analysis, static files, and agent chat completions.
 
-#### [NEW] [app.py](file:///Users/yuvalyeret/Github/github-analytics/app.py)
+#### [NEW] [app.py](app.py)
 Create a FastAPI server with the following routes:
 - `POST /api/analyze`: Parses the repository URL, retrieves the `GITHUB_TOKEN` (via `bws` subprocess if missing from `os.environ`), runs the GraphQL collection pipeline in a separate thread, computes all flow metrics (CFD, Spearman correlation, stage percentiles, active WIP categories, Tetris packing lanes, and throughput), and returns a unified JSON dataset.
 - `POST /api/chat`: Accepts a user message and the current repository dataset. Prompts an LLM (Gemini or OpenAI) with system instructions detailing Yuval's Flow Coaching methodology (descaling, leading/lagging metrics, finishing over starting, batch size reduction) and the raw JSON metrics, returning the agent's textual insights.
 - Serving static assets: Mounts a static folder or directly serves `index.html` (the SPA frontend).
 
-#### [MODIFY] [analyze.py](file:///Users/yuvalyeret/Github/github-analytics/analyze.py)
+#### [MODIFY] [analyze.py](analyze.py)
 - Refactor the calculations in `analyze_and_build_report` into a clean Python function `compute_flow_metrics(data)` that returns the raw dictionary of calculations instead of writing a hardcoded HTML file, enabling the FastAPI endpoints to consume and return the raw data directly.
 
-#### [NEW] [requirements.txt](file:///Users/yuvalyeret/Github/github-analytics/requirements.txt)
+#### [NEW] [requirements.txt](requirements.txt)
 Define backend web app dependencies:
 - `fastapi`
 - `uvicorn`
@@ -51,7 +51,7 @@ Define backend web app dependencies:
 
 We will build a responsive, single-page application (SPA) featuring high-fidelity dark aesthetics, dynamic chart rendering, and an interactive chat assistant.
 
-#### [NEW] [index.html](file:///Users/yuvalyeret/Github/github-analytics/index.html)
+#### [NEW] [index.html](index.html)
 - **Visual Theme**: Deep indigo glassmorphic dark theme (`#0b0f19` background, `#141b2d` card background, purple/blue gradients, backdrop blurs, Outfit typography).
 - **Control Bar**: A premium header with a text input for the GitHub Repository URL and a styled "Analyze Repository" button with micro-animations and loading spinners.
 - **Dynamic Charts**:

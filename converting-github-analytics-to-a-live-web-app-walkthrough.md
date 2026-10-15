@@ -31,7 +31,7 @@ graph TD
 - **API Endpoints**:
   - `POST /api/analyze`: Receives a repository URL/slug, runs the GraphQL query pipeline, caches the results in memory, and returns the computed flow metrics payload.
   - `POST /api/chat`: Accepts a user message, active repo slug, and chat history. Instantiates a contextual session with Google's state-of-the-art **Gemini 3.5 Flash** model, pre-injected with Yuval Yeret's flow coaching principles (reducing WIP, finishing over starting, batch size reduction, lead metrics) and the active repository's real-time metrics.
-- **Environment Management**: Configured `python-dotenv` to automatically load `GEMINI_API_KEY` from the user's home directory `.env` file (`/Users/yuvalyeret/.env`).
+- **Environment Management**: Configured `python-dotenv` to automatically load `GEMINI_API_KEY` from the user's home directory `.env` file (a project-local `.env` file).
 - **Static Assets Serving**: Mounts and serves the single-page application frontend directly at the root (`/`) route.
 
 ### 3. Premium SPA Dashboard Frontend (`index.html`)

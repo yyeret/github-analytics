@@ -37,6 +37,7 @@ def _digest():
 def test_collect_analyze_chat_and_dashboard(monkeypatch):
     raw = small_raw_data("acme/widgets")
     monkeypatch.setattr(subprocess, "run", FakeGh([
+        "false\n",
         graphql_response(raw["pre_ai_prs"]),
         graphql_response(raw["recent_prs"]),
         graphql_response(raw["open_prs"]),
@@ -49,7 +50,7 @@ def test_collect_analyze_chat_and_dashboard(monkeypatch):
     app_module._metrics_cache.clear()
     before = _digest()
 
-    client = TestClient(app_module.app)
+    client = TestClient(app_module.app, base_url="http://localhost")
 
     # 1. analyze: real collect_data + compute_flow_metrics
     r = client.post("/api/analyze", json={"repo_url": "https://github.com/acme/widgets"})

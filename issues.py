@@ -179,7 +179,7 @@ def _search_issues(search_query, cap, run):
     nodes, cursor = [], None
     while len(nodes) < cap:
         cmd = [
-            "gh", "api", "graphql",
+            "gh", "api", "graphql", "--hostname", "github.com",
             "-F", f"query={ISSUE_QUERY}",
             "-f", f"searchQuery={search_query}",
             "-F", f"first={PAGE_SIZE}",

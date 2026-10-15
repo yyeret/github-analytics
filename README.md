@@ -15,7 +15,7 @@ uv sync --extra local
 uv run uvicorn app:app --reload
 ```
 
-Open `http://localhost:8000`. The local server uses the GitHub CLI and reads Gemini credentials from the environment or local setup.
+Open `http://localhost:8000`. The local server uses the GitHub CLI and accepts only public repositories. Run `gh auth login` first, then optionally copy `.env.example` to `.env` for your Gemini key. Keep it bound to localhost; use the authenticated Worker entry point for hosting. See [Security](SECURITY.md).
 
 
 ## Testing
@@ -63,7 +63,7 @@ classification remains in `classification`.
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.
 
 1. Install the Cloudflare Worker dependencies with `uv sync` (Wrangler requires uv 0.12.3 or newer).
-2. The `ANALYTICS_CACHE` KV namespace is already configured for this Cloudflare account.
+2. Forks must provision their own KV namespace and D1 database and replace the resource IDs, OAuth client ID, and custom domain in `wrangler.jsonc`. The checked-in identifiers belong to the maintainer; they are public identifiers, not credentials.
 3. Run `bash scripts/deploy-cloudflare.sh` on macOS/Linux or `./scripts/deploy-cloudflare.ps1` in PowerShell. Each wrapper refreshes the Bitwarden session and calls the deployment script. It resets the development environment to the small Worker dependency set, then passes secrets to Wrangler in a temporary file that is deleted after deployment.
 4. Wrangler deploys the app to `github-analytics.yuvalyeret.com` and its `workers.dev` address.
 
@@ -84,4 +84,31 @@ Local and CI pip dependencies live in `requirements-local.txt` and
 
 The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
 
-Cloudflare Workers Paid is already active on this account. The Worker uses its 30-second default CPU allowance because analyzing hundreds of pull requests is heavier than the Free plan's 10 ms allowance. The plan has a $5/month minimum; usage above included allowances can add charges.
+Check current Cloudflare plan limits and pricing before deployment; repository analysis and AI requests incur provider usage.
+
+
+## License and public-release checks
+
+[MIT](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for adapted
+code, browser assets, and fetched GitHub content. The license does not cover
+third-party repository data.
+
+Run `python scripts/security-check.py` for a redacted full-history secret scan,
+tracked-file secret scan, and source security checks. Install the check tools
+from `requirements-security.txt` into a separate virtual environment. The script
+downloads checksum-verified Gitleaks 8.30.1 into the ignored project cache; CI uses
+the same commands. The script never deploys,
+rotates keys, rewrites history, or uploads source to a model. Dependency audits
+query the advisory service with package names and versions.
+
+Read [the release audit](docs/security/2026-10-15-public-release-audit.md) for
+scope, evidence, and remaining release decisions.
+
+
+Maintainers can inspect repository protections with
+`python scripts/configure-repository-security.py --repo OWNER/REPO` and apply
+private vulnerability reporting, Dependabot security alerts/fixes, and the checked-in
+main-branch policy using `--apply --protect-main`. Applying requires repository
+administration permission. The policy requires a PR, current CI and security
+checks, and resolved conversations; it blocks force pushes and deletion, including
+for admins. No additional approver is required, so a sole maintainer can merge.

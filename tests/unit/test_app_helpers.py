@@ -1,5 +1,3 @@
-import json
-import subprocess
 
 import pytest
 
@@ -41,28 +39,8 @@ def test_gemini_key_prefers_gemini_over_google(monkeypatch):
     assert app._get_gemini_key() == "gem"
 
 
-def _bws(returncode=0, stdout="", exc=None):
-    def run(cmd, **kwargs):
-        if exc:
-            raise exc
-        assert cmd[:3] == ["bws", "secret", "get"]
-        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
-    return run
-
-
-def test_gemini_key_falls_back_to_bws(monkeypatch):
-    monkeypatch.setattr(subprocess, "run", _bws(stdout=json.dumps({"value": "from-bws"})))
-    assert app._get_gemini_key() == "from-bws"
-
-
-@pytest.mark.parametrize("fake", [
-    _bws(returncode=1),
-    _bws(stdout="not json"),
-    _bws(exc=FileNotFoundError("bws")),
-    _bws(exc=subprocess.TimeoutExpired("bws", 5)),
-])
-def test_gemini_key_none_when_bws_unusable(monkeypatch, fake):
-    monkeypatch.setattr(subprocess, "run", fake)
+def test_gemini_key_absent_does_not_read_a_vault():
+    # The shared fixture blocks subprocesses, so this also proves no vault call.
     assert app._get_gemini_key() is None
 
 

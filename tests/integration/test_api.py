@@ -12,7 +12,7 @@ SAMPLE_METRICS = {"repo": "o/r", "recent_stats": {"total": 3}, "p50_sle": 24, "p
 @pytest.fixture
 def client():
     app_module._metrics_cache.clear()
-    yield TestClient(app_module.app)
+    yield TestClient(app_module.app, base_url="http://localhost")
     app_module._metrics_cache.clear()
 
 
@@ -68,7 +68,8 @@ def test_analyze_failure_is_500_and_not_cached(client, monkeypatch):
     monkeypatch.setattr(app_module, "_run_analysis", boom)
     r = client.post("/api/analyze", json={"repo_url": "o/r"})
     assert r.status_code == 500
-    assert "Analysis failed: gh exploded" in r.json()["detail"]
+    assert "Analysis failed" in r.json()["detail"]
+    assert "gh exploded" not in r.text
     assert app_module._metrics_cache == {}
 
 
@@ -114,7 +115,8 @@ def test_chat_model_error_is_500(client, monkeypatch, fake_genai):
     fake_genai(error=RuntimeError("quota"))
     r = client.post("/api/chat", json={"repo": "o/r", "message": "x"})
     assert r.status_code == 500
-    assert "AI error: quota" in r.json()["detail"]
+    assert "AI service failed" in r.json()["detail"]
+    assert "quota" not in r.text
 
 
 def test_chat_validation_is_422(client):
