@@ -102,6 +102,23 @@ runtime dependencies and SDK, and stages only the runtime source files under
 Local and CI pip dependencies live in `requirements-local.txt` and
 `requirements-dev.txt`; Pywrangler rejects a root `requirements.txt`.
 
+Branch builds use `npx wrangler preview` (Wrangler 4.135.0 or newer), which requires
+an explicit `previews` block. Preview resources are declared in
+`.cloudflare/preview-resources.json`. Run `python scripts/configure-cloudflare-previews.py`
+to inspect the setup. After authorizing resource creation, export the existing
+Cloudflare API token from Bitwarden and run the same command with `--apply`.
+It reuses or creates the named Preview KV namespace and D1 database, initializes
+the empty users/session schema, and writes their real IDs to `wrangler.jsonc`.
+Rerunning it reuses those resources. It preserves production bindings and data.
+
+Previews share these staging resources with other branches. They require Google
+sign-in and use separate rate-limit namespaces with the same request limits.
+Preview URLs are public; protected API endpoints still require a session. The
+configured Google OAuth client must allow the Preview's JavaScript origin before
+sign-in can work there. This setup leaves Google OAuth settings unchanged.
+Preview service secrets are configured separately in Cloudflare's Previews Base;
+Gemini assessment requires a Preview `GEMINI_API_KEY`.
+
 The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
 
 Check current Cloudflare plan limits and pricing before deployment; repository analysis and AI requests incur provider usage.

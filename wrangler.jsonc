@@ -62,5 +62,42 @@
   "build": {
     "command": "python3 scripts/prepare-cloudflare-build.py"
   },
-  "base_dir": ".wrangler/worker"
+  "base_dir": ".wrangler/worker",
+  "previews": {
+    "vars": {
+      "AUTH_REQUIRED": "true",
+      "GOOGLE_OAUTH_CLIENT_ID": "914195447285-huoatl4c0c0e8qrcou5m3n2aalaj7jri.apps.googleusercontent.com"
+    },
+    "kv_namespaces": [
+      {
+        "binding": "ANALYTICS_CACHE",
+        "id": "1321f14a5ac34563a73d6289e94d775e"
+      }
+    ],
+    "d1_databases": [
+      {
+        "binding": "USERS_DB",
+        "database_name": "github-flow-analytics-preview-users",
+        "database_id": "f3a968e1-41a1-4e9f-a0f9-e427cea95b01"
+      }
+    ],
+    "ratelimits": [
+      {
+        "name": "ANALYZE_LIMIT",
+        "namespace_id": "2001",
+        "simple": {
+          "limit": 6,
+          "period": 60
+        }
+      },
+      {
+        "name": "CHAT_LIMIT",
+        "namespace_id": "2002",
+        "simple": {
+          "limit": 12,
+          "period": 60
+        }
+      }
+    ]
+  }
 }

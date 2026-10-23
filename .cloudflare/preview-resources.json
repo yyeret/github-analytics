@@ -1,0 +1,10 @@
+{
+  "account_id": "6fe100eefdfd984dd38a91a1a5643520",
+  "worker": "github-flow-analytics",
+  "cache_namespace": "github-flow-analytics-preview-cache",
+  "users_database": "github-flow-analytics-preview-users",
+  "rate_limit_namespaces": {
+    "ANALYZE_LIMIT": "2001",
+    "CHAT_LIMIT": "2002"
+  }
+}
