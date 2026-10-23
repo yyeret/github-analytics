@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze import collect_data, compute_flow_metrics
+from product_value import assess_product_value
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -110,6 +111,8 @@ def _run_analysis(repo: str, force: bool) -> dict:
         raise HTTPException(status_code=400, detail="Only public repositories are supported.")
     raw = collect_data(repo)
     metrics = compute_flow_metrics(raw)
+    metrics["product_value"] = asyncio.run(assess_product_value(
+        repo, raw, _get_gemini_key(), os.environ.get("GITHUB_TOKEN")))
     return metrics
 
 

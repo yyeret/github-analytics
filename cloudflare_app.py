@@ -14,9 +14,10 @@ from pydantic import BaseModel, Field
 from analyze import collect_public_data, compute_flow_metrics
 from github_api import request_json
 from google_auth import verify_id_token
+from product_value import assess_product_value
 
 app = FastAPI(title="GitHub Flow Analytics")
-METRICS_CACHE_PREFIX = "metrics:v2:"
+METRICS_CACHE_PREFIX = "metrics:v3:"
 SESSION_COOKIE = "gha_session"
 NONCE_COOKIE = "gha_nonce"
 SESSION_SECONDS = 60 * 60 * 24 * 14
@@ -240,6 +241,7 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
         raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
     if not metrics.get("recent_stats", {}).get("total"):
         raise HTTPException(status_code=422, detail="No merged pull requests were found for this public repository.")
+    metrics["product_value"] = await assess_product_value(repo, raw, getattr(env, "GEMINI_API_KEY", None) if env else None, token)
     if cache:
         await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=21600)
     return metrics

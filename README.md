@@ -58,6 +58,21 @@ matches can misread context. Review rationales before interpreting distributions
 Existing caches remain usable with title-only classification. Use `python analyze.py OWNER/REPO --refresh` to collect bodies.
 `/api/analyze` exposes the additive `value_classification` field; AI contribution
 classification remains in `classification`.
+
+### Expected product value
+
+When `GEMINI_API_KEY` is configured, each analysis also judges the value each sampled
+PR is expected to deliver to the repository's product (`product_value.py`). One Gemini
+call turns the repository description, topics and README into product context: a
+summary, value proposition, lean canvas, and the strategic goals the repository
+appears focused on. One Gemini call per PR, for the 30 most recent sampled PRs (up to
+10 open), then rates expected value as High, Medium, Low or Unclear with confidence,
+who benefits, why it matters, the matching goal, and missing context. Content framing
+is passed as evidence, but clear outcome language alone does not imply high value.
+These are expectations, not verified realized impact. Without a key, or if the context
+call fails, `/api/analyze` returns `product_value` with a status and reason and the
+rest of the analysis is unchanged. The dashboard shows the context and per-PR
+assessments under Content framing.
 ## Cloudflare deployment
 
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.
