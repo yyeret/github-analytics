@@ -65,7 +65,10 @@ When `GEMINI_API_KEY` is configured, each analysis also judges the value each sa
 PR is expected to deliver to the repository's product (`product_value.py`). One Gemini
 call turns the repository description, topics and README into product context: a
 summary, value proposition, lean canvas, and the strategic goals the repository
-appears focused on. One Gemini call per PR, for the 30 most recent sampled PRs (up to
+appears focused on. Only public repositories are assessed, and the README is fetched
+without the GitHub token so GitHub refuses it if the repository has just gone private;
+unauthenticated GitHub calls are limited to 60 per hour per IP, so when that limit is
+hit the context uses the description and topics alone. One Gemini call per PR, for the 30 most recent sampled PRs (up to
 10 open), then rates expected value as High, Medium, Low or Unclear with confidence,
 who benefits, why it matters, the matching goal, and missing context. Content framing
 is passed as evidence, but clear outcome language alone does not imply high value.

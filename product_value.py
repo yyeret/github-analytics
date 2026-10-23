@@ -99,15 +99,15 @@ async def _request(url, timeout, **kwargs):
 async def fetch_product_sources(repo, token=None):
     """Repository description, topics, homepage and README text from GitHub's REST API.
 
-    Raises ValueError unless the repository is public when read, so private
-    content is never sent to Gemini even if visibility changed mid-analysis.
+    Raises ValueError unless the repository is public when read. The README is
+    fetched without the token, so GitHub itself refuses it if the repository went
+    private after the metadata check; a refused or rate-limited README is skipped.
     """
-    headers = _github_headers(token)
     base = f"https://api.github.com/repos/{repo}"
-    meta_status, _, meta = await _request(base, 10, headers=headers)
+    meta_status, _, meta = await _request(base, 10, headers=_github_headers(token))
     if not 200 <= meta_status < 300 or meta.get("private") is not False:
         raise ValueError("Repository is not public")
-    readme_status, _, readme = await _request(f"{base}/readme", 10, headers=headers)
+    readme_status, _, readme = await _request(f"{base}/readme", 10, headers=_github_headers(None))
     text = ""
     if 200 <= readme_status < 300 and readme.get("encoding") == "base64":
         text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")

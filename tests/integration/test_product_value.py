@@ -36,10 +36,14 @@ class FakeServices:
         self.private = private
         self.prompts = []
         self.urls = []
+        self.readme_headers = None
 
     async def __call__(self, url, *, headers, method="GET", body=None, timeout=15):
         self.urls.append(url)
         if url.endswith("/readme"):
+            self.readme_headers = headers
+            if self.readme is None:
+                return 403, {}, {"message": "API rate limit exceeded"}
             return 200, {}, {"encoding": "base64", "content": base64.b64encode(self.readme.encode()).decode()}
         if url.startswith("https://api.github.com/repos/"):
             return 200, {}, {"description": "Public flow analytics", "topics": ["dora"], "homepage": "",
@@ -136,6 +140,14 @@ def test_private_repository_sends_nothing_to_gemini(services):
     result = run()
     assert result["status"] == "failed"
     assert fake.prompts == [] and not any(url.endswith("/readme") for url in fake.urls)
+
+
+def test_readme_is_fetched_without_the_token_and_skipped_when_refused(services):
+    fake = services(readme=None)
+    result = run(token="secret")
+    assert "Authorization" not in fake.readme_headers
+    assert result["status"] == "ok" and result["sources"]["readme"] is False
+    assert "(no README)" in fake.prompts[0]
 
 
 def test_unresponsive_gemini_times_out_as_failed(monkeypatch):
