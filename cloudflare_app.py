@@ -243,7 +243,10 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
         raise HTTPException(status_code=422, detail="No merged pull requests were found for this public repository.")
     metrics["product_value"] = await assess_product_value(repo, raw, getattr(env, "GEMINI_API_KEY", None) if env else None, token)
     if cache:
-        await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=21600)
+        value = metrics["product_value"]
+        # Keep Gemini failures briefly so a later analysis can recover once the service does.
+        ttl = 600 if value.get("status") == "failed" or value.get("failed") else 21600
+        await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=ttl)
     return metrics
 
 

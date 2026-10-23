@@ -71,7 +71,9 @@ who benefits, why it matters, the matching goal, and missing context. Content fr
 is passed as evidence, but clear outcome language alone does not imply high value.
 These are expectations, not verified realized impact. Without a key, or if the context
 call fails, `/api/analyze` returns `product_value` with a status and reason and the
-rest of the analysis is unchanged. The dashboard shows the context and per-PR
+rest of the analysis is unchanged. The hosted Worker caches each analysis for up to six
+hours (ten minutes when a Gemini call failed), so adding or removing the key shows on the
+next uncached or force-refreshed analysis. The dashboard shows the context and per-PR
 assessments under Content framing.
 ## Cloudflare deployment
 

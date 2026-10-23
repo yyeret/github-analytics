@@ -22,6 +22,10 @@ DEFAULT_MAX_PRS = 30
 README_CHARS = 12_000
 BODY_CHARS = 4_000
 CONCURRENCY = 5
+GEMINI_TIMEOUT = 25
+CANVAS_KEYS = ("customer_segments", "problem", "solution", "unique_value_proposition",
+               "channels", "revenue_streams", "cost_structure", "key_metrics", "unfair_advantage")
+NARRATIVE_KEYS = ("value_summary", "beneficiaries", "why_it_matters")
 DISCLAIMER = ("Expected value judged by Gemini from PR text and the repository's stated product. "
               "Not verified realized impact. Clear outcome framing alone does not imply high value.")
 
@@ -29,9 +33,7 @@ _STRING = {"type": "STRING"}
 CONTEXT_SCHEMA = {"type": "OBJECT", "properties": {
     "product_summary": _STRING,
     "value_proposition": _STRING,
-    "lean_canvas": {"type": "OBJECT", "properties": {key: _STRING for key in (
-        "customer_segments", "problem", "solution", "unique_value_proposition",
-        "channels", "revenue_streams", "cost_structure", "key_metrics", "unfair_advantage")}},
+    "lean_canvas": {"type": "OBJECT", "properties": {key: _STRING for key in CANVAS_KEYS}},
     "strategic_goals": {"type": "ARRAY", "items": _STRING},
     "missing_context": _STRING,
 }, "required": ["product_summary", "value_proposition", "lean_canvas", "strategic_goals", "missing_context"]}
@@ -89,14 +91,23 @@ def _github_headers(token):
     return headers
 
 
+async def _request(url, timeout, **kwargs):
+    # The Workers fetch transport ignores request_json's timeout, so enforce it here.
+    return await asyncio.wait_for(request_json(url, timeout=timeout, **kwargs), timeout)
+
+
 async def fetch_product_sources(repo, token=None):
-    """Repository description, topics, homepage and README text from GitHub's REST API."""
+    """Repository description, topics, homepage and README text from GitHub's REST API.
+
+    Raises ValueError unless the repository is public when read, so private
+    content is never sent to Gemini even if visibility changed mid-analysis.
+    """
     headers = _github_headers(token)
     base = f"https://api.github.com/repos/{repo}"
-    (meta_status, _, meta), (readme_status, _, readme) = await asyncio.gather(
-        request_json(base, headers=headers, timeout=10),
-        request_json(f"{base}/readme", headers=headers, timeout=10))
-    meta = meta if 200 <= meta_status < 300 else {}
+    meta_status, _, meta = await _request(base, 10, headers=headers)
+    if not 200 <= meta_status < 300 or meta.get("private") is not False:
+        raise ValueError("Repository is not public")
+    readme_status, _, readme = await _request(f"{base}/readme", 10, headers=headers)
     text = ""
     if 200 <= readme_status < 300 and readme.get("encoding") == "base64":
         text = base64.b64decode(readme.get("content", "")).decode("utf-8", "replace")
@@ -110,8 +121,8 @@ async def gemini_json(key, prompt, schema, max_tokens=1200):
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens,
                                  "responseMimeType": "application/json", "responseSchema": schema}}
-    status, _, payload = await request_json(GEMINI_URL, method="POST", headers={"x-goog-api-key": key},
-                                            body=body, timeout=25)
+    status, _, payload = await _request(GEMINI_URL, GEMINI_TIMEOUT, method="POST",
+                                        headers={"x-goog-api-key": key}, body=body)
     if status < 200 or status >= 300:
         raise ValueError(f"Gemini returned HTTP {status}")
     try:
@@ -123,11 +134,31 @@ async def gemini_json(key, prompt, schema, max_tokens=1200):
 
 def select_prs(data, value_classification, max_prs=DEFAULT_MAX_PRS):
     """Most recent sampled PRs to assess: up to a third open, the rest merged."""
-    raw = {pr.get("number"): pr for key in ("recent_prs", "open_prs") for pr in data.get(key) or []}
-    items = value_classification["prs"]["items"]
-    open_items = [i for i in items if i["cohort"] == "open"][:max_prs // 3]
-    merged = [i for i in items if i["cohort"] == "merged"][:max_prs - len(open_items)]
-    return [(item, raw.get(item["number"], {})) for item in merged + open_items]
+    raw = {(cohort, pr.get("number")): pr for cohort, key in (("open", "open_prs"), ("merged", "recent_prs"))
+           for pr in reversed(data.get(key) or [])}  # reversed so the first record of a number wins
+
+    def newest(cohort, date_key):
+        pairs = [(i, raw.get((cohort, i["number"]), {})) for i in value_classification["prs"]["items"]
+                 if i["cohort"] == cohort]
+        return sorted(pairs, key=lambda pair: pair[1].get(date_key) or "", reverse=True)
+
+    open_pairs = newest("open", "createdAt")[:max_prs // 3]
+    return newest("merged", "mergedAt")[:max_prs - len(open_pairs)] + open_pairs
+
+
+def _clean_context(context):
+    """Normalize Gemini's product context; raise ValueError when it is not one."""
+    if not isinstance(context, dict):
+        raise ValueError("Gemini returned a context that is not an object")
+    canvas = context.get("lean_canvas")
+    canvas = canvas if isinstance(canvas, dict) else {}
+    goals = context.get("strategic_goals")
+    goals = goals if isinstance(goals, list) else []
+    return {"product_summary": str(context.get("product_summary") or "").strip(),
+            "value_proposition": str(context.get("value_proposition") or "").strip(),
+            "lean_canvas": {key: str(canvas[key]).strip() for key in CANVAS_KEYS if canvas.get(key)},
+            "strategic_goals": [str(goal).strip() for goal in goals if goal],
+            "missing_context": str(context.get("missing_context") or "").strip()}
 
 
 def _context_text(context):
@@ -145,6 +176,9 @@ def _clean(assessment):
         result["expected_value"] = "Unclear"
     if result["confidence"] not in CONFIDENCE_LEVELS:
         result["confidence"] = "Low"
+    if not all(result[key] for key in NARRATIVE_KEYS):  # a rating without its reasoning is unsupported
+        result["expected_value"], result["confidence"] = "Unclear", "Low"
+        result["missing_context"] = result["missing_context"] or "Gemini gave no reasoning for this PR."
     return result
 
 
@@ -179,6 +213,7 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
             repo=repo, description=sources["description"] or "(none)",
             topics=", ".join(sources["topics"]) or "(none)", homepage=sources["homepage"] or "(none)",
             readme=sources["readme"] or "(no README)"), CONTEXT_SCHEMA, 1500)
+        context = _clean_context(context)
     except Exception:  # httpx errors locally, JS fetch errors on Workers, bad answers
         return {**result, "status": "failed", "reason": "Product context could not be generated."}
     result["sources"] = {"description": bool(sources["description"]), "readme": bool(sources["readme"]),
@@ -191,7 +226,9 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
         async with limit:
             return await assess_pr(key, context_text, item, pr)
 
-    result["items"] = list(await asyncio.gather(*(bounded(item, pr) for item, pr in select_prs(data, value_classification, max_prs))))
+    selected = select_prs(data, value_classification, max_prs)
+    result["selected"] = len(selected)
+    result["items"] = list(await asyncio.gather(*(bounded(item, pr) for item, pr in selected)))
     counts = dict.fromkeys(VALUE_LEVELS, 0)
     for item in result["items"]:
         if item["status"] == "assessed":

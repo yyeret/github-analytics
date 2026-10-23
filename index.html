@@ -804,7 +804,7 @@
       return;
     }
     const sources = value.sources || {};
-    note.textContent = `${value.disclaimer} Assessed ${value.assessed} of ${value.total_prs} sampled PRs` +
+    note.textContent = `${value.disclaimer} Assessed ${value.assessed} of the ${value.selected} most recent of ${value.total_prs} sampled PRs` +
       (value.failed ? ` (${value.failed} failed)` : '') + '. ' +
       value.levels.map(level => `${level}: ${value.counts[level]}`).join(' · ') +
       `. Context from ${[sources.description && 'description', sources.readme && (sources.readme_truncated ? 'README (truncated)' : 'README')].filter(Boolean).join(' and ') || 'no repository text'} via ${value.model}.`;

@@ -27,21 +27,27 @@ def gemini_reply(answer):
 class FakeServices:
     """Answers GitHub and Gemini requests; records each Gemini prompt."""
 
-    def __init__(self, assessments=None, context_status=200, readme="# Flow analytics\nFor teams."):
+    def __init__(self, assessments=None, context_status=200, readme="# Flow analytics\nFor teams.",
+                 context=CONTEXT, private=False):
         self.assessments = assessments or {}
         self.context_status = context_status
         self.readme = readme
+        self.context = context
+        self.private = private
         self.prompts = []
+        self.urls = []
 
     async def __call__(self, url, *, headers, method="GET", body=None, timeout=15):
+        self.urls.append(url)
         if url.endswith("/readme"):
             return 200, {}, {"encoding": "base64", "content": base64.b64encode(self.readme.encode()).decode()}
         if url.startswith("https://api.github.com/repos/"):
-            return 200, {}, {"description": "Public flow analytics", "topics": ["dora"], "homepage": ""}
+            return 200, {}, {"description": "Public flow analytics", "topics": ["dora"], "homepage": "",
+                             "private": self.private}
         prompt = body["contents"][0]["parts"][0]["text"]
         self.prompts.append(prompt)
         if "## Pull request #" not in prompt:
-            return (self.context_status, {}, {}) if self.context_status != 200 else gemini_reply(CONTEXT)
+            return (self.context_status, {}, {}) if self.context_status != 200 else gemini_reply(self.context)
         number = int(prompt.split("## Pull request #")[1].split(" ")[0])
         answer = self.assessments.get(number)
         if answer is None:
@@ -74,6 +80,7 @@ def test_assesses_each_sampled_pr_against_generated_product_context(services):
     assert result["status"] == "ok"
     assert result["context"]["strategic_goals"][0] == "Trustworthy flow metrics"
     assert result["counts"] == {"High": 1, "Medium": 1, "Low": 1, "Unclear": 0}
+    assert result["selected"] == 3 and result["total_prs"] == 3
     assert [(i["number"], i["cohort"], i["expected_value"]) for i in result["items"]] == [
         (1, "merged", "High"), (2, "merged", "Low"), (3, "open", "Medium")]
     assert "realized" in result["disclaimer"]
@@ -114,6 +121,50 @@ def test_context_failure_skips_pr_assessment(services):
     assert len(fake.prompts) == 1
 
 
+@pytest.mark.parametrize("context", [["not", "an", "object"], {**CONTEXT, "lean_canvas": "text"}])
+def test_malformed_context_fails_soft_or_is_normalized(services, context):
+    services(context=context, assessments={n: assessment("Low") for n in (1, 2, 3)})
+    result = run()
+    if isinstance(context, list):
+        assert result["status"] == "failed" and "context" in result["reason"]
+    else:
+        assert result["status"] == "ok" and result["context"]["lean_canvas"] == {}
+
+
+def test_private_repository_sends_nothing_to_gemini(services):
+    fake = services(private=True)
+    result = run()
+    assert result["status"] == "failed"
+    assert fake.prompts == [] and not any(url.endswith("/readme") for url in fake.urls)
+
+
+def test_unresponsive_gemini_times_out_as_failed(monkeypatch):
+    async def hang(url, **_):
+        if "generativelanguage" in url:
+            await asyncio.sleep(10)
+        return 200, {}, {"private": False}
+
+    monkeypatch.setattr(product_value, "request_json", hang)
+    monkeypatch.setattr(product_value, "GEMINI_TIMEOUT", 0.01)
+    assert run()["status"] == "failed"
+
+
+def test_empty_reasoning_is_downgraded_to_unclear(services):
+    services(assessments={n: assessment("High", value_summary="", confidence="High") for n in (1, 2, 3)})
+    item = run()["items"][0]
+    assert (item["expected_value"], item["confidence"]) == ("Unclear", "Low")
+    assert item["missing_context"]
+
+
+def test_selection_is_most_recent_and_pairs_each_cohort_with_its_own_record():
+    data = {"recent_prs": [{"number": 1, "title": "Old", "mergedAt": "2026-01-01T00:00:00Z", "body": "merged"},
+                           {"number": 2, "title": "New", "mergedAt": "2026-09-01T00:00:00Z"}],
+            "open_prs": [{"number": 1, "title": "Old", "createdAt": "2026-10-01T00:00:00Z", "body": "open"}]}
+    selected = product_value.select_prs(data, product_value.compute_value_classification(data))
+    assert [(item["number"], item["cohort"]) for item, _ in selected] == [(2, "merged"), (1, "merged")]
+    assert selected[1][1]["body"] == "merged"
+
+
 def test_sample_is_capped_and_keeps_open_prs():
     data = {"recent_prs": [{"number": n, "title": f"PR {n}"} for n in range(1, 41)],
             "open_prs": [{"number": n, "title": f"PR {n}"} for n in range(100, 120)]}
@@ -122,7 +173,10 @@ def test_sample_is_capped_and_keeps_open_prs():
     assert len(selected) == 30 and cohorts.count("open") == 10
 
 
-def test_hosted_analysis_attaches_product_value_before_caching(monkeypatch):
+@pytest.mark.parametrize("value, ttl", [({"status": "ok", "items": []}, 21600),
+                                        ({"status": "failed", "items": []}, 600),
+                                        ({"status": "ok", "items": [], "failed": 2}, 600)])
+def test_hosted_analysis_attaches_product_value_before_caching(monkeypatch, value, ttl):
     async def allowed(_):
         return {"success": True}
 
@@ -136,16 +190,18 @@ def test_hosted_analysis_attaches_product_value_before_caching(monkeypatch):
 
     async def fake_assess(repo, raw, key, token):
         seen["args"] = (repo, raw, key)
-        return {"status": "ok", "items": []}
+        return value
 
     class Cache:
         stored = {}
+        ttls = []
 
         async def get(self, _):
             return None
 
         async def put(self, key, value, expiration_ttl):
             self.stored[key] = json.loads(value)
+            self.ttls.append(expiration_ttl)
 
     monkeypatch.setattr(hosted, "request_json", public_metadata)
     monkeypatch.setattr(hosted, "collect_public_data", collected)
@@ -156,6 +212,7 @@ def test_hosted_analysis_attaches_product_value_before_caching(monkeypatch):
                           GEMINI_API_KEY="k", ANALYTICS_CACHE=cache)
     response = hosted_client(env).post("/api/analyze", json={"repo_url": "o/r"})
     assert response.status_code == 200
-    assert response.json()["product_value"]["status"] == "ok"
+    assert response.json()["product_value"]["status"] == value["status"]
     assert seen["args"] == ("o/r", {"repo": "o/r"}, "k")
-    assert cache.stored[hosted.METRICS_CACHE_PREFIX + "o/r"]["product_value"]["status"] == "ok"
+    assert cache.stored[hosted.METRICS_CACHE_PREFIX + "o/r"]["product_value"]["status"] == value["status"]
+    assert cache.ttls[-1] == ttl
