@@ -84,7 +84,9 @@ words. A `MAX_TOKENS` finish triggers one fresh attempt with 8,192 tokens; both
 attempts share a 45-second deadline, with a 25-second limit per request. Other
 provider errors, blocked responses, and invalid JSON are not retried. Incomplete
 responses are never used to score PRs. Each PR call remains independent, so one
-failed assessment does not discard successful ones.
+failed assessment does not discard successful ones. When a deadline cancels a
+Worker request, its abort signal cancels the outgoing fetch, including a pending
+response-body read.
 
 For diagnosis, `/api/analyze` includes `product_value.analysis_id`; failures also
 include a stable `error_code` and a safe explanation. Search Worker logs for that

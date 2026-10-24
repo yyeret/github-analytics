@@ -369,28 +369,92 @@ def test_local_transport_timeout_is_reported_as_timeout(monkeypatch, services, c
 
 
 def test_retry_cannot_reset_the_shared_context_deadline(monkeypatch, services):
+    import selectors
     fake = services()
     calls = []
     clock = [0.0]
 
+    class ClockSelector(selectors.SelectSelector):
+        def select(self, timeout=None):
+            assert timeout is not None, "the context operation must always have a deadline"
+            clock[0] += timeout
+            return super().select(0)
+
     async def upstream(url, **kwargs):
         if kwargs.get('body'):
             calls.append(url)
-            clock[0] += 6
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await asyncio.sleep(6)
             if len(calls) == 1:
                 return 200, {}, {'candidates': [{'finishReason': 'MAX_TOKENS'}]}
         return await fake(url, **kwargs)
 
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        clock[0] = loop.time()
-        with monkeypatch.context() as controlled:
-            controlled.setattr(loop, 'time', lambda: clock[0])
-            return await product_value.assess_product_value('o/r', DATA, 'k')
-
     monkeypatch.setattr(product_value, 'request_json', upstream)
     monkeypatch.setattr(product_value, 'CONTEXT_TIMEOUT', 10)
-    result = asyncio.run(scenario())
+    loop = asyncio.SelectorEventLoop(selector=ClockSelector())
+    try:
+        with monkeypatch.context() as controlled:
+            controlled.setattr(loop, 'time', lambda: clock[0])
+            result = loop.run_until_complete(product_value.assess_product_value('o/r', DATA, 'k'))
+    finally:
+        loop.close()
     assert result['error_code'] == 'timeout' and len(calls) == 2
+
+
+def test_unconfigured_result_exposes_the_logged_error_code(services):
+    services()
+    result = run(key=None)
+    assert result['status'] == 'unavailable' and result['error_code'] == 'not_configured'
+    assert result['reason']
+
+
+def test_failed_pr_has_a_safe_explanation(services):
+    services()
+    result = run()
+    assert all(item['reason'] and item['error_code'] == 'provider_http_error' for item in result['items'])
+
+
+@pytest.mark.parametrize('waiting_for', ['headers', 'body'])
+@pytest.mark.parametrize('deadline', ['request', 'context'])
+def test_worker_deadlines_abort_fetch_and_body_reads(monkeypatch, waiting_for, deadline):
+    import sys
+    from types import ModuleType
+
+    controller = SimpleNamespace(signal=object(), aborted=False)
+
+    def abort():
+        controller.aborted = True
+
+    controller.abort = abort
+    seen = []
+
+    async def stalled():
+        await asyncio.Event().wait()
+
+    async def body():
+        if waiting_for == 'body':
+            await stalled()
+        return '{}'
+
+    async def fetch(url, options):
+        seen.append(options)
+        if waiting_for == 'headers':
+            await stalled()
+        return SimpleNamespace(status=200, headers=SimpleNamespace(get=lambda *args: ''), text=body)
+
+    js = ModuleType('js')
+    js.Object = SimpleNamespace(fromEntries=object())
+    js.AbortController = SimpleNamespace(new=lambda: controller)
+    js.fetch = fetch
+    ffi = ModuleType('pyodide.ffi')
+    ffi.to_js = lambda value, **_: value
+    monkeypatch.setitem(sys.modules, 'js', js)
+    monkeypatch.setitem(sys.modules, 'pyodide.ffi', ffi)
+    monkeypatch.setattr(product_value, 'GEMINI_TIMEOUT', .01 if deadline == 'request' else 1)
+    monkeypatch.setattr(product_value, 'CONTEXT_TIMEOUT', .01 if deadline == 'context' else 1)
+    expected = product_value.GenerationError if deadline == 'request' else TimeoutError
+    with pytest.raises(expected) as failure:
+        asyncio.run(product_value.generate_context('key', 'prompt', {'stage': 'product_context'}))
+    if deadline == 'request':
+        assert failure.value.code == 'timeout'
+    assert controller.aborted and len(seen) == 1
+    assert seen[0]['signal'] is controller.signal

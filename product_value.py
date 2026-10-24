@@ -138,6 +138,16 @@ def _error_code(exc, fallback="invalid_response"):
     return "timeout" if isinstance(exc, (TimeoutError, TimeoutException)) else fallback
 
 
+def _failure_reason(code):
+    return {"output_truncated": "The AI response was truncated. Please try again.",
+            "timeout": "The AI request timed out. Please try again.",
+            "provider_http_error": "The AI provider returned an error. Please try again later.",
+            "blocked_response": "The AI provider did not return an allowed response.",
+            "source_unavailable": "Repository sources could not be loaded.",
+            "invalid_response": "The AI provider returned an unreadable response.",
+            "transport_error": "The AI provider could not be reached."}[code]
+
+
 async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None, attempt=1):
     started = time.monotonic()
     info = {**(diagnostics or {}), "model": MODEL, "attempt": attempt, "max_output_tokens": max_tokens}
@@ -263,7 +273,7 @@ async def assess_pr(key, context_text, item, pr, *, diagnostics=None):
         if not isinstance(exc, GenerationError):
             log_event(logging.WARNING, "pr_assessment_failed", **info, error_code=code,
                       elapsed_ms=round((time.monotonic() - started) * 1000))
-        return {**base, "status": "failed", "error_code": code}
+        return {**base, "status": "failed", "error_code": code, "reason": _failure_reason(code)}
 
 
 async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_PRS):
@@ -281,7 +291,8 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
     if not key:
         log_event(logging.WARNING, "product_value_unavailable", **diagnostics, stage="product_context",
                   error_code="not_configured", elapsed_ms=round((time.monotonic() - started) * 1000))
-        return {**result, "status": "unavailable", "reason": "No Gemini API key is configured."}
+        return {**result, "status": "unavailable", "error_code": "not_configured",
+                "reason": "No Gemini API key is configured."}
     stage = "product_sources"
     try:
         sources = await fetch_product_sources(repo, token)
@@ -299,13 +310,7 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
         code = _error_code(exc, "source_unavailable" if stage == "product_sources" else "invalid_response")
         log_event(logging.ERROR, "product_value_failed", **diagnostics, stage=stage, error_code=code,
                   elapsed_ms=round((time.monotonic() - started) * 1000))
-        reason = {"output_truncated": "Product context was truncated after two generation attempts.",
-                  "timeout": "Product context generation timed out. Please try again.",
-                  "provider_http_error": "The AI provider rejected product context generation. Please try again later.",
-                  "blocked_response": "The AI provider did not return an allowed product context response.",
-                  "source_unavailable": "Repository sources for product context could not be loaded.",
-                  "invalid_response": "The AI provider returned an unreadable product context response.",
-                  "transport_error": "The AI provider could not be reached for product context generation."}[code]
+        reason = f"Product context could not be generated. {_failure_reason(code)}"
         return {**result, "status": "failed", "error_code": code, "reason": reason}
     result["context"] = context
     context_text = _context_text(context)

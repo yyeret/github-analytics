@@ -1,5 +1,6 @@
 """GitHub JSON requests using Workers fetch in production and httpx locally."""
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -34,7 +35,7 @@ async def request_json(
     request headers. A CPython/httpx fallback keeps local development simple.
     """
     try:
-        from js import Object, fetch as js_fetch
+        from js import AbortController, Object, fetch as js_fetch
         from pyodide.ffi import to_js
     except (ImportError, ModuleNotFoundError):
         import httpx
@@ -46,17 +47,23 @@ async def request_json(
         text = response.text
     else:
         worker_headers = dict(headers)
-        options: dict[str, Any] = {"method": method, "headers": worker_headers}
+        controller = AbortController.new()
+        options: dict[str, Any] = {"method": method, "headers": worker_headers, "signal": controller.signal}
         if body is not None:
             worker_headers.setdefault("Content-Type", "application/json")
             options["body"] = json.dumps(body, separators=(",", ":"))
-        response = await js_fetch(url, to_js(options, dict_converter=Object.fromEntries))
-        status = response.status
-        response_headers = {
-            name: response.headers.get(name, "")
-            for name in ("content-type", "server", "cf-ray", "x-github-request-id", "x-ratelimit-remaining")
-        }
-        text = await response.text()
+        try:
+            response = await js_fetch(url, to_js(options, dict_converter=Object.fromEntries))
+            status = response.status
+            response_headers = {
+                name: response.headers.get(name, "")
+                for name in ("content-type", "server", "cf-ray", "x-github-request-id", "x-ratelimit-remaining")
+            }
+            text = await response.text()
+        except asyncio.CancelledError:
+            controller.abort()
+            raise
+
 
     try:
         payload = json.loads(text)
