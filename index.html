@@ -730,6 +730,19 @@
   }
 
   // ── Analyze Repo ───────────────────────────────────────────────────
+  async function readApiResponse(response) {
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(`Server returned an invalid response (HTTP ${response.status}). Please try again.`);
+    }
+    if (!response.ok) {
+      throw new Error(typeof data?.detail === 'string' ? data.detail : `Request failed (HTTP ${response.status}).`);
+    }
+    return data;
+  }
+
   async function analyzeRepo() {
     const input = document.getElementById('repo-input').value.trim();
     if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
@@ -746,11 +759,7 @@
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ repo_url: input, force_refresh: false })
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
+      const data = await readApiResponse(res);
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
@@ -1408,22 +1417,17 @@
 
       thinking.remove();
 
-      if (!res.ok) {
-        const err = await res.json();
-        addChatMessage('assistant', `⚠️ ${err.detail || 'Something went wrong.'}`);
-      } else {
-        const data = await res.json();
-        addChatMessage('assistant', data.reply);
+      const data = await readApiResponse(res);
+      addChatMessage('assistant', data.reply);
 
-        // Badge if chat is closed
-        if (!chatOpen) {
-          document.getElementById('chat-toggle').classList.add('has-response');
-          document.getElementById('chat-badge').style.display = 'flex';
-        }
+      // Badge if chat is closed
+      if (!chatOpen) {
+        document.getElementById('chat-toggle').classList.add('has-response');
+        document.getElementById('chat-badge').style.display = 'flex';
       }
     } catch(e) {
       thinking.remove();
-      addChatMessage('assistant', `⚠️ Network error: ${e.message}`);
+      addChatMessage('assistant', `⚠️ ${e.message}`);
     } finally {
       sendBtn.disabled = false;
     }
