@@ -10,18 +10,22 @@ from tests.integration.test_security_boundaries import hosted, hosted_client
     ('X-TypeSafe-Api-Key', ('server-g', 'caller-key')),
     ('X-Gemini-Api-Key', ('caller-key', 'server-j')),
 ])
-def test_caller_analysis_can_chat_without_sharing_its_result(monkeypatch, header, expected):
+@pytest.mark.parametrize('assessment_status,expected_ttl', [('ok', 21600), ('unavailable', 600)])
+def test_caller_analysis_can_chat_without_sharing_its_result(monkeypatch, header, expected, assessment_status, expected_ttl):
     seen = []
     async def allowed(_): return {'success': True}
     async def public(*_, **__): return 200, {}, {'private': False}
     async def collect(repo, token): return {'repo': repo}
     async def assess(repo, raw, gemini, token, *, jev_key=None):
         seen.append((gemini, jev_key))
-        return {'status': 'ok', 'items': []}
+        return {'status': assessment_status, 'items': []}
     class Cache:
         stored = {}
+        ttls = []
         async def get(self, key): return self.stored.get(key)
-        async def put(self, key, value, expiration_ttl): self.stored[key] = value
+        async def put(self, key, value, expiration_ttl):
+            self.stored[key] = value
+            self.ttls.append(expiration_ttl)
     class AI:
         async def __aenter__(self): return self
         async def __aexit__(self, *_): pass
@@ -44,6 +48,7 @@ def test_caller_analysis_can_chat_without_sharing_its_result(monkeypatch, header
     assert hosted.METRICS_CACHE_PREFIX + 'o/r' not in cache.stored
     assert all('session-a' not in key for key in cache.stored)
     assert all('caller-key' not in value for value in cache.stored.values())
+    assert cache.ttls[-1] == expected_ttl
     payload = {'repo': 'o/r', 'message': 'What next?', 'analysis_id': analysis_id}
     reply = owner.post('/api/chat', json=payload)
     assert reply.status_code == 200 and reply.json()['reply'] == 'Coach works.'
@@ -56,3 +61,10 @@ def test_caller_analysis_can_chat_without_sharing_its_result(monkeypatch, header
     result = other.post('/api/analyze', json={'repo_url': 'o/r'})
     assert result.status_code == 200 and 'analysis_id' not in result.json()
     assert other.post('/api/chat', json={'repo': 'o/r', 'message': 'What next?'}).status_code == 200
+    assert cache.ttls[-1] == expected_ttl
+    # Auth-disabled development must not silently select the default-key snapshot.
+    anonymous = hosted_client(env)
+    result = anonymous.post('/api/analyze', json={'repo_url': 'o/r'}, headers={header: 'caller-key'})
+    assert result.status_code == 200
+    assert anonymous.post('/api/chat', json={'repo': 'o/r', 'message': 'What next?',
+                                           'analysis_id': result.json()['analysis_id']}).status_code == 401

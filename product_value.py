@@ -18,6 +18,7 @@ GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:g
 JEV_MODEL = "jev-1.14.0"
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_TIMEOUT = 20
+ASSESSMENT_TIMEOUT = 90
 FIBONACCI = [1, 2, 3, 5, 8, 13]
 DIMENSIONS = {
     "value": {
@@ -233,6 +234,8 @@ async def assess_pr(key, context, item, pr):
 
 async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_PRS, *, jev_key=None):
     """One Gemini context request, then four Jev scores in one request per PR."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + ASSESSMENT_TIMEOUT
     classification = compute_value_classification(data)
     result = {"method": "jev", "model": JEV_MODEL, "context_model": MODEL, "version": VERSION,
               "scale": FIBONACCI, "dimensions": {name: spec["label"] for name, spec in DIMENSIONS.items()},
@@ -253,11 +256,28 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
                          "readme_truncated": sources["readme_truncated"]}
     result["context"] = context
     limit = asyncio.Semaphore(CONCURRENCY)
+    def deadline_failure(item):
+        return {"number": item["number"], "title": item["title"], "cohort": item["cohort"],
+                "framing": item["level"], "cost_of_delay": None, "status": "failed", "reason": "assessment_deadline"}
     async def bounded(item, pr):
         async with limit:
+            if loop.time() >= deadline:
+                return deadline_failure(item)
             return await assess_pr(jev_key, context, item, pr)
     selected = select_prs(data, classification, max_prs)
     result["selected"] = len(selected)
-    result["items"] = list(await asyncio.gather(*(bounded(item, pr) for item, pr in selected)))
+    tasks = [asyncio.create_task(bounded(item, pr)) for item, pr in selected]
+    try:
+        if tasks:
+            await asyncio.wait(tasks, timeout=max(0, deadline - loop.time()))
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    result["items"] = [
+        deadline_failure(item) if task.cancelled() else task.result()
+        for (item, _), task in zip(selected, tasks)
+    ]
     assessed = sum(i["status"] == "assessed" for i in result["items"])
     return {**result, "status": "ok", "assessed": assessed, "failed": len(selected) - assessed}

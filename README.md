@@ -74,8 +74,9 @@ Each sampled PR receives four independent Jev classifications, each mapped to
 **Cost of delay = value + time criticality + opportunity runway + risk reduction.**
 The total ranges from 4 to 52. These are relative estimates, not money, measured
 impact or WSJF; no job-size divisor is used. Merged PRs are assessed retrospectively.
-A low score means low evidenced contribution; missing provider answers are failures,
-not zero scores. Lack of a stated deadline does not imply urgency.
+A low total means low estimated cost of delay across these four elements; inspect
+the separate value score before judging user benefit. Missing provider answers are
+failures, not zero scores. Lack of a stated deadline does not imply urgency.
 
 One Gemini call infers product context and strategic goals from public repository
 metadata and README (up to 12,000 characters). Jev receives that compact context
@@ -103,20 +104,27 @@ X-Gemini-Api-Key: <your Gemini key>
 
 Omit either header to use its configured default. Keys stay server-side when set
 as runtime secrets; caller-supplied keys travel over HTTPS, are not persisted in
-browser storage or analysis results, and bypass the shared analysis cache. The
+browser storage or analysis results. Hosted caller-key requests bypass the shared analysis cache. The
 hosted API still requires a Google session; provider keys do not grant app access.
 Caller-key hosted responses include an `analysis_id` tied to the signed-in session.
 Pass it to `/api/chat` to coach against that exact analysis; these snapshots expire
 after the normal analysis TTL and cannot be read from another session. Chat still
-uses the deployment Gemini key.
+uses the deployment Gemini key. Coaching caller-key hosted results requires a
+signed-in session, including when authentication is disabled for development;
+without one, chat returns 401 rather than selecting a shared result.
+The local development server is a single-user localhost tool: its process-wide
+coaching cache is shared by clients of that process. Use the authenticated hosted
+entry point for multiple users.
 Model or configuration failures leave other repository metrics available. Default-key
 hosted results cache for six hours, shortened to ten minutes after assessment
-failures. Force-refresh after changing deployment keys.
+failures or unavailable provider configuration. Force-refresh after changing deployment keys.
+Each caller-key analysis starts fresh provider requests; avoid concurrent retries.
 
 Only public repositories are assessed. The README is fetched without a GitHub
 token so a visibility transition cannot expose private content. A refused or
 rate-limited README falls back to metadata. Review inferred context and scores
-before using them to prioritize work.
+before using them to prioritize work. Assessments have a 90-second overall budget;
+completed PR scores are retained and unfinished items are marked failed on expiry.
 
 ## Cloudflare deployment
 

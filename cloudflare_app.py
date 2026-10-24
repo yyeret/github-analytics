@@ -254,15 +254,16 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
     gemini_key = request.headers.get("X-Gemini-Api-Key") or (getattr(env, "GEMINI_API_KEY", None) if env else None)
     jev_key = request.headers.get("X-TypeSafe-Api-Key") or (getattr(env, "TYPESAFE_API_KEY", None) if env else None)
     metrics["product_value"] = await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key)
-    if caller_keys and env and request.cookies.get(SESSION_COOKIE):
-        cache = getattr(env, "ANALYTICS_CACHE", None)
-        if cache:
-            metrics["analysis_id"] = secrets.token_urlsafe(24)
-            cache_key = session_analysis_key(repo, request, metrics["analysis_id"])
+    if caller_keys:
+        metrics["analysis_id"] = secrets.token_urlsafe(24)
+        if env and request.cookies.get(SESSION_COOKIE):
+            cache = getattr(env, "ANALYTICS_CACHE", None)
+            if cache:
+                cache_key = session_analysis_key(repo, request, metrics["analysis_id"])
     if cache:
         value = metrics["product_value"]
         # Keep provider failures briefly so a later analysis can recover once the service does.
-        ttl = 600 if value.get("status") == "failed" or value.get("failed") else 21600
+        ttl = 600 if value.get("status") in ("failed", "unavailable") or value.get("failed") else 21600
         await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=ttl)
     return metrics
 

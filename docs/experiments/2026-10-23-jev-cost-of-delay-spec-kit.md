@@ -9,12 +9,14 @@ Local implementation: four independent Fibonacci scores, summed in code. This is
 - One earlier fresh-context API trial stopped at context generation. A subsequent diagnostic Gemini call produced valid context; that exact response was reused for the scoring run.
 - Four Jev Score questions share one request per PR. Each dimension uses the highest-probability level, mapped to `1, 2, 3, 5, 8, 13`; code sums those four scores. Ties choose the lower level.
 - All 30 time-criticality scores were 1: no imminent deadlines or active incidents were evidenced in the selected PR text. Do not equate this with a confirmed absence of urgency.
-- The 30 Jev requests used 54,340 input tokens. Exact request/response pairs are in ignored `.cache/jev-cost-of-delay/live-jev-requests.jsonl`; full API result is `spec-kit-jev-api-response.json`.
+- The 30 Jev requests used 54,340 input tokens. Exact request/response pairs and the full API result are local, ignored files under `.cache/jev-cost-of-delay/`: `live-jev-requests.jsonl` and `spec-kit-jev-api-response.json`. They are not included in this repository; the sample table below is the published evidence.
 - Request keys override configured defaults, do not mutate process environment, and bypass hosted shared caches. Caller-funded coaching snapshots use an opaque analysis ID scoped to the authenticated session. No keys occur in saved request/response evidence.
-- Automated suite: 257 passed, 94.14% coverage. Ruff, six security stages, JavaScript syntax and renderer smoke checks passed. Browser layout was not exercised, following the API-first request.
+- Automated suite after PR feedback: 262 passed, 94.04% coverage. Ruff, six security stages, JavaScript syntax and renderer smoke checks passed. Browser layout was not exercised, following the API-first request.
 - Compound Engineering code review completed (`jev-cost-of-delay-f80dca31`). Its one actionable finding, preserving hosted coaching for caller-key analyses, was fixed and verified with a failing-then-passing regression test. Same-session access works; other sessions cannot retrieve the snapshot. Separate tests cover single-header overrides, lower-score ties, malformed distributions, and Jev timeout isolation. The external peer attempt failed on expired OAuth; the review used its local adversarial fallback.
 
 Two synthetic contrast probes used the same rubric: an actively exploited account-takeover incident with a four-hour deadline scored 13/13/3/8 (total 37), while cosmetic footer spacing scored 1/1/1/1 (total 4). These are checks of discrimination, not calibration evidence.
+
+PR follow-up adds a 90-second total assessment budget that preserves completed scores, shortens unavailable-configuration caching to ten minutes, and prevents anonymous hosted chat from falling back to a different analysis. The local server remains a trusted single-user process. Each caller-key request starts a separate analysis; no cross-request deduplication contract is provided.
 
 ## Sample results
 
