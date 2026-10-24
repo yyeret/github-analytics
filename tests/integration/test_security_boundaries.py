@@ -136,6 +136,26 @@ def test_hosted_redacts_collector_errors(monkeypatch):
     assert 'sensitive-credential-sentinel' not in response.text
 
 
+@pytest.mark.parametrize('bad_payload', [
+    {'message': 'upstream-private-sentinel'}, 'upstream-private-sentinel', ['not a PR'],
+])
+def test_hosted_malformed_pull_page_returns_json_error(monkeypatch, bad_payload):
+    import github_api
+    async def metadata(*args, **kwargs): return 200, {}, {'private': False}
+    async def allowed(_): return {'success': True}
+    async def upstream(*args, **kwargs): return 200, {}, bad_payload
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(github_api, 'request_json', upstream)
+    env = SimpleNamespace(AUTH_REQUIRED='false', ANALYZE_LIMIT=SimpleNamespace(limit=allowed))
+    async def wrapped(scope, receive, send):
+        scope['env'] = env
+        await hosted.app(scope, receive, send)
+    response = TestClient(wrapped, raise_server_exceptions=False).post('/api/analyze', json={'repo_url': 'github/spec-kit'})
+    assert response.status_code == 502, response.text
+    assert response.json()['detail'] == 'Repository analysis failed. Please try again.'
+    assert 'upstream-private-sentinel' not in response.text
+
+
 def test_web_collection_does_not_follow_enterprise_host(monkeypatch):
     from tests.factories import graphql_response
     monkeypatch.setenv('GH_HOST', 'enterprise.example')

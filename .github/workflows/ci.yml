@@ -42,6 +42,10 @@ jobs:
       - name: Test with coverage
         run: pytest --cov --cov-report=term-missing --cov-report=xml
 
+      - name: Test dashboard API responses
+        if: matrix.python-version == '3.13'
+        run: node --test tests/frontend/*.test.cjs
+
       - name: Upload coverage report
         if: matrix.python-version == '3.13'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
