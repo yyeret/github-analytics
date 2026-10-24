@@ -17,7 +17,7 @@ from google_auth import verify_id_token
 from product_value import assess_product_value
 
 app = FastAPI(title="GitHub Flow Analytics")
-METRICS_CACHE_PREFIX = "metrics:v3:"
+METRICS_CACHE_PREFIX = "metrics:v4:"
 SESSION_COOKIE = "gha_session"
 NONCE_COOKIE = "gha_nonce"
 SESSION_SECONDS = 60 * 60 * 24 * 14
@@ -46,6 +46,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     repo: str = Field(max_length=200)
+    analysis_id: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
     message: str = Field(max_length=2000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=10)
 
@@ -214,6 +215,14 @@ async def public_repo_exists(repo: str, token: str | None) -> None:
         raise HTTPException(status_code=400, detail="Only public repositories are supported.")
 
 
+def session_analysis_key(repo, request, analysis_id):
+    session = getattr(request, "cookies", {}).get(SESSION_COOKIE)
+    if not session:
+        raise HTTPException(status_code=401, detail="Sign in to use this analysis.")
+    digest = hashlib.sha256(session.encode()).hexdigest()
+    return f"{METRICS_CACHE_PREFIX}{repo.lower()}:session:{digest}:{analysis_id}"
+
+
 @app.get("/api/health")
 async def health():
     return {"ok": True}
@@ -228,7 +237,8 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
     env = request.scope.get("env")
     token = getattr(env, "GITHUB_TOKEN", None) if env else None
     await public_repo_exists(repo, token)
-    cache = getattr(env, "ANALYTICS_CACHE", None) if env else None
+    caller_keys = request.headers.get("X-Gemini-Api-Key") or request.headers.get("X-TypeSafe-Api-Key")
+    cache = getattr(env, "ANALYTICS_CACHE", None) if env and not caller_keys else None
     cache_key = f"{METRICS_CACHE_PREFIX}{repo.lower()}"
     if cache and not req.force_refresh:
         saved = await cache.get(cache_key)
@@ -241,10 +251,17 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
         raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
     if not metrics.get("recent_stats", {}).get("total"):
         raise HTTPException(status_code=422, detail="No merged pull requests were found for this public repository.")
-    metrics["product_value"] = await assess_product_value(repo, raw, getattr(env, "GEMINI_API_KEY", None) if env else None, token)
+    gemini_key = request.headers.get("X-Gemini-Api-Key") or (getattr(env, "GEMINI_API_KEY", None) if env else None)
+    jev_key = request.headers.get("X-TypeSafe-Api-Key") or (getattr(env, "TYPESAFE_API_KEY", None) if env else None)
+    metrics["product_value"] = await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key)
+    if caller_keys and env and request.cookies.get(SESSION_COOKIE):
+        cache = getattr(env, "ANALYTICS_CACHE", None)
+        if cache:
+            metrics["analysis_id"] = secrets.token_urlsafe(24)
+            cache_key = session_analysis_key(repo, request, metrics["analysis_id"])
     if cache:
         value = metrics["product_value"]
-        # Keep Gemini failures briefly so a later analysis can recover once the service does.
+        # Keep provider failures briefly so a later analysis can recover once the service does.
         ttl = 600 if value.get("status") == "failed" or value.get("failed") else 21600
         await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=ttl)
     return metrics
@@ -306,7 +323,8 @@ async def chat(req: ChatRequest, request: Request):
     cache = getattr(env, "ANALYTICS_CACHE", None) if env else None
     if cache is None:
         raise HTTPException(status_code=503, detail="Analysis cache is not configured yet.")
-    saved = await cache.get(f"{METRICS_CACHE_PREFIX}{repo.lower()}")
+    cache_key = session_analysis_key(repo, request, req.analysis_id) if req.analysis_id else f"{METRICS_CACHE_PREFIX}{repo.lower()}"
+    saved = await cache.get(cache_key)
     if not saved:
         raise HTTPException(status_code=409, detail="This analysis expired. Click Analyze again to refresh the coach.")
     metrics = json.loads(saved)

@@ -500,6 +500,15 @@
   <div id="status-bar"></div>
 
   <!-- Placeholder -->
+  <details style="margin-bottom:1rem">
+    <summary>AI assessment API keys (optional)</summary>
+    <p>Use your own keys for this analysis, or leave blank to use configured server keys. Keys are sent securely to this app and kept out of browser storage and saved results.</p>
+    <label for="typesafe-key">TypeSafe / Jev key</label>
+    <input id="typesafe-key" type="password" autocomplete="off" placeholder="TypeSafe API key">
+    <label for="gemini-key">Gemini key</label>
+    <input id="gemini-key" type="password" autocomplete="off" placeholder="Gemini API key">
+  </details>
+
   <div id="placeholder">
     <div class="placeholder-icon">📊</div>
     <h2>No repository loaded yet</h2>
@@ -580,7 +589,7 @@
         <div style="overflow-x:auto;max-height:420px"><table class="issue-table" id="value-items"></table></div>
       </div>
       <div class="chart-card charts-full" id="product-value-card" style="display:none">
-        <div class="chart-title">Expected product value (PRs)</div>
+        <div class="chart-title">Expected cost of delay (PRs)</div>
         <p class="issue-note" id="product-value-note"></p>
         <div id="product-value-context"></div>
         <div style="overflow-x:auto;max-height:520px"><table class="issue-table" id="product-value-items"></table></div>
@@ -741,9 +750,14 @@
     clearStatus();
 
     try {
+      const headers = {'Content-Type':'application/json'};
+      for (const [id, header] of [['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
+        const key = document.getElementById(id).value.trim();
+        if (key) headers[header] = key;
+      }
       const res = await fetch('/api/analyze', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers,
         body: JSON.stringify({ repo_url: input, force_refresh: false })
       });
       if (!res.ok) {
@@ -804,28 +818,29 @@
       return;
     }
     const sources = value.sources || {};
-    note.textContent = `${value.disclaimer} Assessed ${value.assessed} of the ${value.selected} most recent of ${value.total_prs} sampled PRs` +
-      (value.failed ? ` (${value.failed} failed)` : '') + '. ' +
-      value.levels.map(level => `${level}: ${value.counts[level]}`).join(' · ') +
-      `. Context from ${[sources.description && 'description', sources.readme && (sources.readme_truncated ? 'README (truncated)' : 'README')].filter(Boolean).join(' and ') || 'no repository text'} via ${value.model}.`;
+    note.textContent = `${value.disclaimer} Assessed ${value.assessed} of ${value.selected} selected PRs` +
+      (value.failed ? ` (${value.failed} failed)` : '') +
+      `. Scores: ${value.model}; product context: ${value.context_model}. ` +
+      `Context from ${[sources.description && 'description', sources.readme && (sources.readme_truncated ? 'README (truncated)' : 'README')].filter(Boolean).join(' and ') || 'repository metadata'}.`;
     const ctx = value.context || {};
     const goals = (ctx.strategic_goals || []).map(goal => `<li>${escapeHtml(goal)}</li>`).join('');
-    const canvas = Object.entries(ctx.lean_canvas || {}).map(([key, text]) =>
-      `<tr><td>${escapeHtml(key.replace(/_/g, ' '))}</td><td>${escapeHtml(text)}</td></tr>`).join('');
     contextEl.innerHTML = `<p><strong>Product:</strong> ${escapeHtml(ctx.product_summary || 'Unknown')}</p>` +
       `<p><strong>Value proposition:</strong> ${escapeHtml(ctx.value_proposition || 'Unknown')}</p>` +
-      (goals ? `<p><strong>Strategic goals (inferred)</strong></p><ol>${goals}</ol>` : '') +
-      (canvas ? `<details><summary>Lean canvas (inferred)</summary><table class="issue-table">${canvas}</table></details>` : '') +
+      (goals ? `<p><strong>Strategic direction (inferred)</strong></p><ol>${goals}</ol>` : '') +
       (ctx.missing_context ? `<p class="issue-note">Missing context: ${escapeHtml(ctx.missing_context)}</p>` : '');
-    table.innerHTML = '<thead><tr><th>PR</th><th>State</th><th>Framing</th><th>Expected value</th><th>What, who, why</th><th>Uncertainty</th></tr></thead><tbody>' +
-      (value.items.map(item => item.status !== 'assessed' ?
-        `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td><td colspan="3">Assessment failed.</td></tr>` :
-        `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td>` +
-        `<td>${escapeHtml(item.expected_value)}<br><span class="issue-note">${escapeHtml(item.confidence)} confidence</span></td>` +
-        `<td>${escapeHtml(item.value_summary)}<br><strong>Benefits:</strong> ${escapeHtml(item.beneficiaries)}<br><strong>Why:</strong> ${escapeHtml(item.why_it_matters)}` +
-        (item.strategic_goal && item.strategic_goal !== 'None' ? `<br><strong>Goal:</strong> ${escapeHtml(item.strategic_goal)}` : '') + '</td>' +
-        `<td>${escapeHtml(item.missing_context)}</td></tr>`).join('') ||
-       '<tr><td colspan="6">No PRs in this sample.</td></tr>') + '</tbody>';
+    const dimensions = Object.entries(value.dimensions || {});
+    table.innerHTML = '<thead><tr><th>PR</th><th>State</th><th>Framing</th>' +
+      dimensions.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('') +
+      '<th>Cost of delay</th></tr></thead><tbody>' +
+      (value.items.map(item => {
+        const lead = `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td>`;
+        if (item.status !== 'assessed') return lead + `<td colspan="${dimensions.length + 1}">Not scored: ${escapeHtml(item.reason || 'assessment unavailable')}.</td></tr>`;
+        return lead + dimensions.map(([name]) => {
+          const d = item.dimensions[name];
+          return `<td><strong>${escapeHtml(d.score)}</strong><br><span class="issue-note">${escapeHtml(d.rubric)}</span>` +
+            `<details><summary>Model uncertainty</summary>${Object.entries(d.probabilities).map(([score, probability]) => `${escapeHtml(score)}: ${(probability * 100).toFixed(0)}%`).join(' · ')}</details></td>`;
+        }).join('') + `<td><strong>${escapeHtml(item.cost_of_delay)}</strong></td></tr>`;
+      }).join('') || `<tr><td colspan="${dimensions.length + 4}">No PRs in this sample.</td></tr>`) + '</tbody>';
   }
 
   let valueClassification = null;
@@ -1401,6 +1416,7 @@
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           repo: currentRepo,
+          analysis_id: currentMetrics?.analysis_id,
           message,
           history: previousHistory,
         })
