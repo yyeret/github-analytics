@@ -32,7 +32,7 @@ def fake_genai(monkeypatch):
 def analyzed(client, monkeypatch):
     seen = {}
 
-    def fake_run(repo, force):
+    def fake_run(repo, force, *_):
         seen["args"] = (repo, force)
         return dict(SAMPLE_METRICS, repo=repo)
 
@@ -63,7 +63,7 @@ def test_analyze_bad_url_is_400(client, analyzed):
 
 
 def test_analyze_failure_is_500_and_not_cached(client, monkeypatch):
-    def boom(repo, force):
+    def boom(repo, force, *_):
         raise RuntimeError("gh exploded")
     monkeypatch.setattr(app_module, "_run_analysis", boom)
     r = client.post("/api/analyze", json={"repo_url": "o/r"})

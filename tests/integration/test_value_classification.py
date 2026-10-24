@@ -14,7 +14,7 @@ def bundle():
 
 
 def test_api_exposes_content_classification_separately_from_ai_mix(monkeypatch):
-    monkeypatch.setattr(app, '_run_analysis', lambda repo, force: analyze.compute_flow_metrics(bundle()))
+    monkeypatch.setattr(app, '_run_analysis', lambda repo, force, *_: analyze.compute_flow_metrics(bundle()))
     with TestClient(app.app, base_url="http://localhost") as client:
         response = client.post('/api/analyze', json={'repo_url': 'acme/widgets'})
     assert response.status_code == 200
