@@ -9,11 +9,16 @@ and it is kept separate from the rule-based content framing.
 import asyncio
 import base64
 import json
+import logging
+import time
+import uuid
 
-from github_api import request_json
+from httpx import TimeoutException
+
+from github_api import log_event, request_json
 from value_classification import compute_value_classification
 
-VERSION = "gemini-product-value-1"
+VERSION = "gemini-product-value-2"
 MODEL = "gemini-3.5-flash-lite"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 VALUE_LEVELS = ["High", "Medium", "Low", "Unclear"]
@@ -23,6 +28,8 @@ README_CHARS = 12_000
 BODY_CHARS = 4_000
 CONCURRENCY = 5
 GEMINI_TIMEOUT = 25
+CONTEXT_TIMEOUT = 45
+CONTEXT_TOKEN_BUDGETS = (4096, 8192)
 CANVAS_KEYS = ("customer_segments", "problem", "solution", "unique_value_proposition",
                "channels", "revenue_streams", "cost_structure", "key_metrics", "unfair_advantage")
 NARRATIVE_KEYS = ("value_summary", "beneficiaries", "why_it_matters")
@@ -54,6 +61,9 @@ which changes matter to it. Use only the evidence below. Where the evidence is s
 rather than guessing, and list what is missing in missing_context.
 Return a short product summary, a one-sentence value proposition, a lean canvas, and the 3 to 5
 strategic goals the repository appears focused on now, most important first.
+Keep the entire answer under 600 words. Use one short sentence per lean canvas field and strategic
+goal, and at most two sentences each for the summary and missing context.
+Summarize in your own words. Do not quote or reproduce passages from the README.
 
 Repository: {repo}
 Description: {description}
@@ -116,20 +126,84 @@ async def fetch_product_sources(repo, token=None):
             "readme_truncated": len(text) > README_CHARS}
 
 
-async def gemini_json(key, prompt, schema, max_tokens=1200):
-    """Call Gemini for a structured JSON answer; raise ValueError on any failure."""
+class GenerationError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def _error_code(exc, fallback="invalid_response"):
+    if isinstance(exc, GenerationError):
+        return exc.code
+    return "timeout" if isinstance(exc, (TimeoutError, TimeoutException)) else fallback
+
+
+def _failure_reason(code):
+    return {"output_truncated": "The AI response was truncated. Please try again.",
+            "timeout": "The AI request timed out. Please try again.",
+            "provider_http_error": "The AI provider returned an error. Please try again later.",
+            "blocked_response": "The AI provider did not return an allowed response.",
+            "source_unavailable": "Repository sources could not be loaded.",
+            "invalid_response": "The AI provider returned an unreadable response.",
+            "transport_error": "The AI provider could not be reached."}[code]
+
+
+async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None, attempt=1):
+    started = time.monotonic()
+    info = {**(diagnostics or {}), "model": MODEL, "attempt": attempt, "max_output_tokens": max_tokens}
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens,
                                  "responseMimeType": "application/json", "responseSchema": schema}}
-    status, _, payload = await _request(GEMINI_URL, GEMINI_TIMEOUT, method="POST",
-                                        headers={"x-goog-api-key": key}, body=body)
-    if status < 200 or status >= 300:
-        raise ValueError(f"Gemini returned HTTP {status}")
+    code = None
+    fallback = "transport_error"
     try:
-        parts = payload["candidates"][0]["content"]["parts"]
+        status, _, payload = await _request(GEMINI_URL, GEMINI_TIMEOUT, method="POST",
+                                            headers={"x-goog-api-key": key}, body=body)
+        info["http_status"] = status
+        if status < 200 or status >= 300:
+            raise GenerationError("provider_http_error")
+        fallback = "invalid_response"
+        usage = payload.get("usageMetadata", {})
+        if isinstance(usage, dict):
+            info["usage"] = {k: v for k, v in usage.items() if k in (
+                "promptTokenCount", "candidatesTokenCount", "totalTokenCount", "thoughtsTokenCount")
+                and type(v) is int and v >= 0}
+        feedback = payload.get("promptFeedback", {})
+        if isinstance(feedback, dict) and feedback.get("blockReason"):
+            raise GenerationError("blocked_response")
+        candidate = payload["candidates"][0]
+        finish = candidate.get("finishReason")
+        info["finish_reason"] = finish if finish in ("STOP", "MAX_TOKENS", "SAFETY", "RECITATION") else "OTHER"
+        if finish == "MAX_TOKENS":
+            raise GenerationError("output_truncated")
+        if finish != "STOP":
+            raise GenerationError("blocked_response")
+        parts = candidate["content"]["parts"]
         return json.loads("".join(part.get("text", "") for part in parts))
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise ValueError("Gemini returned an unreadable answer") from exc
+    except asyncio.CancelledError:
+        code = "cancelled"
+        raise
+    except Exception as exc:
+        code = _error_code(exc, fallback)
+        raise GenerationError(code) from None
+    finally:
+        info["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        info["outcome"] = "failed" if code else "completed"
+        if code:
+            info["error_code"] = code
+        log_event(logging.WARNING if code else logging.INFO, "gemini_generation", **info)
+
+
+async def generate_context(key, prompt, diagnostics):
+    async def attempts():
+        for attempt, budget in enumerate(CONTEXT_TOKEN_BUDGETS, 1):
+            try:
+                return await gemini_json(key, prompt, CONTEXT_SCHEMA, budget,
+                                         diagnostics=diagnostics, attempt=attempt)
+            except GenerationError as exc:
+                if exc.code != "output_truncated" or attempt == len(CONTEXT_TOKEN_BUDGETS):
+                    raise
+    return await asyncio.wait_for(attempts(), CONTEXT_TIMEOUT)
 
 
 def select_prs(data, value_classification, max_prs=DEFAULT_MAX_PRS):
@@ -182,17 +256,24 @@ def _clean(assessment):
     return result
 
 
-async def assess_pr(key, context_text, item, pr):
+async def assess_pr(key, context_text, item, pr, *, diagnostics=None):
     prompt = ASSESSMENT_PROMPT.format(
         context=context_text, number=item["number"], cohort=item["cohort"], title=item["title"],
         size=(pr.get("additions") or 0) + (pr.get("deletions") or 0) or "unknown",
         framing=item["level"], rationale=item["rationale"],
         body=(pr.get("body") or "(no body)")[:BODY_CHARS])
     base = {"number": item["number"], "title": item["title"], "cohort": item["cohort"], "framing": item["level"]}
+    started = time.monotonic()
+    info = {**(diagnostics or {}), "stage": "pr_assessment", "pr_number": item["number"], "cohort": item["cohort"]}
     try:
-        return {**base, "status": "assessed", **_clean(await gemini_json(key, prompt, ASSESSMENT_SCHEMA, 600))}
-    except Exception:  # one failed PR must not lose the others
-        return {**base, "status": "failed"}
+        return {**base, "status": "assessed", **_clean(await gemini_json(
+            key, prompt, ASSESSMENT_SCHEMA, 600, diagnostics=info))}
+    except Exception as exc:
+        code = _error_code(exc)
+        if not isinstance(exc, GenerationError):
+            log_event(logging.WARNING, "pr_assessment_failed", **info, error_code=code,
+                      elapsed_ms=round((time.monotonic() - started) * 1000))
+        return {**base, "status": "failed", "error_code": code, "reason": _failure_reason(code)}
 
 
 async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_PRS):
@@ -201,30 +282,43 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
     Never raises: a missing key or failed context call returns a status the
     dashboard explains, so the rest of the analysis is unaffected.
     """
+    started = time.monotonic()
+    diagnostics = {"analysis_id": uuid.uuid4().hex, "repo": repo}
     value_classification = compute_value_classification(data)
     result = {"method": "gemini", "model": MODEL, "version": VERSION, "levels": VALUE_LEVELS,
               "disclaimer": DISCLAIMER, "context": None, "sources": None, "items": [],
-              "total_prs": value_classification["prs"]["total"]}
+              "total_prs": value_classification["prs"]["total"], "analysis_id": diagnostics["analysis_id"]}
     if not key:
-        return {**result, "status": "unavailable", "reason": "No Gemini API key is configured."}
+        log_event(logging.WARNING, "product_value_unavailable", **diagnostics, stage="product_context",
+                  error_code="not_configured", elapsed_ms=round((time.monotonic() - started) * 1000))
+        return {**result, "status": "unavailable", "error_code": "not_configured",
+                "reason": "No Gemini API key is configured."}
+    stage = "product_sources"
     try:
         sources = await fetch_product_sources(repo, token)
-        context = await gemini_json(key, CONTEXT_PROMPT.format(
+        result["sources"] = {"description": bool(sources["description"]), "readme": bool(sources["readme"]),
+                             "readme_truncated": sources["readme_truncated"]}
+        log_event(logging.INFO, "product_sources_loaded", **diagnostics, stage=stage,
+                  elapsed_ms=round((time.monotonic() - started) * 1000), **result["sources"])
+        stage = "product_context"
+        context = await generate_context(key, CONTEXT_PROMPT.format(
             repo=repo, description=sources["description"] or "(none)",
             topics=", ".join(sources["topics"]) or "(none)", homepage=sources["homepage"] or "(none)",
-            readme=sources["readme"] or "(no README)"), CONTEXT_SCHEMA, 1500)
+            readme=sources["readme"] or "(no README)"), {**diagnostics, "stage": stage})
         context = _clean_context(context)
-    except Exception:  # httpx errors locally, JS fetch errors on Workers, bad answers
-        return {**result, "status": "failed", "reason": "Product context could not be generated."}
-    result["sources"] = {"description": bool(sources["description"]), "readme": bool(sources["readme"]),
-                         "readme_truncated": sources["readme_truncated"]}
+    except Exception as exc:
+        code = _error_code(exc, "source_unavailable" if stage == "product_sources" else "invalid_response")
+        log_event(logging.ERROR, "product_value_failed", **diagnostics, stage=stage, error_code=code,
+                  elapsed_ms=round((time.monotonic() - started) * 1000))
+        reason = f"Product context could not be generated. {_failure_reason(code)}"
+        return {**result, "status": "failed", "error_code": code, "reason": reason}
     result["context"] = context
     context_text = _context_text(context)
     limit = asyncio.Semaphore(CONCURRENCY)
 
     async def bounded(item, pr):
         async with limit:
-            return await assess_pr(key, context_text, item, pr)
+            return await assess_pr(key, context_text, item, pr, diagnostics=diagnostics)
 
     selected = select_prs(data, value_classification, max_prs)
     result["selected"] = len(selected)
@@ -233,5 +327,8 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
     for item in result["items"]:
         if item["status"] == "assessed":
             counts[item["expected_value"]] += 1
+    log_event(logging.INFO, "product_value_completed", **diagnostics, stage="pr_assessment",
+              assessed=sum(counts.values()), failed=sum(i["status"] == "failed" for i in result["items"]),
+              elapsed_ms=round((time.monotonic() - started) * 1000))
     return {**result, "status": "ok", "counts": counts,
             "assessed": sum(counts.values()), "failed": sum(i["status"] == "failed" for i in result["items"])}
