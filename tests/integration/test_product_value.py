@@ -21,7 +21,7 @@ DATA = {"recent_prs": [
 
 
 def gemini_reply(answer):
-    return 200, {}, {"candidates": [{"content": {"parts": [{"text": json.dumps(answer)}]}}]}
+    return 200, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(answer)}]}}]}
 
 
 class FakeServices:
@@ -228,3 +228,169 @@ def test_hosted_analysis_attaches_product_value_before_caching(monkeypatch, valu
     assert seen["args"] == ("o/r", {"repo": "o/r"}, "k")
     assert cache.stored[hosted.METRICS_CACHE_PREFIX + "o/r"]["product_value"]["status"] == value["status"]
     assert cache.ttls[-1] == ttl
+
+
+def _events(caplog):
+    return [json.loads(r.message) for r in caplog.records if r.name in ("product_value", "github_api")]
+
+
+def test_truncated_context_retries_once_then_assesses_prs(monkeypatch, caplog):
+    fake = FakeServices(assessments={n: assessment("High") for n in (1, 2, 3)})
+    budgets = []
+
+    async def upstream(url, **kwargs):
+        body = kwargs.get("body")
+        if body and "## Pull request #" not in body["contents"][0]["parts"][0]["text"]:
+            budgets.append(body["generationConfig"]["maxOutputTokens"])
+            if len(budgets) == 1:
+                return 200, {}, {"candidates": [{"finishReason": "MAX_TOKENS", "content": {
+                    "parts": [{"text": '{"product_summary":"private-body-sentinel'}]}}],
+                    "usageMetadata": {"promptTokenCount": 3302, "candidatesTokenCount": 4096,
+                                      "untrusted": "secret-sentinel"}}
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    with caplog.at_level("INFO"):
+        result = run(key="key-sentinel")
+    assert result["status"] == "ok" and result["assessed"] == 3
+    assert budgets == [4096, 8192]
+    events = _events(caplog)
+    failed = next(e for e in events if e.get("error_code") == "output_truncated")
+    assert failed["finish_reason"] == "MAX_TOKENS" and failed["http_status"] == 200
+    assert failed["usage"]["candidatesTokenCount"] == 4096
+    assert failed["stage"] == "product_context" and failed["attempt"] == 1
+    assert all(e["analysis_id"] == result["analysis_id"] for e in events)
+    assert all("elapsed_ms" in e for e in events)
+    assert all(secret not in caplog.text for secret in ("key-sentinel", "private-body-sentinel", "secret-sentinel"))
+
+
+@pytest.mark.parametrize("text", ['{"product_summary":', json.dumps(CONTEXT)])
+def test_repeated_truncation_is_explicit_and_bounded(monkeypatch, services, text, caplog):
+    fake = services()
+    context_calls = []
+
+    async def upstream(url, **kwargs):
+        if kwargs.get("body"):
+            context_calls.append(kwargs["body"])
+            return 200, {}, {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": text}]}}]}
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    result = run()
+    assert result["status"] == "failed" and result["error_code"] == "output_truncated"
+    assert "truncated" in result["reason"].lower()
+    assert result["items"] == [] and len(context_calls) == 2
+    assert len([e for e in _events(caplog) if e.get("event") == "product_value_failed"]) == 1
+
+
+@pytest.mark.parametrize("reply,code", [
+    ((429, {}, {"error": "provider-secret-sentinel"}), "provider_http_error"),
+    ((200, {}, {"promptFeedback": {"blockReason": "SAFETY"}}), "blocked_response"),
+    ((200, {}, {"candidates": [{"finishReason": "SAFETY", "content": {"parts": [{"text": json.dumps(CONTEXT)}]}}]}), "blocked_response"),
+    ((200, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "provider-secret-sentinel"}]}}]}), "invalid_response"),
+    ((200, {}, {"candidates": "provider-secret-sentinel"}), "invalid_response"),
+])
+def test_non_truncation_errors_are_specific_safe_and_not_retried(monkeypatch, services, caplog, reply, code):
+    fake = services()
+    calls = []
+
+    async def upstream(url, **kwargs):
+        if kwargs.get("body"):
+            calls.append(url)
+            return reply
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    result = run()
+    assert result["status"] == "failed" and result["error_code"] == code
+    assert len(calls) == 1
+    assert "provider-secret-sentinel" not in json.dumps(result) + caplog.text
+    event = next(e for e in _events(caplog) if e.get("event") == "gemini_generation")
+    assert event["error_code"] == code and event["stage"] == "product_context"
+
+
+def test_context_retry_shares_one_deadline(monkeypatch, services, caplog):
+    fake = services()
+    calls = []
+
+    async def upstream(url, **kwargs):
+        if kwargs.get("body"):
+            calls.append(url)
+            if len(calls) == 1:
+                await asyncio.sleep(.02)
+                return 200, {}, {"candidates": [{"finishReason": "MAX_TOKENS"}]}
+            await asyncio.sleep(10)
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    monkeypatch.setattr(product_value, "CONTEXT_TIMEOUT", .04)
+    result = run()
+    assert result["error_code"] == "timeout" and len(calls) == 2
+    assert any(e.get("error_code") == "timeout" and e["stage"] == "product_context" for e in _events(caplog))
+
+
+def test_pr_failure_logs_identify_the_pr_without_its_contents(services, caplog):
+    services(assessments={1: assessment("High"), 3: assessment("Low")})
+    with caplog.at_level("INFO"):
+        result = run()
+    events = _events(caplog)
+    failure = next(e for e in events if e.get("stage") == "pr_assessment" and e.get("error_code"))
+    assert failure["pr_number"] == 2 and failure["cohort"] == "merged"
+    assert result["assessed"] == 2 and result["failed"] == 1
+    assert result["items"][1]["error_code"] == "provider_http_error"
+    assert not any(key in failure for key in ("prompt", "body", "headers", "response", "title"))
+
+
+def test_source_failure_is_distinguished_from_model_failure(monkeypatch, caplog):
+    async def failing(*_, **__):
+        raise ValueError("source-secret-sentinel")
+
+    monkeypatch.setattr(product_value, "fetch_product_sources", failing)
+    result = run()
+    assert result["error_code"] == "source_unavailable"
+    event = next(e for e in _events(caplog) if e.get("event") == "product_value_failed")
+    assert event["stage"] == "product_sources"
+    assert "source-secret-sentinel" not in json.dumps(result) + caplog.text
+
+
+def test_local_transport_timeout_is_reported_as_timeout(monkeypatch, services, caplog):
+    import httpx
+    fake = services()
+
+    async def upstream(url, **kwargs):
+        if kwargs.get('body'):
+            raise httpx.ReadTimeout('exception-secret-sentinel')
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, 'request_json', upstream)
+    result = run()
+    assert result['error_code'] == 'timeout'
+    assert 'exception-secret-sentinel' not in json.dumps(result) + caplog.text
+
+
+def test_retry_cannot_reset_the_shared_context_deadline(monkeypatch, services):
+    fake = services()
+    calls = []
+    clock = [0.0]
+
+    async def upstream(url, **kwargs):
+        if kwargs.get('body'):
+            calls.append(url)
+            clock[0] += 6
+            for _ in range(3):
+                await asyncio.sleep(0)
+            if len(calls) == 1:
+                return 200, {}, {'candidates': [{'finishReason': 'MAX_TOKENS'}]}
+        return await fake(url, **kwargs)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        clock[0] = loop.time()
+        with monkeypatch.context() as controlled:
+            controlled.setattr(loop, 'time', lambda: clock[0])
+            return await product_value.assess_product_value('o/r', DATA, 'k')
+
+    monkeypatch.setattr(product_value, 'request_json', upstream)
+    monkeypatch.setattr(product_value, 'CONTEXT_TIMEOUT', 10)
+    result = asyncio.run(scenario())
+    assert result['error_code'] == 'timeout' and len(calls) == 2

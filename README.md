@@ -62,7 +62,7 @@ classification remains in `classification`.
 ### Expected product value
 
 When `GEMINI_API_KEY` is configured, each analysis also judges the value each sampled
-PR is expected to deliver to the repository's product (`product_value.py`). One Gemini
+PR is expected to deliver to the repository's product (`product_value.py`). A Gemini
 call turns the repository description, topics and README into product context: a
 summary, value proposition, lean canvas, and the strategic goals the repository
 appears focused on. Only public repositories are assessed, and the README is fetched
@@ -78,6 +78,25 @@ rest of the analysis is unchanged. The hosted Worker caches each analysis for up
 hours (ten minutes when a Gemini call failed), so adding or removing the key shows on the
 next uncached or force-refreshed analysis. The dashboard shows the context and per-PR
 assessments under Content framing.
+
+Context generation starts with a 4,096-token output budget and asks for under 600
+words. A `MAX_TOKENS` finish triggers one fresh attempt with 8,192 tokens; both
+attempts share a 45-second deadline, with a 25-second limit per request. Other
+provider errors, blocked responses, and invalid JSON are not retried. Incomplete
+responses are never used to score PRs. Each PR call remains independent, so one
+failed assessment does not discard successful ones.
+
+For diagnosis, `/api/analyze` includes `product_value.analysis_id`; failures also
+include a stable `error_code` and a safe explanation. Search Worker logs for that
+analysis ID. Events identify `product_sources`, `product_context`, or
+`pr_assessment`; generation events include the model, attempt, output budget,
+HTTP status, finish reason, token usage, and elapsed milliseconds when available.
+A PR failure also records its number and cohort. Workers receive structured
+console objects; local runs emit JSON through Python logging. Prompts, source
+text, model output, credentials, raw error bodies, and exception messages are
+excluded. Cache hits reuse the previous analysis ID and do not run the model;
+use `force_refresh: true` to verify a fresh attempt. Existing failed results can
+remain cached for ten minutes after an update.
 ## Cloudflare deployment
 
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.

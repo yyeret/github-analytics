@@ -6,6 +6,11 @@ Serves the premium SPA and provides REST endpoints for:
 """
 
 import os
+import logging
+
+logging.basicConfig(level=logging.WARNING, format="%(message)s")
+logging.getLogger("github_api").setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import asyncio
 import subprocess
