@@ -58,6 +58,26 @@ matches can misread context. Review rationales before interpreting distributions
 Existing caches remain usable with title-only classification. Use `python analyze.py OWNER/REPO --refresh` to collect bodies.
 `/api/analyze` exposes the additive `value_classification` field; AI contribution
 classification remains in `classification`.
+
+### Expected product value
+
+When `GEMINI_API_KEY` is configured, each analysis also judges the value each sampled
+PR is expected to deliver to the repository's product (`product_value.py`). One Gemini
+call turns the repository description, topics and README into product context: a
+summary, value proposition, lean canvas, and the strategic goals the repository
+appears focused on. Only public repositories are assessed, and the README is fetched
+without the GitHub token so GitHub refuses it if the repository has just gone private;
+unauthenticated GitHub calls are limited to 60 per hour per IP, so when that limit is
+hit the context uses the description and topics alone. One Gemini call per PR, for the 30 most recent sampled PRs (up to
+10 open), then rates expected value as High, Medium, Low or Unclear with confidence,
+who benefits, why it matters, the matching goal, and missing context. Content framing
+is passed as evidence, but clear outcome language alone does not imply high value.
+These are expectations, not verified realized impact. Without a key, or if the context
+call fails, `/api/analyze` returns `product_value` with a status and reason and the
+rest of the analysis is unchanged. The hosted Worker caches each analysis for up to six
+hours (ten minutes when a Gemini call failed), so adding or removing the key shows on the
+next uncached or force-refreshed analysis. The dashboard shows the context and per-PR
+assessments under Content framing.
 ## Cloudflare deployment
 
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.
@@ -81,6 +101,23 @@ runtime dependencies and SDK, and stages only the runtime source files under
 `.wrangler/worker`. Virtual environments and test files stay out of the upload.
 Local and CI pip dependencies live in `requirements-local.txt` and
 `requirements-dev.txt`; Pywrangler rejects a root `requirements.txt`.
+
+Branch builds use `npx wrangler preview` (Wrangler 4.135.0 or newer), which requires
+an explicit `previews` block. Preview resources are declared in
+`.cloudflare/preview-resources.json`. Run `python scripts/configure-cloudflare-previews.py`
+to inspect the setup. After authorizing resource creation, export the existing
+Cloudflare API token from Bitwarden and run the same command with `--apply`.
+It reuses or creates the named Preview KV namespace and D1 database, initializes
+the empty users/session schema, and writes their real IDs to `wrangler.jsonc`.
+Rerunning it reuses those resources. It preserves production bindings and data.
+
+Previews share these staging resources with other branches. They require Google
+sign-in and use separate rate-limit namespaces with the same request limits.
+Preview URLs are public; protected API endpoints still require a session. The
+configured Google OAuth client must allow the Preview's JavaScript origin before
+sign-in can work there. This setup leaves Google OAuth settings unchanged.
+Preview service secrets are configured separately in Cloudflare's Previews Base;
+Gemini assessment requires a Preview `GEMINI_API_KEY`.
 
 The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
 

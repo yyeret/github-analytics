@@ -14,6 +14,7 @@
 <p>When you sign in, we save your verified Google email address, Google's stable account identifier, the first and most recent sign-in times, and a sign-in count. We use this information to recognize returning users and understand account usage. We do not use it for marketing, sell it, or send it to the AI coach.</p>
 <h2>Repository and AI requests</h2>
 <p>Repository analysis uses public GitHub data. If you ask the AI coach a question, the question and repository metrics are sent to Google's Gemini service. Your Google sign-in details are not included in that request.</p>
+<p>When an analysis estimates each pull request's expected product value, the repository name, description, topics, homepage and README, and the titles, bodies and change sizes of up to 30 recent pull requests are sent to Google's Gemini service to infer the product's context and judge each pull request. These requests contain only public repository data and no sign-in details.</p>
 <h2>Storage and deletion</h2>
 <p>Account records and short-lived sign-in sessions are stored in Cloudflare's database. Choose <strong>Delete account</strong> in the app to remove your account record and sign-in sessions. A session cookie stays in your browser for up to fourteen days and is protected from JavaScript access.</p>
 <p><a href="/">Return to the dashboard</a></p>

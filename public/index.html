@@ -579,6 +579,12 @@
         <label for="value-level"> Framing </label><select id="value-level" onchange="renderValueItems()"><option value="">All</option></select></p>
         <div style="overflow-x:auto;max-height:420px"><table class="issue-table" id="value-items"></table></div>
       </div>
+      <div class="chart-card charts-full" id="product-value-card" style="display:none">
+        <div class="chart-title">Expected product value (PRs)</div>
+        <p class="issue-note" id="product-value-note"></p>
+        <div id="product-value-context"></div>
+        <div style="overflow-x:auto;max-height:520px"><table class="issue-table" id="product-value-items"></table></div>
+      </div>
     </section>
 
     <!-- Issues -->
@@ -781,6 +787,45 @@
     renderComet(d.comet_points);
     renderIssues(d.issues);
     renderValueClassification(d.value_classification);
+    renderProductValue(d.product_value);
+  }
+
+  function renderProductValue(value) {
+    const card = document.getElementById('product-value-card');
+    card.style.display = value ? 'block' : 'none';
+    if (!value) return;
+    const note = document.getElementById('product-value-note');
+    const contextEl = document.getElementById('product-value-context');
+    const table = document.getElementById('product-value-items');
+    if (value.status !== 'ok') {
+      note.textContent = `Not assessed: ${value.reason || 'unavailable.'} ${value.disclaimer}`;
+      contextEl.innerHTML = '';
+      table.innerHTML = '';
+      return;
+    }
+    const sources = value.sources || {};
+    note.textContent = `${value.disclaimer} Assessed ${value.assessed} of the ${value.selected} most recent of ${value.total_prs} sampled PRs` +
+      (value.failed ? ` (${value.failed} failed)` : '') + '. ' +
+      value.levels.map(level => `${level}: ${value.counts[level]}`).join(' · ') +
+      `. Context from ${[sources.description && 'description', sources.readme && (sources.readme_truncated ? 'README (truncated)' : 'README')].filter(Boolean).join(' and ') || 'no repository text'} via ${value.model}.`;
+    const ctx = value.context || {};
+    const goals = (ctx.strategic_goals || []).map(goal => `<li>${escapeHtml(goal)}</li>`).join('');
+    const canvas = Object.entries(ctx.lean_canvas || {}).map(([key, text]) =>
+      `<tr><td>${escapeHtml(key.replace(/_/g, ' '))}</td><td>${escapeHtml(text)}</td></tr>`).join('');
+    contextEl.innerHTML = `<p><strong>Product:</strong> ${escapeHtml(ctx.product_summary || 'Unknown')}</p>` +
+      `<p><strong>Value proposition:</strong> ${escapeHtml(ctx.value_proposition || 'Unknown')}</p>` +
+      (goals ? `<p><strong>Strategic goals (inferred)</strong></p><ol>${goals}</ol>` : '') +
+      (canvas ? `<details><summary>Lean canvas (inferred)</summary><table class="issue-table">${canvas}</table></details>` : '') +
+      (ctx.missing_context ? `<p class="issue-note">Missing context: ${escapeHtml(ctx.missing_context)}</p>` : '');
+    table.innerHTML = '<thead><tr><th>PR</th><th>State</th><th>Framing</th><th>Expected value</th><th>What, who, why</th><th>Uncertainty</th></tr></thead><tbody>' +
+      (value.items.map(item => item.status !== 'assessed' ?
+        `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td><td colspan="3">Assessment failed.</td></tr>` :
+        `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td>` +
+        `<td>${escapeHtml(item.expected_value)}<br><span class="issue-note">${escapeHtml(item.confidence)} confidence</span></td>` +
+        `<td>${escapeHtml(item.value_summary)}<br><strong>Benefits:</strong> ${escapeHtml(item.beneficiaries)}<br><strong>Why:</strong> ${escapeHtml(item.why_it_matters)}` +
+        (item.strategic_goal && item.strategic_goal !== 'None' ? `<br><strong>Goal:</strong> ${escapeHtml(item.strategic_goal)}` : '') + '</td>' +
+        `<td>${escapeHtml(item.missing_context)}</td></tr>`).join('') ||
+       '<tr><td colspan="6">No PRs in this sample.</td></tr>') + '</tbody>';
   }
 
   let valueClassification = null;

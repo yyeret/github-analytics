@@ -54,7 +54,9 @@ def test_local_public_repository_can_be_analyzed(monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, stdout='false\n'))
     monkeypatch.setattr(local, 'collect_data', lambda repo: {'repo': repo})
     monkeypatch.setattr(local, 'compute_flow_metrics', lambda raw: raw)
-    assert local._run_analysis('o/r', False) == {'repo': 'o/r'}
+    result = local._run_analysis('o/r', False)
+    assert result['repo'] == 'o/r'
+    assert result['product_value']['status'] == 'unavailable'
 
 
 @pytest.mark.parametrize('payload', [
