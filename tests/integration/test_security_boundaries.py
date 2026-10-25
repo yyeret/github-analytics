@@ -136,6 +136,26 @@ def test_hosted_redacts_collector_errors(monkeypatch):
     assert 'sensitive-credential-sentinel' not in response.text
 
 
+@pytest.mark.parametrize('bad_payload', [
+    {'message': 'upstream-private-sentinel'}, 'upstream-private-sentinel', ['not a PR'],
+])
+def test_hosted_malformed_pull_page_returns_json_error(monkeypatch, bad_payload):
+    import github_api
+    async def metadata(*args, **kwargs): return 200, {}, {'private': False}
+    async def allowed(_): return {'success': True}
+    async def upstream(*args, **kwargs): return 200, {}, bad_payload
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(github_api, 'request_json', upstream)
+    env = SimpleNamespace(AUTH_REQUIRED='false', ANALYZE_LIMIT=SimpleNamespace(limit=allowed))
+    async def wrapped(scope, receive, send):
+        scope['env'] = env
+        await hosted.app(scope, receive, send)
+    response = TestClient(wrapped, raise_server_exceptions=False).post('/api/analyze', json={'repo_url': 'github/spec-kit'})
+    assert response.status_code == 502, response.text
+    assert response.json()['detail'] == 'Repository analysis failed. Please try again.'
+    assert 'upstream-private-sentinel' not in response.text
+
+
 def test_web_collection_does_not_follow_enterprise_host(monkeypatch):
     from tests.factories import graphql_response
     monkeypatch.setenv('GH_HOST', 'enterprise.example')
@@ -148,3 +168,89 @@ def test_web_collection_does_not_follow_enterprise_host(monkeypatch):
     local._run_analysis('o/r', False)
     assert len(calls) >= 4
     assert all('--hostname' in cmd and cmd[cmd.index('--hostname') + 1] == 'github.com' for cmd in calls)
+
+
+def test_upstream_error_logs_never_include_provider_body_url_or_credentials(monkeypatch, caplog):
+    import json
+    import asyncio
+    import httpx
+    import github_api
+
+    class FakeClient:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *_args, **_kwargs):
+            return httpx.Response(429, json={"error": "provider-body-secret"},
+                                  headers={"X-GitHub-Request-ID": "header-secret"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    response = asyncio.run(github_api.request_json(
+        "https://generativelanguage.googleapis.com/v1beta/models/test:generateContent?key=url-secret",
+        headers={"x-goog-api-key": "key-secret"}, method="POST", body={"prompt": "prompt-secret"}))
+    assert response[0] == 429
+    assert all(value not in caplog.text for value in (
+        "provider-body-secret", "header-secret", "url-secret", "key-secret", "prompt-secret"))
+    event = json.loads(caplog.records[-1].message)
+    assert event == {"event": "upstream_http_error", "provider": "gemini", "http_status": 429}
+
+
+@pytest.mark.parametrize("level,expected", [(20, "log"), (30, "warn"), (40, "error")])
+def test_worker_logs_emit_structured_objects(monkeypatch, level, expected):
+    import sys
+    import github_api
+    from types import ModuleType, SimpleNamespace
+
+    emitted = []
+    console = SimpleNamespace(**{name: (lambda value, name=name: emitted.append((name, value)))
+                                 for name in ("log", "warn", "error")})
+    js = ModuleType("js")
+    js.console = console
+    js.Object = SimpleNamespace(fromEntries=object())
+    ffi = ModuleType("pyodide.ffi")
+    ffi.to_js = lambda value, **_: value
+    monkeypatch.setitem(sys.modules, "js", js)
+    monkeypatch.setitem(sys.modules, "pyodide.ffi", ffi)
+    github_api.log_event(level, "generation_test", analysis_id="safe-id", error_code="output_truncated")
+    assert emitted == [(expected, {"event": "generation_test", "analysis_id": "safe-id", "error_code": "output_truncated"})]
+
+
+def test_application_startup_keeps_diagnostics_without_httpx_url_logs(monkeypatch):
+    import asyncio
+    import contextlib
+    import io
+    import logging
+    import runpy
+    from pathlib import Path
+    import httpx
+    import github_api
+
+    original_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _: httpx.Response(429, json={'error': 'body-secret'}))
+    output = io.StringIO()
+    root_logger = logging.getLogger()
+    with monkeypatch.context() as isolated:
+        isolated.setattr(root_logger, 'handlers', [])
+        isolated.setattr(root_logger, 'level', logging.WARNING)
+        isolated.setattr(logging.getLogger('httpx'), 'level', logging.NOTSET)
+        isolated.setattr(github_api.logger, 'level', logging.NOTSET)
+        isolated.setattr(httpx, 'AsyncClient', lambda **kwargs: original_client(transport=transport, **kwargs))
+        try:
+            with contextlib.redirect_stderr(output):
+                runpy.run_path(str(Path(__file__).resolve().parents[2] / 'app.py'))
+                response = asyncio.run(github_api.request_json(
+                    'https://generativelanguage.googleapis.com/v1beta/models/test:generateContent?key=url-secret',
+                    headers={'x-goog-api-key': 'header-secret'}, method='POST'))
+                github_api.log_event(logging.INFO, 'diagnostic_probe', analysis_id='safe-id')
+        finally:
+            for handler in root_logger.handlers:
+                handler.close()
+    assert response[0] == 429
+    assert 'diagnostic_probe' in output.getvalue() and 'upstream_http_error' in output.getvalue()
+    assert all(value not in output.getvalue() for value in ('url-secret', 'header-secret', 'body-secret', 'HTTP Request:'))

@@ -80,7 +80,7 @@ failures, not zero scores. Lack of a stated deadline does not imply urgency.
 
 One Gemini call infers product context and strategic goals from public repository
 metadata and README (up to 12,000 characters). Jev receives that compact context
-plus each PR's title/body (up to 4,000 characters). Four Score questions share one
+plus only the first 1,500 characters of each PR description. Titles, code size, and framing labels are not sent to Jev. Empty descriptions return `insufficient_context` with no score or Jev request. Four Score questions share one
 request per PR. Code chooses the most probable rubric level (lower wins ties),
 maps its index to Fibonacci points, and sums the four points. The API retains each
 rubric and probability distribution for review, rather than treating model
@@ -126,6 +126,25 @@ rate-limited README falls back to metadata. Review inferred context and scores
 before using them to prioritize work. Assessments have a 90-second overall budget;
 completed PR scores are retained and unfinished items are marked failed on expiry.
 
+Context generation starts with a 4,096-token output budget and asks for under 600
+words. A `MAX_TOKENS` finish triggers one fresh attempt with 8,192 tokens; both
+attempts share a 45-second deadline, with a 25-second limit per request. Other
+Gemini errors, blocked responses, and invalid JSON are not retried. Incomplete
+responses are never used to score PRs. Each PR call remains independent, so one
+failed assessment does not discard successful ones. When a deadline cancels a
+Worker request, its abort signal cancels the outgoing fetch, including a pending
+response-body read.
+
+For diagnosis, `/api/analyze` includes `product_value.analysis_id`; failures also
+include a stable `error_code` and a safe explanation. Search Worker logs for that
+analysis ID. Events identify `product_sources`, `product_context`, or
+`pr_assessment`; Gemini events include the model, attempt, output budget, HTTP status, finish reason, token usage, and elapsed milliseconds when available. Jev events include model, attempt, HTTP status, token usage, elapsed time, and a stable error code on failure.
+A PR failure also records its number and cohort. Workers receive structured
+console objects; local runs emit JSON through Python logging. Prompts, source
+text, model output, credentials, raw error bodies, and exception messages are
+excluded. Cache hits reuse the previous analysis ID and do not run the model;
+use `force_refresh: true` to verify a fresh attempt. Existing failed results can
+remain cached for ten minutes after an update.
 ## Cloudflare deployment
 
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.

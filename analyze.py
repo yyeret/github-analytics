@@ -348,19 +348,23 @@ async def collect_public_data(repo, token=None):
             "reviews": {"totalCount": 0, "nodes": []}, "timelineItems": {"nodes": []},
         }
 
-    async def get_json(url):
+    async def get_json(url, expected_type=dict):
         status, _, payload = await request_json(url, headers=headers, timeout=20)
         if status in (401, 403):
             raise ValueError("GitHub rejected the request. Check the token or API rate limit.")
         if status < 200 or status >= 300:
-            raise ValueError(payload.get("message", "GitHub API request failed"))
+            raise ValueError("GitHub API request failed")
+        if not isinstance(payload, expected_type):
+            raise ValueError("GitHub returned an unexpected response shape")
+        if expected_type is list and any(not isinstance(item, dict) for item in payload):
+            raise ValueError("GitHub returned an invalid pull request page")
         return payload
 
     base = f"https://api.github.com/repos/{repo}"
     closed_pages, open_data = await asyncio.gather(
-        asyncio.gather(*(get_json(f"{base}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={n}")
+        asyncio.gather(*(get_json(f"{base}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page={n}", list)
                           for n in range(1, 7))),
-        get_json(f"{base}/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1"),
+        get_json(f"{base}/pulls?state=open&sort=updated&direction=desc&per_page=100&page=1", list),
     )
     recent = [normalized(pr) for batch in closed_pages for pr in batch if pr.get("merged_at")]
 
@@ -369,8 +373,14 @@ async def collect_public_data(repo, token=None):
         "sort": "created", "order": "asc", "per_page": 30,
     })
     historical_search = await get_json(search_url)
+    historical_items = historical_search.get("items")
+    if not isinstance(historical_items, list) or any(
+        not isinstance(item, dict) or type(item.get("number")) is not int or item["number"] < 1
+        for item in historical_items
+    ):
+        raise ValueError("GitHub returned invalid historical search results")
     historical = await asyncio.gather(*(
-        get_json(f"{base}/pulls/{item['number']}") for item in historical_search.get("items", [])
+        get_json(f"{base}/pulls/{item['number']}") for item in historical_items
     ))
     return {"repo": repo, "pre_ai_prs": [normalized(pr) for pr in historical],
         "recent_prs": recent, "open_prs": [normalized(pr) for pr in open_data],

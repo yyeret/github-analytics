@@ -36,3 +36,21 @@ In the earlier four-PR probe using a shorter manually supplied product context, 
 ## API usage
 
 Configure local `GEMINI_API_KEY` and `TYPESAFE_API_KEY`, or pass request headers `X-Gemini-Api-Key` and `X-TypeSafe-Api-Key`. Send JSON `{"repo_url":"github/spec-kit","force_refresh":true}` to `POST /api/analyze`. Hosted users can provide keys per analysis or administrators can configure runtime secrets. Keys do not replace the hosted app’s session authentication.
+
+## Description-only follow-up, 2026-10-25
+
+The classification input now contains the first 1,500 characters of the PR description and the compact repository context. Titles remain response metadata; Jev does not receive them, changed-line counts, or framing labels. Empty descriptions return `insufficient_context` with a null total and no Jev call.
+
+A local FastAPI `POST /api/analyze` probe reused saved public Spec Kit descriptions and valid recorded repository context. Five live `jev-1.14.0` requests succeeded; an empty-description control made no provider request. The endpoint returned HTTP 200 in 0.25 seconds. This was not fresh repository collection, a live Gemini context call, or a hosted Workers run.
+
+| PR | Value | Time criticality | Opportunity runway | Risk reduction | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4960 | 5 | 1 | 5 | 5 | 16 |
+| 5065 | 5 | 1 | 2 | 5 | 13 |
+| 5062 | 3 | 1 | 2 | 1 | 7 |
+| 5066 | 1 | 1 | 1 | 2 | 5 |
+| 4993 | 2 | 1 | 2 | 1 | 6 |
+
+The absence of evidenced urgency kept all time-criticality scores at 1. The authentication and integration changes ranked above the catalogue, dependency, and community-page changes. This sample is a functional check, not a human-rated calibration benchmark; truncation can omit relevant evidence. Jev's own rate limits still apply.
+
+Exact key-free requests and responses are retained locally under the ignored `.cache/jev-description/` directory.

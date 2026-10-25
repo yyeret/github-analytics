@@ -38,13 +38,13 @@ def test_jev_deadline_preserves_successful_sibling_assessments(monkeypatch):
     result = asyncio.run(product_value.assess_product_value("o/r", DATA, "gemini", jev_key="jev"))
     assert result["assessed"] == 2 and result["failed"] == 1
     failed = next(item for item in result["items"] if item["number"] == 2)
-    assert failed["cost_of_delay"] is None and failed["reason"] == "assessment_unavailable"
+    assert failed["cost_of_delay"] is None and failed["error_code"] == "timeout"
 
 
 def test_overall_deadline_cancels_active_and_queued_assessments(monkeypatch):
     fake = FakeServices()
     started, cancelled = [], []
-    data = {"recent_prs": [{"number": n, "title": f"Change {n}"} for n in range(1, 9)]}
+    data = {"recent_prs": [{"number": n, "title": f"Change {n}", "body": "Adds a useful capability."} for n in range(1, 9)]}
 
     async def request(url, **kwargs):
         if "typesafe.ai" in url:
@@ -66,7 +66,7 @@ def test_overall_deadline_cancels_active_and_queued_assessments(monkeypatch):
     assert [item["number"] for item in result["items"]] == list(range(1, 9))
     assert result["items"][0]["cost_of_delay"] == 29
     assert started == [1, 2, 3] and sorted(cancelled) == [2, 3]
-    assert all(item["cost_of_delay"] is None and item["reason"] == "assessment_deadline"
+    assert all(item["cost_of_delay"] is None and item["error_code"] == "assessment_deadline"
                for item in result["items"][1:])
 
 
@@ -83,7 +83,7 @@ def test_context_time_consumes_the_overall_assessment_budget(monkeypatch):
     result = asyncio.run(product_value.assess_product_value("o/r", DATA, "gemini", jev_key="jev"))
     assert result["context"] is not None
     assert result["assessed"] == 0 and result["failed"] == 3
-    assert all(item["reason"] == "assessment_deadline" for item in result["items"])
+    assert all(item["error_code"] == "assessment_deadline" for item in result["items"])
 
 
 def test_caller_cancellation_also_cleans_up_assessment_tasks(monkeypatch):

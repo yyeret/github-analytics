@@ -97,3 +97,14 @@ def test_load_or_collect_recollects_when_cache_is_corrupt(gh):
         f.write("{not json")
     gh([graphql_response([]), graphql_response([]), graphql_response([])])
     assert analyze.load_or_collect("o/r")["repo"] == "o/r"
+
+
+@pytest.mark.parametrize('payload', [[], {}, {'items': ['not a record']}, {'items': [{'number': '../other'}]}])
+def test_hosted_collection_rejects_malformed_historical_search(monkeypatch, payload):
+    import asyncio
+    import github_api
+    async def upstream(url, **kwargs):
+        return 200, {}, payload if '/search/issues?' in url else []
+    monkeypatch.setattr(github_api, 'request_json', upstream)
+    with pytest.raises(ValueError, match='GitHub returned'):
+        asyncio.run(analyze.collect_public_data('github/spec-kit'))

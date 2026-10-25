@@ -15,7 +15,7 @@ CONTEXT = {"product_summary": "Flow analytics for GitHub repositories.",
            "missing_context": "No pricing information."}
 DATA = {"recent_prs": [
     {"number": 1, "title": "Users can export reports faster", "body": "Adds CSV export."},
-    {"number": 2, "title": "Bump lint config", "body": None}],
+    {"number": 2, "title": "Bump lint config", "body": "Routine lint update."}],
     "open_prs": [{"number": 3, "title": "Fix cycle time for draft PRs", "body": "Drafts skewed p85."}]}
 DIMS = ("value", "time_criticality", "opportunity_runway", "risk_reduction")
 
@@ -53,7 +53,7 @@ class FakeServices:
                 return answer, {}, {"error": "provider-secret-sentinel"}
             return 200, {}, answer
         self.prompts.append(body["contents"][0]["parts"][0]["text"])
-        return self.context_status, {}, {"candidates": [{"content": {"parts": [{"text": json.dumps(self.context)}]}}]}
+        return self.context_status, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(self.context)}]}}]}
 
 
 @pytest.fixture
@@ -263,3 +263,259 @@ def test_local_api_accepts_ephemeral_provider_keys(monkeypatch):
     assert "caller-g" not in r.text and "caller-j" not in r.text
     assert local.os.environ["GEMINI_API_KEY"] == "server-g"
     assert local.os.environ["TYPESAFE_API_KEY"] == "server-j"
+
+
+def test_jev_uses_only_the_description_prefix_and_product_context(services):
+    fake = services()
+    description = 'Useful change. ' * 150
+    data = {'recent_prs': [{'number': 7, 'title': 'title-secret-sentinel',
+                           'body': description + 'tail-secret-sentinel',
+                           'additions': 9000, 'deletions': 8000}]}
+    result = run(data=data)
+    assert result['assessed'] == 1
+    state = fake.jev_requests[0]['state']
+    assert state['pull_request']['body'] == description[:1500]
+    assert state['pull_request']['body_truncated'] is True
+    assert state['repository']['strategic_goals'] == CONTEXT['strategic_goals']
+    assert all(value not in json.dumps(state) for value in ('title-secret-sentinel', 'tail-secret-sentinel', '9000', '8000'))
+    assert result['items'][0]['title'] == 'title-secret-sentinel'
+
+
+@pytest.mark.parametrize('description', [None, '', '   '])
+def test_empty_description_is_unassessed_without_a_provider_call(services, description):
+    fake = services()
+    result = run(data={'recent_prs': [{'number': 7, 'title': 'Urgent critical security fix', 'body': description}]})
+    assert not fake.jev_requests
+    item = result['items'][0]
+    assert item['status'] == 'failed' and item['error_code'] == 'insufficient_context'
+    assert item['cost_of_delay'] is None and item['reason']
+
+
+def _events(caplog):
+    return [json.loads(r.message) for r in caplog.records if r.name in ("product_value", "github_api")]
+
+
+def test_truncated_context_retries_once_then_assesses_prs(monkeypatch, caplog):
+    fake = FakeServices()
+    budgets = []
+
+    async def upstream(url, **kwargs):
+        body = kwargs.get("body")
+        if "generativelanguage" in url:
+            budgets.append(body["generationConfig"]["maxOutputTokens"])
+            if len(budgets) == 1:
+                return 200, {}, {"candidates": [{"finishReason": "MAX_TOKENS", "content": {
+                    "parts": [{"text": '{"product_summary":"private-body-sentinel'}]}}],
+                    "usageMetadata": {"promptTokenCount": 3302, "candidatesTokenCount": 4096,
+                                      "untrusted": "secret-sentinel"}}
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    with caplog.at_level("INFO"):
+        result = run(key="key-sentinel")
+    assert result["status"] == "ok" and result["assessed"] == 3
+    assert budgets == [4096, 8192]
+    events = _events(caplog)
+    failed = next(e for e in events if e.get("error_code") == "output_truncated")
+    assert failed["finish_reason"] == "MAX_TOKENS" and failed["http_status"] == 200
+    assert failed["usage"]["candidatesTokenCount"] == 4096
+    assert failed["stage"] == "product_context" and failed["attempt"] == 1
+    assert all(e["analysis_id"] == result["analysis_id"] for e in events)
+    assert all("elapsed_ms" in e for e in events)
+    assert all(secret not in caplog.text for secret in ("key-sentinel", "private-body-sentinel", "secret-sentinel"))
+
+
+@pytest.mark.parametrize("text", ['{"product_summary":', json.dumps(CONTEXT)])
+def test_repeated_truncation_is_explicit_and_bounded(monkeypatch, services, text, caplog):
+    fake = services()
+    context_calls = []
+
+    async def upstream(url, **kwargs):
+        if "generativelanguage" in url:
+            context_calls.append(kwargs["body"])
+            return 200, {}, {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": text}]}}]}
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    result = run()
+    assert result["status"] == "failed" and result["error_code"] == "output_truncated"
+    assert "truncated" in result["reason"].lower()
+    assert result["items"] == [] and len(context_calls) == 2
+    assert len([e for e in _events(caplog) if e.get("event") == "product_value_failed"]) == 1
+
+
+@pytest.mark.parametrize("reply,code", [
+    ((429, {}, {"error": "provider-secret-sentinel"}), "provider_http_error"),
+    ((200, {}, {"promptFeedback": {"blockReason": "SAFETY"}}), "blocked_response"),
+    ((200, {}, {"candidates": [{"finishReason": "SAFETY", "content": {"parts": [{"text": json.dumps(CONTEXT)}]}}]}), "blocked_response"),
+    ((200, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "provider-secret-sentinel"}]}}]}), "invalid_response"),
+    ((200, {}, {"candidates": "provider-secret-sentinel"}), "invalid_response"),
+])
+def test_non_truncation_errors_are_specific_safe_and_not_retried(monkeypatch, services, caplog, reply, code):
+    fake = services()
+    calls = []
+
+    async def upstream(url, **kwargs):
+        if "generativelanguage" in url:
+            calls.append(url)
+            return reply
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    result = run()
+    assert result["status"] == "failed" and result["error_code"] == code
+    assert len(calls) == 1
+    assert "provider-secret-sentinel" not in json.dumps(result) + caplog.text
+    event = next(e for e in _events(caplog) if e.get("event") == "gemini_generation")
+    assert event["error_code"] == code and event["stage"] == "product_context"
+
+
+def test_context_retry_shares_one_deadline(monkeypatch, services, caplog):
+    fake = services()
+    calls = []
+
+    async def upstream(url, **kwargs):
+        if "generativelanguage" in url:
+            calls.append(url)
+            if len(calls) == 1:
+                await asyncio.sleep(.02)
+                return 200, {}, {"candidates": [{"finishReason": "MAX_TOKENS"}]}
+            await asyncio.sleep(10)
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    monkeypatch.setattr(product_value, "CONTEXT_TIMEOUT", .04)
+    result = run()
+    assert result["error_code"] == "timeout" and len(calls) == 2
+    assert any(e.get("error_code") == "timeout" and e["stage"] == "product_context" for e in _events(caplog))
+
+
+def test_pr_failure_logs_identify_the_pr_without_its_contents(services, caplog):
+    services(assessments={2: 429})
+    with caplog.at_level("INFO"):
+        result = run()
+    events = _events(caplog)
+    failure = next(e for e in events if e.get("stage") == "pr_assessment" and e.get("error_code"))
+    assert failure["pr_number"] == 2 and failure["cohort"] == "merged"
+    assert result["assessed"] == 2 and result["failed"] == 1
+    assert result["items"][1]["error_code"] == "rate_limited"
+    assert not any(key in failure for key in ("prompt", "body", "headers", "response", "title"))
+
+
+def test_source_failure_is_distinguished_from_model_failure(monkeypatch, caplog):
+    async def failing(*_, **__):
+        raise ValueError("source-secret-sentinel")
+
+    monkeypatch.setattr(product_value, "fetch_product_sources", failing)
+    result = run()
+    assert result["error_code"] == "source_unavailable"
+    event = next(e for e in _events(caplog) if e.get("event") == "product_value_failed")
+    assert event["stage"] == "product_sources"
+    assert "source-secret-sentinel" not in json.dumps(result) + caplog.text
+
+
+def test_local_transport_timeout_is_reported_as_timeout(monkeypatch, services, caplog):
+    import httpx
+    fake = services()
+
+    async def upstream(url, **kwargs):
+        if "generativelanguage" in url:
+            raise httpx.ReadTimeout('exception-secret-sentinel')
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, 'request_json', upstream)
+    result = run()
+    assert result['error_code'] == 'timeout'
+    assert 'exception-secret-sentinel' not in json.dumps(result) + caplog.text
+
+
+def test_retry_cannot_reset_the_shared_context_deadline(monkeypatch, services):
+    import selectors
+    fake = services()
+    calls = []
+    clock = [0.0]
+
+    class ClockSelector(selectors.SelectSelector):
+        def select(self, timeout=None):
+            assert timeout is not None, "the context operation must always have a deadline"
+            clock[0] += timeout
+            return super().select(0)
+
+    async def upstream(url, **kwargs):
+        if "generativelanguage" in url:
+            calls.append(url)
+            await asyncio.sleep(6)
+            if len(calls) == 1:
+                return 200, {}, {'candidates': [{'finishReason': 'MAX_TOKENS'}]}
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, 'request_json', upstream)
+    monkeypatch.setattr(product_value, 'CONTEXT_TIMEOUT', 10)
+    loop = asyncio.SelectorEventLoop(selector=ClockSelector())
+    try:
+        with monkeypatch.context() as controlled:
+            controlled.setattr(loop, 'time', lambda: clock[0])
+            result = loop.run_until_complete(product_value.assess_product_value('o/r', DATA, 'k', jev_key='j'))
+    finally:
+        loop.close()
+    assert result['error_code'] == 'timeout' and len(calls) == 2
+
+
+def test_unconfigured_result_exposes_the_logged_error_code(services):
+    services()
+    result = run(key=None)
+    assert result['status'] == 'unavailable' and result['error_code'] == 'not_configured'
+    assert result['reason']
+
+
+def test_failed_pr_has_a_safe_explanation(services):
+    services(assessments={n: 503 for n in (1, 2, 3)})
+    result = run()
+    assert all(item['reason'] and item['error_code'] == 'provider_http_error' for item in result['items'])
+
+
+@pytest.mark.parametrize('waiting_for', ['headers', 'body'])
+@pytest.mark.parametrize('deadline', ['request', 'context'])
+def test_worker_deadlines_abort_fetch_and_body_reads(monkeypatch, waiting_for, deadline):
+    import sys
+    from types import ModuleType
+
+    controller = SimpleNamespace(signal=object(), aborted=False)
+
+    def abort():
+        controller.aborted = True
+
+    controller.abort = abort
+    seen = []
+
+    async def stalled():
+        await asyncio.Event().wait()
+
+    async def body():
+        if waiting_for == 'body':
+            await stalled()
+        return '{}'
+
+    async def fetch(url, options):
+        seen.append(options)
+        if waiting_for == 'headers':
+            await stalled()
+        return SimpleNamespace(status=200, headers=SimpleNamespace(get=lambda *args: ''), text=body)
+
+    js = ModuleType('js')
+    js.Object = SimpleNamespace(fromEntries=object())
+    js.AbortController = SimpleNamespace(new=lambda: controller)
+    js.fetch = fetch
+    ffi = ModuleType('pyodide.ffi')
+    ffi.to_js = lambda value, **_: value
+    monkeypatch.setitem(sys.modules, 'js', js)
+    monkeypatch.setitem(sys.modules, 'pyodide.ffi', ffi)
+    monkeypatch.setattr(product_value, 'GEMINI_TIMEOUT', .01 if deadline == 'request' else 1)
+    monkeypatch.setattr(product_value, 'CONTEXT_TIMEOUT', .01 if deadline == 'context' else 1)
+    expected = product_value.GenerationError if deadline == 'request' else TimeoutError
+    with pytest.raises(expected) as failure:
+        asyncio.run(product_value.generate_context('key', 'prompt', {'stage': 'product_context'}))
+    if deadline == 'request':
+        assert failure.value.code == 'timeout'
+    assert controller.aborted and len(seen) == 1
+    assert seen[0]['signal'] is controller.signal
