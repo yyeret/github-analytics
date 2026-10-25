@@ -108,6 +108,25 @@ def test_failed_or_malformed_answer_is_not_a_zero_score(services, failure):
     assert result["failed"] == 1 and result["assessed"] == 2
 
 
+@pytest.mark.parametrize("probabilities", [
+    {**jev_reply()["answers"]["value"]["probabilities"], "6": .1},
+    {**jev_reply()["answers"]["value"]["probabilities"], "provider-secret-sentinel": 0},
+    {str(i): float(i == 2) for i in range(5)},
+    [0, 0, 1, 0, 0, 0],
+], ids=["extra-level", "extra-metadata", "missing-level", "not-an-object"])
+def test_distribution_requires_exactly_the_supported_buckets(services, probabilities):
+    answer = jev_reply()
+    answer["answers"]["value"]["probabilities"] = probabilities
+    services(assessments={2: answer})
+    result = run()
+    bad = next(item for item in result["items"] if item["number"] == 2)
+    assert bad["status"] == "failed" and bad["cost_of_delay"] is None
+    assert bad["error_code"] == "invalid_response"
+    assert "dimensions" not in bad
+    assert "provider-secret-sentinel" not in json.dumps(result)
+    assert result["failed"] == 1 and result["assessed"] == 2
+
+
 def test_missing_key_sends_nothing(services):
     fake = services()
     assert run(jev_key=None)["status"] == "unavailable"

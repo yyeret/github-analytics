@@ -274,6 +274,8 @@ def _dimension(answer, spec):
     if not isinstance(answer, dict) or answer.get("type") != "score":
         raise ValueError("Missing score")
     probabilities = answer.get("probabilities", {})
+    if not isinstance(probabilities, dict) or set(probabilities) != {str(i) for i in range(len(FIBONACCI))}:
+        raise ValueError("Invalid score probability buckets")
     weights = [probabilities.get(str(i)) for i in range(len(FIBONACCI))]
     confidence = answer.get("confidence")
     if any(type(w) not in (int, float) or not math.isfinite(w) or not 0 <= w <= 1 for w in weights):
