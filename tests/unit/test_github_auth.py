@@ -101,6 +101,8 @@ async def test_revoked_bearer_is_rejected_not_optional(monkeypatch, env):
 
 @run_async
 async def test_oauth_pkce_session_replay_and_logout(env, provider):
+    async def allowed(_): return {'success': True}
+    env.ANALYZE_LIMIT = SimpleNamespace(limit=allowed)
     app = FastAPI()
     app.include_router(auth.router)
     @app.middleware('http')
@@ -258,3 +260,44 @@ async def test_worker_scheduled_handler_awaits_cleanup_and_preserves_asgi(env, m
     await worker.scheduled(SimpleNamespace(), env, SimpleNamespace())
     assert calls == [env.USERS_DB]
     assert await worker.fetch('request') == 'request'
+
+
+@run_async
+async def test_oauth_start_rate_limit_precedes_database_writes(env):
+    calls = []
+    async def denied(entry):
+        calls.append(entry)
+        return {'success': False}
+    env.ANALYZE_LIMIT = SimpleNamespace(limit=denied)
+    env.USERS_DB.connection.execute('INSERT INTO github_oauth_states VALUES (?, ?, ?, ?)',
+        ('existing-expired', 'verifier', env.GITHUB_OAUTH_REDIRECT_URI, 0))
+    env.USERS_DB.connection.commit()
+    with pytest.raises(auth.HTTPException) as error:
+        await auth.start(request(env, {'CF-Connecting-IP': '192.0.2.1'}))
+    assert error.value.status_code == 429
+    assert calls == [{'key': 'github-oauth-start:192.0.2.1'}]
+    assert env.USERS_DB.connection.execute('SELECT COUNT(*) FROM github_oauth_states').fetchone()[0] == 1
+
+
+@run_async
+async def test_oauth_start_requires_rate_limit_binding(env):
+    with pytest.raises(auth.HTTPException) as error:
+        await auth.start(request(env))
+    assert error.value.status_code == 503
+    assert env.USERS_DB.connection.execute('SELECT COUNT(*) FROM github_oauth_states').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('status', [403, 429])
+@run_async
+async def test_provider_throttling_preserves_valid_session(env, monkeypatch, status):
+    db = env.USERS_DB.connection
+    db.execute('INSERT INTO github_sessions VALUES (?, ?, ?, ?, ?)',
+               (auth.token_hash('active'), 7, 'owner', 'valid', int(auth.time.time()) + 100))
+    db.commit()
+    async def refused(*args, **kwargs):
+        return status, {}, {}
+    monkeypatch.setattr(auth, 'request_json', refused)
+    with pytest.raises(auth.HTTPException) as error:
+        await auth.authenticate(request(env, {'Cookie': f'{auth.GITHUB_SESSION_COOKIE}=active'}))
+    assert error.value.status_code == 503
+    assert db.execute('SELECT COUNT(*) FROM github_sessions').fetchone()[0] == 1

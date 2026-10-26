@@ -165,3 +165,45 @@ def test_delete_account_removes_both_connected_identities(monkeypatch):
     assert response.status_code == 200
     assert any('DELETE FROM users' in sql for sql in deleted)
     assert any('DELETE FROM github_sessions' in sql for sql in deleted)
+
+
+@pytest.mark.parametrize('endpoint', ['/api/auth/session', '/api/issues/value'])
+def test_expired_github_cookie_allows_valid_google_public_access(monkeypatch, endpoint):
+    client, env, _, _ = setup(monkeypatch)
+    env.AUTH_REQUIRED = 'true'
+    async def expired(*args, **kwargs):
+        raise hosted.HTTPException(401, 'Expired GitHub session')
+    async def google(_): return {'google_sub': 'g', 'email': 'g@example.test'}
+    async def public(*args, **kwargs): return 200, {}, {'private': False}
+    async def collect(*args, **kwargs): return {'items': [], 'total_count': 0, 'truncated': False}
+    async def assess(*args, **kwargs): return {'status': 'ok', 'items': []}
+    monkeypatch.setattr(github_auth, 'authenticate', expired)
+    monkeypatch.setattr(hosted, 'signed_in_user', google)
+    monkeypatch.setattr(hosted, 'request_json', public)
+    monkeypatch.setattr(hosted, 'collect_issue_candidates', collect)
+    monkeypatch.setattr(hosted, 'assess_issue_value', assess)
+    client.cookies.set(github_auth.GITHUB_SESSION_COOKIE, 'expired')
+    client.cookies.set(hosted.SESSION_COOKIE, 'google-session')
+    response = client.get(endpoint) if endpoint.endswith('session') else client.post(endpoint, json={'repo_url': 'o/r'})
+    assert response.status_code == 200
+    assert client.post('/api/issues/value', headers={'Authorization': 'Bearer invalid'}, json={'repo_url': 'o/r'}).status_code == 401
+
+
+def test_google_owned_snapshot_remains_readable_after_connecting_github(monkeypatch):
+    from tests.test_chat import FakeAIClient
+    client, _, cache, _ = setup(monkeypatch)
+    client.cookies.set(hosted.SESSION_COOKIE, 'google-session')
+    async def google(_): return {'google_sub': 'g'}
+    monkeypatch.setattr(hosted, 'signed_in_user', google)
+    fake_request = SimpleNamespace(cookies={hosted.SESSION_COOKIE: 'google-session'})
+    cache.stored[hosted.session_analysis_key('o/r', fake_request, 'original')] = json.dumps({
+        'repo': 'o/r', 'repository_visibility': 'public'})
+    # Patch the shared HTTP client only during the endpoint's provider call.
+    original_client = hosted.httpx.AsyncClient
+    class ProviderClient(original_client):
+        async def __aenter__(self): return FakeAIClient()
+    monkeypatch.setattr(hosted.httpx, 'AsyncClient', ProviderClient)
+    response = client.post('/api/chat', headers={'Authorization': 'Bearer caller-a'}, json={
+        'repo': 'o/r', 'analysis_id': 'original', 'message': 'Next?'})
+    assert response.status_code == 200
+    assert response.json()['reply'] == 'Throughput rose.'

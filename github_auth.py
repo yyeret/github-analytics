@@ -60,7 +60,7 @@ async def identify_token(token: str) -> GitHubIdentity:
         'Accept': 'application/vnd.github+json', 'Authorization': f'Bearer {token}',
         'User-Agent': 'github-flow-analytics', 'X-GitHub-Api-Version': '2022-11-28',
     })
-    if status in (401, 403):
+    if status == 401:
         raise HTTPException(401, 'Your GitHub credential expired or was revoked. Sign in again.')
     if status != 200 or not isinstance(payload, dict):
         raise HTTPException(503, 'GitHub authentication is temporarily unavailable.')
@@ -127,6 +127,12 @@ def _configuration(request: Request):
 @router.get('/api/auth/github/start')
 async def start(request: Request):
     client_id, _, redirect_uri, scope = _configuration(request)
+    limiter = getattr(_environment(request), 'ANALYZE_LIMIT', None)
+    if limiter is None:
+        raise HTTPException(503, 'GitHub sign-in rate limiting is not configured.')
+    allowed = await limiter.limit({'key': 'github-oauth-start:' + request.headers.get('CF-Connecting-IP', 'unknown')})
+    if not allowed.get('success', False):
+        raise HTTPException(429, 'Too many sign-in attempts. Please try again shortly.')
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     now = int(time.time())

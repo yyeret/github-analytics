@@ -46,7 +46,7 @@ async def analyze(args):
         request['owner_profile'] = json.loads(args.owner_profile.read_text())
     if args.output.exists():
         raise ValueError('Use a fresh output directory; existing evidence will not be overwritten.')
-    args.output.mkdir(parents=True)
+    args.output.mkdir(parents=True, mode=0o700)
     (args.output / 'request.json').write_text(json.dumps(request, indent=2))
     provider_calls = []
     transport_request = product_value._request

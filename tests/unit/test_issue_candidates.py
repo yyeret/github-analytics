@@ -47,3 +47,32 @@ def test_explicit_selection_rejects_prs_in_issue_endpoint(monkeypatch):
     monkeypatch.setattr(module, 'request_json', request)
     with pytest.raises(ValueError, match='pull request'):
         asyncio.run(module.collect_issue_candidates('o/r', 'caller', issue_numbers=[9]))
+
+
+def test_failed_explicit_selection_cancels_and_awaits_siblings(monkeypatch):
+    import issue_candidates as module
+    async def exercise():
+        started, cancelled = [], []
+        all_started = asyncio.Event()
+        async def request(url, **kwargs):
+            number = int(url.rsplit('/', 1)[1])
+            started.append(number)
+            if len(started) == 5:
+                all_started.set()
+            if number == 1:
+                await all_started.wait()
+                return 404, {}, {}
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.append(number)
+                raise
+        monkeypatch.setattr(module, 'request_json', request)
+        with pytest.raises(ValueError, match='selected'):
+            await module.collect_issue_candidates('o/r', 'caller', max_issues=10, issue_numbers=list(range(1, 11)))
+        assert set(started) == set(range(1, 7)) or set(started) == set(range(1, 6))
+        assert set(cancelled) == set(started) - {1}
+        before = list(started)
+        await asyncio.sleep(0)
+        assert started == before
+    asyncio.run(exercise())

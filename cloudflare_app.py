@@ -266,7 +266,11 @@ async def public_repo_exists(repo: str, token: str | None, *, allow_private=Fals
 
 async def caller_github(request):
     if request.headers.get('authorization') is not None or getattr(request, 'cookies', {}).get(github_auth.GITHUB_SESSION_COOKIE):
-        return await github_auth.authenticate(request, optional=True)
+        try:
+            return await github_auth.authenticate(request, optional=True)
+        except HTTPException as exc:
+            if request.headers.get('authorization') is not None or exc.status_code != 401:
+                raise
     return None
 
 
@@ -435,6 +439,16 @@ async def chat(req: ChatRequest, request: Request):
     cache_key = (private_analysis_key(repo, identity, req.analysis_id) if identity and req.analysis_id
         else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id else f"{METRICS_CACHE_PREFIX}{repo.lower()}")
     saved = await cache.get(cache_key)
+    if not saved and identity and req.analysis_id and request.cookies.get(SESSION_COOKIE):
+        try:
+            await signed_in_user(request)
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+        else:
+            candidate = await cache.get(session_analysis_key(repo, request, req.analysis_id))
+            if candidate and json.loads(candidate).get('repository_visibility', 'public') == 'public':
+                saved = candidate
     if not saved:
         raise HTTPException(status_code=409, detail="This analysis expired. Click Analyze again to refresh the coach.")
     metrics = json.loads(saved)

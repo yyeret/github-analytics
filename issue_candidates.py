@@ -24,7 +24,14 @@ async def collect_issue_candidates(repo, token, *, max_issues=20, issue_numbers=
             if item.get('state') not in ('open', 'closed'):
                 raise ValueError('A selected issue has an invalid state.')
             return issue_record(item)
-        items = await asyncio.wait_for(asyncio.gather(*(fetch(n) for n in issue_numbers)), 30)
+        tasks = [asyncio.create_task(fetch(n)) for n in issue_numbers]
+        try:
+            items = await asyncio.wait_for(asyncio.gather(*tasks), 30)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         return {'items': items, 'total_count': len(items), 'truncated': False, 'search_incomplete': False,
                 'query': None, 'selection_policy': 'Explicit issues in any lifecycle state, independent of PR linkage; value does not grant execution permission.'}
     query = f'repo:{repo} is:issue is:open -linked:pr'
