@@ -18,12 +18,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET = ROOT / "tests/fixtures/value_intent/public_prs.json"
 SCALE = [1, 2, 3, 5, 8, 13]
-DIMENSIONS = ("value", "time_criticality", "opportunity_runway", "risk_reduction")
 MAX_REQUESTS = 60
 
 
 def fingerprint(case, context, rubric_version):
-    """Bind reuse to exact inference inputs, excluding independent reference labels."""
     inputs = {key: case.get(key) for key in ("id", "repository", "number", "title", "body", "body_truncated")}
     inputs.update(context=context, rubric_version=rubric_version)
     return hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -79,7 +77,6 @@ def _metrics(cases, records):
 
 
 def evaluate(cases, records):
-    """Report agreement with draft labels, never human-validated accuracy."""
     known_ids = {case["id"] for case in cases}
     ids = [record["case_id"] for record in records]
     if len(ids) != len(set(ids)):
@@ -102,11 +99,6 @@ def _save(path, payload):
 
 
 async def run_cases(cases, contexts, rubric_version, output, key, assessor, *, budget=MAX_REQUESTS, resume=False):
-    """Run serially and checkpoint every attempt. Budget includes resumed attempts.
-
-    A persisted pre-call interruption marker conservatively consumes one request;
-    resume does not silently repeat paid calls with uncertain outcomes.
-    """
     if not key:
         raise ValueError("Jev key is not configured in the environment")
     if not 1 <= budget <= MAX_REQUESTS:
@@ -136,15 +128,12 @@ async def run_cases(cases, contexts, rubric_version, output, key, assessor, *, b
         checkpoint["records"].append(record)
         _save(output, checkpoint)
         item = {"number": case["number"], "title": case["title"], "cohort": "evaluation", "level": "Unclassified"}
-        # A single discarded space conveys original truncation to the unchanged app
-        # contract. Only the captured first 1,500 characters reach the provider.
         body = case["body"]
         if case.get("body_truncated") and len(body) == 1500:
             body += " "
         try:
             record["result"] = await assessor(key, contexts[case["repository"]], item, {"body": body})
         except Exception:
-            # Exception messages may contain credentials or provider request data.
             record["result"] = {"status": "failed", "error_code": "evaluator_error"}
         _save(output, checkpoint)
     return checkpoint

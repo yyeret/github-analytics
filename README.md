@@ -147,11 +147,12 @@ before using them to prioritize work. Assessments have a 90-second overall budge
 completed PR scores are retained and unfinished items are marked failed on expiry.
 
 Planning uses a 768-token output budget. Synthesis starts with 4,096 tokens and
-asks for under 700 words. A `MAX_TOKENS` synthesis finish triggers one fresh attempt
-with 8,192 tokens. Planning, optional source collection and synthesis share a
+asks for under 700 words. A `MAX_TOKENS` synthesis finish or a parsed profile rejected
+by context validation triggers one fresh attempt with 8,192 tokens (at most two
+synthesis attempts total). Planning, optional source collection and synthesis share a
 45-second deadline; each GitHub research request is limited to 8 seconds and
 Gemini requests to 25 seconds. Other
-Gemini errors, blocked responses, and invalid JSON are not retried. Incomplete
+Gemini HTTP errors, blocked responses, and invalid JSON are not retried. Incomplete
 responses are never used to score PRs. Each PR call remains independent, so one
 failed assessment does not discard successful ones. When a deadline cancels a
 Worker request, its abort signal cancels the outgoing fetch, including a pending

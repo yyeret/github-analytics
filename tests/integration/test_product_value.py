@@ -234,6 +234,27 @@ def test_context_generation_constrains_references_to_loaded_source_ids(services)
         assert set(references["enum"]) == allowed
 
 
+def test_rejected_context_gets_one_fresh_attempt_before_any_classification(monkeypatch):
+    fake = FakeServices()
+    contexts = []
+
+    async def upstream(url, **kwargs):
+        response = await fake(url, **kwargs)
+        if "generativelanguage" in url:
+            contexts.append(kwargs["body"]["generationConfig"]["maxOutputTokens"])
+            if len(contexts) == 1:
+                malformed = json.loads(json.dumps(CONTEXT))
+                malformed["lean_canvas"]["solution"] = "corrupt-output-sentinel" * 100
+                return 200, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(malformed)}]}}]}
+        return response
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    result = run()
+    assert result["status"] == "ok" and result["assessed"] == 3
+    assert len(contexts) == 2 and len(fake.jev_requests) == 3
+    assert "corrupt-output-sentinel" not in json.dumps(fake.jev_requests)
+
+
 def test_provider_deadline_is_enforced(monkeypatch):
     async def hang(url, **_):
         if "generativelanguage" in url:

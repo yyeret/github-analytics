@@ -81,9 +81,9 @@ JEV_QUESTIONS = {name: {"type": "score", "instructions": spec["question"], "crit
                  for name, spec in DIMENSIONS.items()}
 JEV_QUESTIONS["intent_assessable"] = {
     "type": "noul",
-    "instructions": "Does the supplied PR description identify a substantive change whose intended contribution can be assessed in this repository context?",
+    "instructions": "Does the supplied PR description identify a concrete change or routine action whose intended contribution can be assessed in this repository context?",
     "criteria": {
-        "true": "A concrete feature, fix, documentation, maintenance or developer-workflow change is identifiable. Benefit can be implicit. Terse descriptions such as adding 2FA, running resilience experiments or parallelizing CI tests qualify. No business case, prior incident or realized outcome is required.",
+        "true": "A feature, fix, documentation, maintenance or developer-workflow action is identifiable, even if routine or low contribution. Release preparation and version updates qualify without details about the released features. Benefit can be implicit. Terse descriptions such as adding 2FA, running resilience experiments or parallelizing CI tests qualify. No business case, prior incident or realized outcome is required.",
         "false": "Only empty template placeholders, generic claims such as various improvements, or unrelated text are supplied; the change and its intended contribution cannot be determined.",
     },
 }
@@ -252,15 +252,25 @@ async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None,
         _log_generation("gemini_generation", info, started, code)
 
 
-async def generate_context(key, prompt, diagnostics, *, schema=None):
+async def generate_context(key, prompt, diagnostics, *, schema=None, validate=None):
     async def attempts():
         for attempt, budget in enumerate(CONTEXT_TOKEN_BUDGETS, 1):
             try:
-                return await gemini_json(key, prompt, schema or CONTEXT_SCHEMA, budget,
-                                         diagnostics=diagnostics, attempt=attempt)
+                context = await gemini_json(key, prompt, schema or CONTEXT_SCHEMA, budget,
+                                            diagnostics=diagnostics, attempt=attempt)
             except GenerationError as exc:
                 if exc.code != "output_truncated" or attempt == len(CONTEXT_TOKEN_BUDGETS):
                     raise
+                continue
+            if validate is None:
+                return context
+            try:
+                return validate(context)
+            except ValueError:
+                log_event(logging.WARNING, "product_context_rejected", **diagnostics, attempt=attempt,
+                          error_code="invalid_response", elapsed_ms=0)
+                if attempt == len(CONTEXT_TOKEN_BUDGETS):
+                    raise GenerationError("invalid_response") from None
     return await asyncio.wait_for(attempts(), CONTEXT_TIMEOUT)
 
 def select_prs(data, value_classification, max_prs=DEFAULT_MAX_PRS):
@@ -431,10 +441,10 @@ async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_
             for field in RESEARCH_FIELDS:
                 schema["properties"]["repository_research"]["properties"][field]["items"]["properties"]["source_ids"]["items"] = {
                     "type": "STRING", "enum": sorted(source_ids)}
-            context = await generate_context(key, CONTEXT_PROMPT.format(
+            return await generate_context(key, CONTEXT_PROMPT.format(
                 repo=repo, evidence=json.dumps(research["sources"], ensure_ascii=False),
-                limitations=json.dumps(research["limitations"])), {**diagnostics, "stage": stage}, schema=schema)
-            return _clean_context(context, source_ids)
+                limitations=json.dumps(research["limitations"])), {**diagnostics, "stage": stage}, schema=schema,
+                validate=lambda context: _clean_context(context, source_ids))
         context = await asyncio.wait_for(research_context(), min(CONTEXT_TIMEOUT, max(0, deadline - loop.time())))
     except Exception as exc:
         code = _error_code(exc, "source_unavailable" if stage == "product_sources" else "invalid_response")

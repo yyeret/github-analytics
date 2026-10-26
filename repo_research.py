@@ -1,8 +1,3 @@
-"""Bounded public GitHub evidence for researching a repository's value drivers.
-
-The caller verifies public metadata first and owns the complete context deadline.
-The planner chooses documents from a catalog, never URLs or unrestricted paths.
-"""
 import asyncio
 import base64
 import json
