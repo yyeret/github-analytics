@@ -12,7 +12,13 @@ CONTEXT = {"product_summary": "Flow analytics for GitHub repositories.",
            "value_proposition": "Coaches teams to deliver faster.",
            "lean_canvas": {"customer_segments": "Engineering leads"},
            "strategic_goals": ["Trustworthy flow metrics", "Hosted dashboard adoption"],
-           "missing_context": "No pricing information."}
+           "missing_context": "No pricing information.",
+           "repository_research": {
+               "primary_users": [{"claim": "Engineering leads", "basis": "inferred", "source_ids": ["metadata"]}],
+               "critical_workflows": [{"claim": "Review delivery flow", "basis": "inferred", "source_ids": ["metadata"]}],
+               "value_drivers": [{"claim": "Trustworthy feedback", "basis": "inferred", "source_ids": ["metadata"]}],
+               "product_risks": [{"claim": "Misleading metrics", "basis": "inferred", "source_ids": ["metadata"]}],
+           }}
 DATA = {"recent_prs": [
     {"number": 1, "title": "Users can export reports faster", "body": "Adds CSV export."},
     {"number": 2, "title": "Bump lint config", "body": "Routine lint update."}],
@@ -22,11 +28,11 @@ DIMS = ("value", "time_criticality", "opportunity_runway", "risk_reduction")
 
 def jev_reply(scores=(3, 5, 8, 13)):
     scale = [1, 2, 3, 5, 8, 13]
-    return {"model": "jev-1.14.0", "answers": {
+    return {"model": "jev-1.14.0", "answers": {"intent_assessable": {"type": "noul", "noul": .95}, **{
         name: {"type": "score", "score": scale.index(score), "confidence": .8,
                "legend": {str(i): "rubric" for i in range(6)},
                "probabilities": {str(i): float(i == scale.index(score)) for i in range(6)}}
-        for name, score in zip(DIMS, scores)}, "usage": {"input_tokens": 500, "output_tokens": 20}}
+        for name, score in zip(DIMS, scores)}}, "usage": {"input_tokens": 500, "output_tokens": 20}}
 
 
 class FakeServices:
@@ -34,6 +40,7 @@ class FakeServices:
         self.assessments = assessments or {}
         self.context_status, self.readme, self.context, self.private = context_status, readme, context, private
         self.prompts, self.jev_requests, self.urls = [], [], []
+        self.context_schemas = []
         self.readme_headers = None
 
     async def __call__(self, url, *, headers, method="GET", body=None, timeout=15):
@@ -53,6 +60,7 @@ class FakeServices:
                 return answer, {}, {"error": "provider-secret-sentinel"}
             return 200, {}, answer
         self.prompts.append(body["contents"][0]["parts"][0]["text"])
+        self.context_schemas.append(body["generationConfig"]["responseSchema"])
         return self.context_status, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(self.context)}]}}]}
 
 
@@ -96,6 +104,38 @@ def test_uses_most_probable_level_not_rounded_average_or_confidence(services):
     assert item["dimensions"]["value"]["score"] == 13
     assert item["dimensions"]["value"]["confidence"] == .2
     assert item["dimensions"]["value"]["probabilities"]["13"] == .51
+
+
+@pytest.mark.parametrize("probability", [.05, .5, .69])
+def test_indeterminate_nonempty_description_has_no_numeric_contribution(services, probability):
+    answer = jev_reply()
+    answer["answers"]["intent_assessable"]["noul"] = probability
+    services(assessments={1: answer})
+    result = run(data={"recent_prs": [{"number": 1, "body": "Various improvements and fixes."}]})
+    item = result["items"][0]
+    assert item["status"] == "failed" and item["error_code"] == "insufficient_context"
+    assert item["cost_of_delay"] is None and "dimensions" not in item
+    assert "empty" not in item["reason"]
+
+
+@pytest.mark.parametrize("description", ["Add 2FA.", "Run chaos experiments against recovery paths.", "Parallelize CI tests."])
+def test_inferable_intent_needs_no_explicit_business_case(services, description):
+    fake = services()
+    item = run(data={"recent_prs": [{"number": 1, "body": description}]})["items"][0]
+    assert item["status"] == "assessed" and item["cost_of_delay"] == 29
+    assert item["intent_assessability"] == .95
+    assert "intent_assessable" in fake.jev_requests[0]["questions"]
+    assert item["body_truncated"] is False
+
+
+@pytest.mark.parametrize("answer", [None, {"type": "score", "noul": .99}, {"type": "noul", "noul": True}, {"type": "noul", "noul": float("nan")}])
+def test_malformed_assessability_does_not_turn_into_a_score(services, answer):
+    reply = jev_reply()
+    reply["answers"]["intent_assessable"] = answer
+    services(assessments={1: reply})
+    item = run()["items"][0]
+    assert item["status"] == "failed" and item["error_code"] == "invalid_response"
+    assert item["cost_of_delay"] is None
 
 
 @pytest.mark.parametrize("failure", [429, {"answers": {}}, {"answers": {"value": {"type": "score"}}}])
@@ -159,6 +199,60 @@ def test_readme_is_unauthenticated_and_can_fall_back_to_metadata(services):
     result = run(token="secret")
     assert "Authorization" not in fake.readme_headers
     assert result["status"] == "ok" and result["sources"]["readme"] is False
+
+
+def test_research_profile_reaches_jev_with_traceable_public_sources(services):
+    fake = services()
+    result = run(token="credential-sentinel")
+    profile = result["context"]["repository_research"]
+    assert profile["product_risks"][0]["claim"] == "Misleading metrics"
+    sources = result["sources"]["research"]
+    assert any(source["id"] == "metadata" for source in sources)
+    assert all("text" not in source for source in sources)
+    state = fake.jev_requests[0]["state"]
+    assert state["repository"]["repository_research"] == profile
+    assert result["sources"]["limitations"]
+    assert "credential-sentinel" not in json.dumps(result)
+
+
+def test_research_claims_cannot_cite_sources_that_were_not_loaded(services):
+    context = json.loads(json.dumps(CONTEXT))
+    context["repository_research"]["value_drivers"][0]["source_ids"] = ["invented-web-page"]
+    fake = services(context=context)
+    result = run()
+    assert result["status"] == "failed" and result["error_code"] == "invalid_response"
+    assert not fake.jev_requests
+
+
+def test_context_generation_constrains_references_to_loaded_source_ids(services):
+    fake = services()
+    result = run()
+    allowed = {source["id"] for source in result["sources"]["research"]}
+    claims = fake.context_schemas[-1]["properties"]["repository_research"]["properties"]
+    for field in product_value.RESEARCH_FIELDS:
+        references = claims[field]["items"]["properties"]["source_ids"]["items"]
+        assert set(references["enum"]) == allowed
+
+
+def test_rejected_context_gets_one_fresh_attempt_before_any_classification(monkeypatch):
+    fake = FakeServices()
+    contexts = []
+
+    async def upstream(url, **kwargs):
+        response = await fake(url, **kwargs)
+        if "generativelanguage" in url:
+            contexts.append(kwargs["body"]["generationConfig"]["maxOutputTokens"])
+            if len(contexts) == 1:
+                malformed = json.loads(json.dumps(CONTEXT))
+                malformed["lean_canvas"]["solution"] = "corrupt-output-sentinel" * 100
+                return 200, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(malformed)}]}}]}
+        return response
+
+    monkeypatch.setattr(product_value, "request_json", upstream)
+    result = run()
+    assert result["status"] == "ok" and result["assessed"] == 3
+    assert len(contexts) == 2 and len(fake.jev_requests) == 3
+    assert "corrupt-output-sentinel" not in json.dumps(fake.jev_requests)
 
 
 def test_provider_deadline_is_enforced(monkeypatch):

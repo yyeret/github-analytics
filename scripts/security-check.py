@@ -79,7 +79,7 @@ def main():
                                                      f'--report-path={CACHE / "source.json"}']))
     checks.append(run('Source security (medium/high severity)', [sys.executable, '-m', 'bandit', '-r',
                       'app.py', 'cloudflare_app.py', 'google_auth.py', 'github_api.py', 'analyze.py',
-                      'issues.py', 'product_value.py', 'value_classification.py', 'scripts', '-ll', '-f', 'json', '-o', str(CACHE / 'bandit.json')]))
+                      'issues.py', 'product_value.py', 'repo_research.py', 'value_classification.py', 'scripts', '-ll', '-f', 'json', '-o', str(CACHE / 'bandit.json')]))
     lock_export = CACHE / 'runtime-requirements.txt'
     exported = run('Export locked runtime dependencies', [sys.executable, '-m', 'uv', 'export', '--locked',
                    '--no-dev', '--extra', 'local', '--no-hashes', '--no-emit-project', '--output-file', str(lock_export)])

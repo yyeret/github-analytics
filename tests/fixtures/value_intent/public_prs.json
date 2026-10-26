@@ -1,0 +1,1566 @@
+{
+  "schema_version": 1,
+  "dataset_version": "value-intent-public-v1",
+  "captured_at": "2026-10-26T10:59:09.341032+00:00",
+  "label_provenance": "Agent-provisional references drafted from captured description prefixes and sourced repository context; not human truth or blinded labels. No study model-output artifacts were loaded, but the labeling agent inherited previous study discussion. Scores permit adjacent reasonable buckets; no output-driven tuning.",
+  "sampling": {
+    "github/spec-kit": "First20ascendingPRnumber from frozen2026-10-26 study selected-prs.json; excludes study modelresults.",
+    "fastapi/fastapi": "First20 from publicREST pulls?state=closed&sort=updated&direction=desc&per_page=30 captured2026-10-26. Closed is not necessarily merged.",
+    "held_out": "Frozen before labels:5perrepository with lowestSHA256(value-intent-holdout-v1:<repo>#<number>);10of40. Do not tune against heldout."
+  },
+  "contexts": {
+    "github/spec-kit": {
+      "product_summary": "Open-source toolkit giving AI coding agents structured processes, reusable templates and documented outcomes for specification-driven development, bug fixing and idea assessment.",
+      "value_proposition": "Helps developers and teams use and customize repeatable coding processes across agent integrations, extensions, presets, workflows and catalogs. Reliable installation, preservation of user files, cross-platform support, useful docs and contributor feedback matter to those workflows.",
+      "strategic_goals": [
+        "Support reliable coding-agent integrations and switching.",
+        "Enable composable processes and organizational customization through extensions, presets and workflows.",
+        "Make setup, upgrade and contributor feedback dependable across supported platforms."
+      ]
+    },
+    "fastapi/fastapi": {
+      "product_summary": "Python API framework built on standard type hints, OpenAPI and JSON Schema, with validation, automatic interactive documentation and high-performance request handling.",
+      "value_proposition": "Helps API developers build production services quickly with intuitive typed declarations, fewer defects, correct contracts and approachable documentation. Contributor productivity supports ongoing delivery.",
+      "strategic_goals": [
+        "Preserve correct request parsing, validation, response behavior and generated API schemas.",
+        "Make API development easy with interoperable standards and strong Python typing.",
+        "Support production reliability, accessible documentation and maintainable contributor workflows."
+      ]
+    },
+    "control/product": {
+      "product_summary": "Synthetic hosted developer platform serving teams that manage production services and privileged accounts.",
+      "value_proposition": "Helps developers deliver changes safely and efficiently while protecting accounts and service availability.",
+      "strategic_goals": [
+        "Protect privileged account access.",
+        "Prevent service outages and recover from dependency failures.",
+        "Shorten safe developer feedback loops."
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "github/spec-kit#4646",
+      "repository": "github/spec-kit",
+      "number": 4646,
+      "url": "https://github.com/github/spec-kit/pull/4646",
+      "title": "fix(events): preserve unowned Vibe hooks files",
+      "body": "## Description\n\nPreserve existing `.vibe/hooks.toml` files when Vibe cleanup finds no\nSpec Kit-managed hooks to remove.\n\nThis prevents no-op installation and teardown paths from rewriting user\ncontent, changing line endings, or deleting comment-only and whitespace-only\nfiles. Cleanup of Spec Kit-managed hooks remains unchanged.\n\n## Testing\n\n- Focused Vibe cleanup tests: 22 passed\n- Compile and import checks: passed\n- `git diff --check`: passed\n\n## AI Disclosure\n\n- [ ] I **did not** use AI assistance for this contribution\n- [x] I **did** use AI assistance (fill in the disclosure below)\n\n**AI disclosure:** OpenAI Codex (GPT-5.6 Sol, Terra, and Luna;\nhuman-supervised) assisted with code and tests.\n",
+      "original_body_chars": 704,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            3,
+            5
+          ]
+        },
+        "rationale": "Prevents cleanup from rewriting or deleting user-owned integration configuration; clear preservation intent without incidence requirement."
+      }
+    },
+    {
+      "id": "github/spec-kit#4960",
+      "repository": "github/spec-kit",
+      "number": 4960,
+      "url": "https://github.com/github/spec-kit/pull/4960",
+      "title": "feat(auth): support GitHub CLI credentials",
+      "body": "## Description\n\n<!-- What does this PR do? Why is it needed? -->\n\n- Add a dedicated `github-cli` authentication mode backed by the fixed, shell-free `gh auth token` command.\n- Pass the first configured hostname (`hosts[0]`) to `gh auth token --hostname` and use that hostname as the cache key for successful or failed lookups in memory for the current process.\n- Treat every configured host or supported wildcard as an explicit destination authorized to receive that credential. Host-instance inference is intentionally not performed; use separate entries for different credentials.\n- Provide sanitized missing CLI, authentication, command failure, empty or malformed output, and timeout errors.\n- Document configuration, first-host ordering, enterprise behavior, and acquisition-failure versus HTTP fallback behavior.\n\nCloses #4953\n\n## Testing\n\n<!-- How did you test your changes? -->\n\n- [ ] Tested locally with `uv run specify --help`\n- [ ] Ran existing tests with `uv sync && uv run pytest`\n- [ ] Tested with a sample project (if applicable)\n\nThe exact template commands above were not run in this review round. Focused checks at `1dfc5244`:\n\n- `.venv/bin/python -m pytest tests/specify_cli/authentication -o addopts='' -q --disable-warnings` — 326 passed, 33 warnings.\n- `ruff check --isolated --select E4,E7,E9,F,S602,S604,S605 src/specify_cli/authentication/github.py tests/specify_cli/authentication/test_authentication.py` — passed.\n\nCoverage includes first-host selection and cache isolation",
+      "original_body_chars": 3393,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            3,
+            5
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Enables existing GitHub CLI credentials for private/enterprise authentication; sanitized failures and explicit credential destinations support safer access."
+      }
+    },
+    {
+      "id": "github/spec-kit#4970",
+      "repository": "github/spec-kit",
+      "number": 4970,
+      "url": "https://github.com/github/spec-kit/pull/4970",
+      "title": "fix(powershell): treat bracketed feature paths literally",
+      "body": "## Description\n\nPowerShell can treat square brackets in a feature directory name as wildcards, causing task setup or prerequisite checks to miss existing files or match a neighboring directory.\n\n- Use literal-path checks and directory enumeration for feature-derived paths.\n- Add regression coverage for bracketed paths and wildcard-shaped neighbors.\n\n## Testing\n\n- Focused Python tests: 64 passed.\n- Windows PowerShell 5.1: the bracket-path case failed before this change and passed after it; the neighboring-directory case was correctly rejected.\n- Sample project: specify, plan, tasks, checklist, and analyze workflows completed with a bracketed feature directory.\n- `git diff --check` passed.\n\n## AI Disclosure\n\n- [x] I **did** use AI assistance (described below)\n\n**AI disclosure:** AI-assisted tools were used to implement the fix and develop tests.\n",
+      "original_body_chars": 856,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Restores task setup and prerequisite checks for bracketed Windows paths and avoids matching neighboring files."
+      }
+    },
+    {
+      "id": "github/spec-kit#4993",
+      "repository": "github/spec-kit",
+      "number": 4993,
+      "url": "https://github.com/github/spec-kit/pull/4993",
+      "title": "Add Entalpa to Community Friends",
+      "body": "## Description\r\n\r\nAdds Entalpa to the Community Friends page (`docs/community/friends.md`). One entry, nothing else touched.\r\n\r\nEntalpa reads a public repository, or a private one uploaded as a zip or folder, and takes its `specs/<feature>/spec.md` and `tasks.md`. It folds the features into one current backlog: user stories, `FR-`/`SC-` requirements linked to them with statuses from `tasks.md`, and clarifications as answered questions. A later feature revises the story it changes instead of adding a copy, and the result can be exported back as a `specs/` feature.\r\n\r\nThe entry discloses the account boundary (viewing needs no account, keeping or editing does) and that the specs go to third-party AI providers.\r\n\r\nDocs only: no code and no catalog change, so no submission issue.\r\n\r\n## Testing\r\n\r\nMarkdown only. Checked the rendered page in my fork and that https://entalpa.com/spec-kit resolves and lets you paste a repository without signing up. Also uploaded a zip of a Spec Kit repository without signing up, and it folded.\r\n\r\n- [ ] Tested locally with `uv run specify --help`\r\n- [ ] Ran existing tests with `uv sync && uv run pytest`\r\n- [ ] Tested with a sample project (if applicable)\r\n\r\n## AI Disclosure\r\n\r\n- [ ] I **did not** use AI assistance for this contribution\r\n- [x] I **did** use AI assistance (fill in the disclosure below)\r\n\r\nEntry text drafted by Claude Code (Claude Opus), human-supervised, docs only; the \"hosted web app\" wording applied via Copilot Autofix from the Copilot",
+      "original_body_chars": 1581,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1
+          ]
+        },
+        "rationale": "Makes one community tool discoverable; the tool capability is context for a directory entry, not functionality implemented by this PR."
+      }
+    },
+    {
+      "id": "github/spec-kit#5020",
+      "repository": "github/spec-kit",
+      "number": 5020,
+      "url": "https://github.com/github/spec-kit/pull/5020",
+      "title": "feat: add .presetignore support",
+      "body": "## Description\n\nAdd `.presetignore` support so preset authors can exclude development-only files from installed presets, matching the existing `.extensionignore` behavior.\n\n- Share ignore loading and matching between extensions and presets, preserving extension behavior.\n- Support Git-style patterns, comments, negation, directory patterns, root anchoring, UTF-8, and existing whitespace/backslash normalization.\n- Exclude `.presetignore` itself. Preserve existing copying behavior when absent; do not use `.gitignore` or introduce default exclusions.\n- Validate ignore files before the source-directory installer removes existing files or registration state.\n- Apply filtering to directory installs, archive installs, reinstalls, and update replacements.\n- Document supported semantics and examples.\n\n`preset update` retains its documented remove-then-add behavior. The existing extension force-removal ordering remains unchanged.\n\n## Testing\n\nCommands use this checkout’s virtual environment, following repository guidance.\n\n- [x] Tested locally with `.venv/bin/specify --help`\n- [x] Ran existing tests with `uv sync --extra test` and `.venv/bin/python -m pytest tests -q`\n- [x] Tested with a sample project\n\nResults:\n\n- **12,673 passed and 101 skipped** across the full run and targeted retries. The sandboxed run encountered 9 failures and 628 setup errors involving network access and local HTTP servers; all 637 cases passed outside the sandbox without code changes. The initial run emitted 62",
+      "original_body_chars": 2570,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            3,
+            5
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Gives preset authors installation filtering and validates before destructive replacement, supporting configurable distribution."
+      }
+    },
+    {
+      "id": "github/spec-kit#5030",
+      "repository": "github/spec-kit",
+      "number": 5030,
+      "url": "https://github.com/github/spec-kit/pull/5030",
+      "title": "feat(integration): add none for shared scaffolding only",
+      "body": "## Description\n\n<!-- What does this PR do? Why is it needed? -->\n\nAdd `none` as an ordinary registered built-in integration. It returns an empty command-template list, so inherited setup creates no files. Its teardown is manifest-only: it never invokes shared event cleanup for files it did not create. Teams can initialize shared Spec Kit scaffolding without generating agent commands, skills, settings, or native events:\n\n```bash\nspecify init my-project --integration none\n```\n\nThe existing lifecycle handles init, install, use, switch, upgrade, and uninstall without changes. `none` has normal installed/default metadata and an empty owned-file manifest; shared `.specify/` infrastructure remains. `SPECKIT_INTEGRATION_DEFAULT=none` selects it through the existing default configuration.\n\nUse `specify integration switch <key>` to replace it. `none` declares `multi_install_safe = True`, so another declared-safe integration can coexist without `--force`, with healthy status:\n\n```bash\nspecify integration install kiro-cli\nspecify integration use kiro-cli\n```\n\nPartners not declared safe, including Copilot, still require the existing `--force` override and still produce `unsafe-multi-install` status while coinstalled. No name-based collision exception or automatic fallback installation is added.\n\nThe cumulative diff is **10 files, +178/-14**. Executable changes remain the adapter and two-line registry wiring. Supporting changes are catalog metadata, focused tests, reference documentation, ",
+      "original_body_chars": 6205,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            3,
+            5
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Enables agent-neutral setup and later switching/coexistence; preservation semantics support this workflow but no broad incident is claimed."
+      }
+    },
+    {
+      "id": "github/spec-kit#5033",
+      "repository": "github/spec-kit",
+      "number": 5033,
+      "url": "https://github.com/github/spec-kit/pull/5033",
+      "title": "fix(extensions): reject malformed catalog entries before removal",
+      "body": "## Description\n\n`specify extension catalog remove <name>` drops every entry of `.specify/extension-catalogs.yml` that isn't a mapping while it removes `<name>` (the list comprehension in `src/specify_cli/extensions/catalog/command_remove.py`). One bare URL line, such as `- https://example.com/private.json` instead of a `name`/`url` mapping, is enough:\n\n- Removing a name that isn't in the file still prints `✓ Removed catalog '<name>'`, exits 0, and rewrites the file without the malformed entry. The comment and the CRLF line endings go with it.\n- Removing the last valid catalog leaves an empty list, so the command deletes the file, including the user's other top-level keys.\n\n#4992 fixed the same thing in `specify preset catalog remove`. This PR does the same for extensions: every entry is checked before anything is removed, and a non-mapping entry exits 1 with `Invalid catalog entry at index N: expected a mapping, got <type>`, the message #4992 uses. The file is left as it was. Valid configs behave as before.\n\n`specify extension catalog list` already refuses such a file: on the config below it exits 1 with `catalog entry at index 1: expected a mapping, got str` from the shared catalog loader. `remove` rewrote the same file instead.\n\nI haven't seen a user report of this. It came up while checking the other catalog commands after #4992.\n\nRepro: `specify init --here --integration codex --ignore-agent-tools`, then this `.specify/extension-catalogs.yml` (CRLF):\n\n```yaml\n# Team confi",
+      "original_body_chars": 4084,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            3,
+            5
+          ]
+        },
+        "rationale": "Rejects malformed catalog entries before mutation to prevent losing user configuration, explicitly without a prior user report."
+      }
+    },
+    {
+      "id": "github/spec-kit#5034",
+      "repository": "github/spec-kit",
+      "number": 5034,
+      "url": "https://github.com/github/spec-kit/pull/5034",
+      "title": "docs: organize agent-specific integration documentation",
+      "body": "## Description\n\n<!-- What does this PR do? Why is it needed? -->\n\nConsolidates integration documentation under `docs/integrations/`, with a\ntop-level navigation menu and a dedicated page for each of the 43 registered\nintegrations, including `none`.\n\n- Separates agent-specific setup, invocation, options, safety, and limitations\n  from shared CLI, catalog, and contributor references.\n- Adds concise scenarios for adding, removing, and switching agents, including\n  an optional agent-neutral baseline for mixed-agent teams.\n- Updates incoming links and removes the superseded reference, contribution\n  page, and catalog-directory README without forwarding stubs.\n- Requires user-visible, agent-specific integration changes to update\n  `docs/integrations/<key>.md` in the same change.\n\nThe guides were checked against the implementations on upstream `main`,\nincluding the newly merged `none` integration, Kimi's `stream-json` output,\nZCode's unsupported model flag, and extension/preset cleanup on uninstall.\nNo CLI runtime behavior is changed. The CI follow-up removes the obsolete\n`integrations/*.md` lint glob and bumps the bundled GitHub extension and its\ncatalog entry to `1.0.3` to deliver the README updates, with a matching version\ntest assertion.\n\n## Testing\n\n<!-- How did you test your changes? -->\n\n- [x] Tested locally with `uv run specify --help`\n- [ ] Ran existing tests with `uv sync && uv run pytest`\n- [x] Tested with a sample project (if applicable)\n\nThe generic test command above w",
+      "original_body_chars": 4808,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Improves discovery and correct use across43integrations; documentation is a product contribution despite no runtime change."
+      }
+    },
+    {
+      "id": "github/spec-kit#5041",
+      "repository": "github/spec-kit",
+      "number": 5041,
+      "url": "https://github.com/github/spec-kit/pull/5041",
+      "title": "fix(cli): align integration guidance with available output",
+      "body": "## Description\n\n<!-- What does this PR do? Why is it needed? -->\n\nMake shared CLI guidance describe an integration's actual output and executable requirements.\n\n- When `list_command_templates()` is empty, keep project-directory guidance and recommend `specify integration list` followed by `specify integration switch <key>`. Do not recommend unavailable agent commands or enhancement commands.\n- Report non-CLI integrations as having no CLI requirement, rather than inferring IDE-only usage, in both built-in and installed-external checks and in `integration list`.\n- Preserve ordinary command and skill guidance and document the behavior in the reorganized integration CLI reference.\n\nThis addresses the shared CLI concern reported in https://github.com/github/spec-kit/pull/5030#discussion_r4327618217. The implementation is capability-based, without integration-key exceptions, and the empty-inventory regression uses a test-only override of the existing generic integration. It does not change integration setup, event ownership, command rendering, or core templates.\n\nLatest `main` is merged, including the `none` integration and the integration-documentation reorganization. The documentation conflict was resolved by preserving the guidance in `docs/integrations/cli.md`, not restoring the deleted reference.\n\n## Testing\n\n<!-- How did you test your changes? -->\n\n- [x] Tested locally with `uv run specify --help`\n- [ ] Ran existing tests with `uv sync && uv run pytest`\n- [x] Tested with a sa",
+      "original_body_chars": 4611,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Replaces misleading commands and executable requirements with capability-appropriate guidance, reducing user friction."
+      }
+    },
+    {
+      "id": "github/spec-kit#5043",
+      "repository": "github/spec-kit",
+      "number": 5043,
+      "url": "https://github.com/github/spec-kit/pull/5043",
+      "title": "fix(integrations): map Pi JSON dispatch to --mode json",
+      "body": "## Description\n\n`PiIntegration` does not override `build_exec_args()`, so it inherits `MarkdownIntegration.build_exec_args()` ([`base.py#L1139-L1158`](https://github.com/github/spec-kit/blob/505781d7cabb5180b7098a7d8371c48456f9d4f6/src/specify_cli/integrations/base.py#L1139-L1158)), which appends `--output-format json` when `output_json` is true.\n\nPi has no `--output-format` option. It selects JSONL events with `--mode json`, and `--mode` accepts only `text`, `json` and `rpc` ([`packages/coding-agent/src/cli/args.ts#L96-L110`](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/cli/args.ts#L96-L110), documented in [`docs/cli.md#L43-L48`](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/docs/cli.md#L43-L48)). Any other long option is kept as a possible extension flag ([`args.ts#L249-L262`](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/cli/args.ts#L249-L262)). Once extensions are loaded, a flag that no extension registers becomes an `Unknown option` error ([`core/agent-session-services.ts#L99-L125`](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/core/agent-session-services.ts#L99-L125)), and `pi` exits 1 ([`main.ts#L916-L925`](https://github.com/earendil-works/pi/blob/71023aec1546d6d677a65669c5665c0927ce0dd0/packages/coding-agent/src/main.ts#L9",
+      "original_body_chars": 8339,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Describes incompatible Pi JSON CLI flags and exit failure; integration repair intent is inferable even though the prefix ends mid-citation."
+      }
+    },
+    {
+      "id": "github/spec-kit#5048",
+      "repository": "github/spec-kit",
+      "number": 5048,
+      "url": "https://github.com/github/spec-kit/pull/5048",
+      "title": "fix(scripts): write --json output of the Python helpers as ASCII",
+      "body": "## Description\n\nWith `--script py`, the command templates run the Python helpers with `--json` and read their stdout. On Windows a captured stdout uses the ANSI code page (cp1252 on most Western setups), and `_json_line` / `json.dumps` write with `ensure_ascii=False`. Any character cp1252 can't encode then raises `UnicodeEncodeError`, the script exits 1, and the agent gets no JSON:\n\n- `resolve_template.py constitution-template --json` (`/speckit.constitution`) fails with the stock template, which contains `→`.\n- `setup_tasks.py --json` (`/speckit.tasks`) fails with the stock tasks template, which contains emoji.\n- `setup_plan.py --json`, `check_prerequisites.py --json` and `setup_tasks.py --json` fail for any feature whose name isn't Latin. Since #4780, `create_new_feature.py` keeps names like `001-Додати-експорт-звітів`, and these scripts print that path.\n\n#3890 and #3892 fixed the same crash in the text output of `check_prerequisites.py` and `setup_tasks.py`: the check marks fall back to `[OK]`/`[FAIL]` when stdout can't encode them. The `--json` paths, which the command templates use, still crash. This PR writes their JSON with `ensure_ascii=True`. With `--json`, non-ASCII characters are now written using JSON Unicode escapes on all systems, including UTF-8 systems. JSON parsers recover exactly the same values, preserving localized names, paths, and template content. This prevents encoding failures on legacy Windows output code pages. Output without `--json` is unchanged.\n",
+      "original_body_chars": 4708,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            3,
+            5
+          ]
+        },
+        "rationale": "Prevents stock and localized agent workflow helpers from crashing on legacy Windows encoding while preserving JSON values."
+      }
+    },
+    {
+      "id": "github/spec-kit#5049",
+      "repository": "github/spec-kit",
+      "number": 5049,
+      "url": "https://github.com/github/spec-kit/pull/5049",
+      "title": "[extension] Update Linear Weave extension to v1.0.2",
+      "body": "## Summary\n- Updated `linear-weave` in `extensions/catalog.community.json` from `1.0.1` to `1.0.2`\n- Updated `download_url` to the tag-pinned `v1.0.2` archive URL\n- Added `sha256` from the fetched release archive: `d5e07b1e2897ad357661379b3fb4dd50109c00a351c412fe14db5ef98c2d9a4c`\n- Updated extension `updated_at` to `2026-10-21T00:00:00Z`\n- Updated catalog top-level `updated_at` to `2026-10-21T00:00:00Z`\n\n## Validation\nAll required checks completed and passed:\n- Issue title format is valid (`[Extension]: ...`)\n- Extension ID format valid (`linear-weave`)\n- Version format valid (`1.0.2`)\n- Repository exists and is publicly accessible\n- Repository contains `extension.yml`, `README.md`, and `LICENSE`\n- Download URL belongs to the submitted repository and is tag-pinned (`archive/refs/tags/v1.0.2.zip`)\n- Download URL passed character/pinning checks and fetched successfully (HTTP 200)\n- SHA-256 computed from downloaded archive and stored in catalog\n- Release exists for tag `v1.0.2`\n- Testing Checklist and Submission Requirements checkboxes are all checked\n- Catalog JSON validated successfully\n\nCloses #5045\n\ncc ``@tonydwoodhouse``\n\n> Generated by [🧩 Add Community Extension from Issue Submission](https://github.com/github/spec-kit/actions/runs/39607378125) for #5045 · copilot · gpt53codex · 23.3 AIC · ⌖ 0.746 AIC · ⊞ 25.4K · [◷](https://github.com/search?q=repo%3Agithub%2Fspec-kit+%22gh-aw-workflow-id%3A+add-community-extension%22&type=pullrequests)\n\n<!-- gh-aw-agentic-workflow: Add C",
+      "original_body_chars": 1830,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Refreshes a catalog entry and pinned checksum; specific1.0.2functional benefits are absent from the prefix."
+      }
+    },
+    {
+      "id": "github/spec-kit#5051",
+      "repository": "github/spec-kit",
+      "number": 5051,
+      "url": "https://github.com/github/spec-kit/pull/5051",
+      "title": "ci: shorten test runs with two workers and faster fixture shutdown",
+      "body": "## Description\n\n<!-- What does this PR do? Why is it needed? -->\n\nShorten test feedback without reducing the existing OS/Python matrix or selecting fewer tests:\n\n- Run the full suite with two pytest-xdist workers in each existing Ubuntu, Windows, and macOS job, on Python 3.13 and 3.14. Leave the independent Ruff job unchanged.\n- Reduce the installed-adapter test HTTP server's shutdown polling interval to 0.01 seconds. Preserve its per-test temporary root, ephemeral port, and shutdown/socket-close/thread-join cleanup.\n- Add `pytest-xdist>=3.0` only to the test extra. Add hashed execnet 2.1.2 and pytest-xdist 3.8.0 entries and their provenance to the audit snapshot, without changing existing pins or audit behavior.\n\nThese are four files, 16 insertions and two deletions. No production code, test exclusions, workflow restructuring, runner settings, or permissions change.\n\nFor a directional reference, the slowest test step in the final fork candidate was 833 seconds, versus a mean of 1,675.4 seconds for the slowest test step in each of five successful upstream main push runs sampled on October 20: [39487888924](https://github.com/github/spec-kit/actions/runs/39487888924), [39470755550](https://github.com/github/spec-kit/actions/runs/39470755550), [39438133070](https://github.com/github/spec-kit/actions/runs/39438133070), [39433509775](https://github.com/github/spec-kit/actions/runs/39433509775), and [39318274471](https://github.com/github/spec-kit/actions/runs/39318274471). This i",
+      "original_body_chars": 7205,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Intends faster contributor feedback with the existing test matrix and suite preserved; directional timings are not validated realized value."
+      }
+    },
+    {
+      "id": "github/spec-kit#5054",
+      "repository": "github/spec-kit",
+      "number": 5054,
+      "url": "https://github.com/github/spec-kit/pull/5054",
+      "title": "Feat/4913 workflow mcp inventory",
+      "body": "## Description\n\nAdds a foundational workflow MCP inventory covering all 29 registered `specify workflow` CLI leaves, including nested command groups.\n\nEach command is explicitly classified as `unavailable`, with a concrete disposition reason and source-audited capability and network-access metadata. No MCP adapters, server registration, or workflow behavior changes are introduced.\n\nParity tests inspect the actual registered Typer hierarchy and reject missing, stale, duplicate, and invalid inventory records. Additional tests protect execution metadata and verify that existing MCP discovery and the legacy command catalog remain unchanged.\n\nAvailable records fail closed until operation-specific contract evidence exists. Separate synthetic tests cover MCP tool discovery cardinality and schema shape without claiming contract correspondence.\n\n**Refs #4913.**\n\n## Testing\n\n- **Windows:** 156 focused inventory/artifact MCP tests passed, including all 48 workflow inventory tests.\n- **Unprivileged Linux:** 1,764 passed, 28 skipped across selected workflow, artifact MCP/shared-operation, MCP-server, and legacy workflow suites.\n- Repository-pinned Ruff 0.15.0 lint and formatting checks passed.\n- `git diff --check` passed.\n- Confirmed 29 registered CLI leaves match 29 inventory records, with no workflow MCP tools registered.\n- Adversarial checks rejected nonavailable contract versions and correctly named synthetic tools without real contract evidence.\n- Actual `specify workflow --help` out",
+      "original_body_chars": 2490,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            3,
+            5
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Builds explicit unavailable workflow MCP inventory and capability metadata; enables future contracts while not claiming delivered MCP execution."
+      }
+    },
+    {
+      "id": "github/spec-kit#5055",
+      "repository": "github/spec-kit",
+      "number": 5055,
+      "url": "https://github.com/github/spec-kit/pull/5055",
+      "title": "fix(events): preserve dispatcher ownership during cleanup",
+      "body": "## Description\n\n<!-- What does this PR do? Why is it needed? -->\n\nFix shared integration cleanup silently deleting a user-owned `.specify/events.py`.\nPreviously, cleanup deleted the dispatcher whenever no other installed integration\nreferenced it, even if the integration performing cleanup had never owned it.\nThis affected incoming event-capable integration setup as well as teardown.\n\nRequire ownership evidence from the integration's current or previous manifest\nbefore deleting the last managed dispatcher. Preserve unowned, recovered, and\npartially owned files even when forced, retain dispatchers referenced by another\ninstalled integration, and preserve modified managed dispatchers with a warning\nunless forced. Consult the prior manifest during empty-event upgrades so genuine\nlast-consumer cleanup still works with a fresh output manifest.\n\nThread force through event emission, teardown, and upgrades; document the event\nhelper/override contract. Add positive and negative ownership coverage using\nexisting integrations, including public install, switch, and upgrade commands.\nThis change contains no new integration adapter or CLI guidance changes.\n\nRegression evidence: replaying the original cleanup function from the branch's\nbase commit in an isolated pytest process made all 10 unowned-dispatcher cases\nfail; the corrected implementation passed those same 10 cases. The tests exercise\nboth incoming installation and outgoing teardown without requiring the `none`\nintegration.\n\n## Tes",
+      "original_body_chars": 4298,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            5,
+            8
+          ]
+        },
+        "rationale": "Intends to prevent shared cleanup from silently deleting user-owned dispatchers across installation and teardown, with ownership-aware preservation."
+      }
+    },
+    {
+      "id": "github/spec-kit#5059",
+      "repository": "github/spec-kit",
+      "number": 5059,
+      "url": "https://github.com/github/spec-kit/pull/5059",
+      "title": "docs: correct built-in workflow step source paths",
+      "body": "## Description\n\nCorrect the two built-in source-directory references in `design/workflow-step.md` from `steps/` to `step/`, matching `src/specify_cli/workflows/step/`. The installed-package path `.specify/workflows/steps/<id>/` is unchanged.\n\n## Testing\n\n- Verified that only the two intended references changed and that the source path and relative links exist.\n- `git diff --check`\n\n## AI Disclosure\n\n- [x] I **did** use AI assistance (described below)\n\n**AI disclosure:** AI-assisted tools were used to correct the documentation and verify the changed paths.\n",
+      "original_body_chars": 562,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1
+          ]
+        },
+        "rationale": "Corrects two developer documentation paths; narrow clarity benefit with no stated product hazard."
+      }
+    },
+    {
+      "id": "github/spec-kit#5062",
+      "repository": "github/spec-kit",
+      "number": 5062,
+      "url": "https://github.com/github/spec-kit/pull/5062",
+      "title": "[extension] Add CSDD — Controlled Spec-Driven Development extension to community catalog",
+      "body": "## Summary\n- add new `csdd` community extension entry to `extensions/catalog.community.json` in alphabetical order\n- set catalog entry `sha256` to the downloaded archive digest\n- update `docs/community/extensions.md` community extensions table with the new CSDD row in alphabetical order\n\n## Validation\nAll required validation checks completed and passed:\n- issue title prefix is valid (`[Extension]:`)\n- extension ID format is valid (`csdd`)\n- version format is valid semver (`1.2.0`)\n- repository is publicly accessible and contains `extension.yml`, `README.md`, and `LICENSE`\n- download URL is repo-scoped, tag-pinned, version-matching, and returned HTTP 200\n- tag release exists (`v1.2.0`)\n- checksum comparison passed (`sha256sum --check --strict` reported `OK`)\n- required testing/submission checklists are checked\n\nCloses #5061\n\ncc ``@williamyuan86``\n\n> Generated by [🧩 Add Community Extension from Issue Submission](https://github.com/github/spec-kit/actions/runs/39780554247) for #5061 · copilot · gpt53codex · 35 AIC · ⌖ 0.766 AIC · ⊞ 25.4K · [◷](https://github.com/search?q=repo%3Agithub%2Fspec-kit+%22gh-aw-workflow-id%3A+add-community-extension%22&type=pullrequests)\n\n<!-- gh-aw-agentic-workflow: Add Community Extension from Issue Submission, engine: copilot, model: gpt-5.3-codex, id: 39780554247, workflow_id: add-community-extension, run: https://github.com/github/spec-kit/actions/runs/39780554247 -->\n\n<!-- gh-aw-workflow-id: add-community-extension -->\n<!-- gh-aw-workflow-call-id",
+      "original_body_chars": 1545,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Makes a community extension discoverable with integrity metadata; the prefix does not describe substantive extension benefits."
+      }
+    },
+    {
+      "id": "github/spec-kit#5063",
+      "repository": "github/spec-kit",
+      "number": 5063,
+      "url": "https://github.com/github/spec-kit/pull/5063",
+      "title": "chore: release 1.2.3, begin 1.2.4.dev0 development",
+      "body": "Automated release of 1.2.3.\n\nThis PR was created by the Release Trigger workflow. The git tag `v1.2.3` has already been pushed and the release artifacts are being built.\n\nMerging this PR will set `main` to `1.2.4.dev0` so that development installs are clearly marked as pre-release.",
+      "original_body_chars": 282,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Release bookkeeping identifies development versions correctly; no basis to attribute all release contents to this PR."
+      }
+    },
+    {
+      "id": "github/spec-kit#5065",
+      "repository": "github/spec-kit",
+      "number": 5065,
+      "url": "https://github.com/github/spec-kit/pull/5065",
+      "title": "fix(integrations): pass the Junie dispatch prompt via --task",
+      "body": "## Description\n\n`JunieIntegration` does not override `build_exec_args()`, so it inherits `MarkdownIntegration.build_exec_args()` ([`base.py#L1151-L1170`](https://github.com/github/spec-kit/blob/dc2cec4f568d0f6e2cdfb8571c69116bc55c1aaf/src/specify_cli/integrations/base.py#L1151-L1170)), which passes the prompt as `-p <prompt>`.\n\nIn Junie CLI, `-p` is the short form of `--project`, the directory Junie runs in. A non-interactive task is given as a positional argument or with `--task`. From `junie --help` (`@jetbrains/junie@3110.7.0`, the npm package the [JetBrains/junie README](https://github.com/JetBrains/junie/blob/d6d20a95b56cd6f7b7eb411db963b7f6f4dbadd6/README.md#L38-L42) installs):\n\n```text\nUsage: junie [<options>] [<task>]\n...\nNon-interactive mode:   junie \"Fix the bug in the login function\"\n                        junie --task \"Fix the bug\"\n...\n  --task=<text>                     Task description (alternative to positional argument)\n...\n  -p, --project=<text>              Project directory (default: current directory)\n...\n  --output-format=<text>         Output format: text, json, json-stream\n...\n  --model=<text>                    Model to use for the primary agent\n```\n\nThe same is in Junie's [CLI reference](https://junie.jetbrains.com/docs/parameters.html) and in the Junie skill JetBrains ships in its own repository: \"`-p` is `--project`. Non-interactive is simply the positional task.\" ([`hermes-plugin/skills/junie/SKILL.md#L93`](https://github.com/JetBrains/junie/blob/",
+      "original_body_chars": 8745,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Describes Junie prompt being interpreted as a project argument; intended working dispatch is inferable without polished outcome wording."
+      }
+    },
+    {
+      "id": "github/spec-kit#5066",
+      "repository": "github/spec-kit",
+      "number": 5066,
+      "url": "https://github.com/github/spec-kit/pull/5066",
+      "title": "chore(deps): bump the codeql-action group with 2 updates",
+      "body": "Bumps the codeql-action group with 2 updates: [github/codeql-action/init](https://github.com/github/codeql-action) and [github/codeql-action/analyze](https://github.com/github/codeql-action).\n\nUpdates `github/codeql-action/init` from 4.38.3 to 4.39.0\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a href=\"https://github.com/github/codeql-action/releases\">github/codeql-action/init's releases</a>.</em></p>\n<blockquote>\n<h2>v4.39.0</h2>\n<ul>\n<li><em>Breaking change</em>: Bump the minimum required CodeQL bundle version to 2.20.7. <a href=\"https://redirect.github.com/github/codeql-action/pull/4205\">#4205</a></li>\n<li>The <code>codeql-action/analyze</code> step now validates that a correct argument for the <code>checkout_path</code> input has been provided. The <code>checkout_path</code> input must be set to the path where the repository that is being analyzed is checked out at on the runner, if that path is something other than the workspace root. If the path does not point to a repository checkout or is different from the path that was used by <code>codeql-action/init</code>, then the CodeQL Action now produces a warning. <a href=\"https://redirect.github.com/github/codeql-action/pull/4148\">#4148</a></li>\n<li>Resolved an issue with third-party caching implementations that prevented caches from being restored correctly. <a href=\"https://redirect.github.com/github/codeql-action/pull/4206\">#4206</a></li>\n<li>The <code>codeql-action/start-proxy</code> step that is used",
+      "original_body_chars": 22028,
+      "body_truncated": true,
+      "captured_head_sha": null,
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Maintains security-analysis tooling with validation/caching fixes; no specific product vulnerability or urgent deadline is stated."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16613",
+      "repository": "fastapi/fastapi",
+      "number": 16613,
+      "url": "https://github.com/fastapi/fastapi/pull/16613",
+      "title": "⬆ Bump graphql-core from 3.2.7 to 3.3.1",
+      "body": "Bumps [graphql-core](https://github.com/graphql-python/graphql-core) from 3.2.7 to 3.3.1.\r\n\r\nRelease notes: <a href=\"https://github.com/graphql-python/graphql-core/releases\">graphql-core's releases</a>.\r\n",
+      "original_body_chars": 204,
+      "body_truncated": false,
+      "captured_head_sha": "c3b83ea7d2c57bbefc07b822905602a991efa9e9",
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Dependency update only; notes link is not included functional evidence. Routine maintenance contribution is identifiable."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16611",
+      "repository": "fastapi/fastapi",
+      "number": 16611,
+      "url": "https://github.com/fastapi/fastapi/pull/16611",
+      "title": "⬆ Bump black from 26.5.1 to 26.10.1",
+      "body": "Bumps [black](https://github.com/psf/black) from 26.5.1 to 26.10.1.\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a href=\"https://github.com/psf/black/releases\">black's releases</a>.</em></p>\n<blockquote>\n<h2>26.10.1</h2>\n<h3>Highlights</h3>\n<p>This release fixes a security issue in Black's bundled GitHub Action. Repositories that\nuse the action are encouraged to update to the latest version of Black immediately. This\nupdate is received automatically when using <code>psf/black@stable</code>, and is independent of\nthe version of Black installed by the action.</p>\n<p>When the GitHub Action reads version specifiers from <code>tool.black.required-version</code>, it\nnow only accepts released versions of Black, as it already did for <code>black</code> requirements\nin dependency lists. Other values, such as URL references, are now rejected. This issue\nhas been registered as <code>GHSA-cg8m-r9f2-5wm2</code>; a CVE identifier is pending.</p>\n<h3>Stable style</h3>\n<ul>\n<li>Fix a long Jupyter notebook assignment magic (for example <code>x = !ls -la</code>) being wrapped\nin parentheses, which IPython can no longer run; such cells are now left unchanged\n(<a href=\"https://redirect.github.com/psf/black/issues/5481\">#5481</a>)</li>\n<li>Keep repeated lines outside the selected <code>--line-ranges</code> unchanged (<a href=\"https://redirect.github.com/psf/black/issues/5436\">#5436</a>)</li>\n<li>Fix <code>--line-ranges</code> formatting lines that follow a statement when format",
+      "original_body_chars": 12888,
+      "body_truncated": true,
+      "captured_head_sha": "ff792b72490eb1b4a0c38ee91dfe9aaf04262244",
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1,
+            2,
+            3
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3,
+            5
+          ]
+        },
+        "rationale": "Black update includes a bundled-action security warning, but whether this repository uses the vulnerable action configuration is not established."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16612",
+      "repository": "fastapi/fastapi",
+      "number": 16612,
+      "url": "https://github.com/fastapi/fastapi/pull/16612",
+      "title": "⬆ Bump gitpython from 3.1.62 to 3.2.1",
+      "body": "Bumps [gitpython](https://github.com/gitpython-developers/GitPython) from 3.1.62 to 3.2.1.\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a href=\"https://github.com/gitpython-developers/GitPython/releases\">gitpython's releases</a>.</em></p>\n<blockquote>\n<h2>3.2.1</h2>\n<h2>What's Changed</h2>\n<ul>\n<li>prepare for next release, v3.2 by <a href=\"https://github.com/Byron\"><code>@​Byron</code></a> in <a href=\"https://redirect.github.com/gitpython-developers/GitPython/pull/2260\">gitpython-developers/GitPython#2260</a></li>\n<li>objects: decode a byte mode before reading its digits by <a href=\"https://github.com/SashaMIT\"><code>@​SashaMIT</code></a> in <a href=\"https://redirect.github.com/gitpython-developers/GitPython/pull/2261\">gitpython-developers/GitPython#2261</a></li>\n<li>build(deps): bump <a href=\"https://github.com/astral-sh/ruff-pre-commit\">https://github.com/astral-sh/ruff-pre-commit</a> from v0.16.5 to 0.16.9 in the pre-commit group by <a href=\"https://github.com/dependabot\"><code>@​dependabot</code></a>[bot] in <a href=\"https://redirect.github.com/gitpython-developers/GitPython/pull/2263\">gitpython-developers/GitPython#2263</a></li>\n<li>fix(submodule): validate destinations before mutation by <a href=\"https://github.com/Byron\"><code>@​Byron</code></a> in <a href=\"https://redirect.github.com/gitpython-developers/GitPython/pull/2264\">gitpython-developers/GitPython#2264</a></li>\n<li>fix(util): create lock files in one exclusive step by <a href=\"https://githu",
+      "original_body_chars": 17899,
+      "body_truncated": true,
+      "captured_head_sha": "153cbd88ee217f09386973783dc11e8d52e5efde",
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "GitPython update includes safer submodule destination and exclusive lock handling; do not assume a demonstrated FastAPI exploit."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16610",
+      "repository": "fastapi/fastapi",
+      "number": 16610,
+      "url": "https://github.com/fastapi/fastapi/pull/16610",
+      "title": "⬆ Bump opentelemetry-api from 1.44.0 to 1.45.1",
+      "body": "Bumps [opentelemetry-api](https://github.com/open-telemetry/opentelemetry-python) from 1.44.0 to 1.45.1.\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a href=\"https://github.com/open-telemetry/opentelemetry-python/releases\">opentelemetry-api's releases</a>.</em></p>\n<blockquote>\n<h2>Version 1.45.1/0.66b1</h2>\n<p>This is a patch release on the previous 1.45.0/0.66b0 release, fixing the issue(s) below.</p>\n<h3>Fixed</h3>\n<ul>\n<li><code>opentelemetry-api</code>: make <code>AnyValue</code> and <code>AttributeValue</code> explicit type aliases (<a href=\"https://redirect.github.com/open-telemetry/opentelemetry-python/pull/5703\">#5703</a>)</li>\n<li><code>opentelemetry-sdk</code>: fix thread leak bug in resource initialization logic for long running resource detectors (<a href=\"https://redirect.github.com/open-telemetry/opentelemetry-python/pull/5706\">#5706</a>)</li>\n<li><code>opentelemetry-exporter-otlp-proto-http</code>: restore <code>requests</code> as the default HTTP transport so proxy environment variables such as <code>HTTPS_PROXY</code> are honored again (<a href=\"https://redirect.github.com/open-telemetry/opentelemetry-python/pull/5714\">#5714</a>)</li>\n<li><code>opentelemetry-api</code>: fix quadratic time parsing of the <code>tracestate</code> header and discard <code>tracestate</code> headers longer than 8192 characters (<a href=\"https://redirect.github.com/open-telemetry/opentelemetry-python/pull/5746\">#5746</a>)</li>\n</ul>\n<h2>Version 1.45.0/0.66b0</h2>",
+      "original_body_chars": 19471,
+      "body_truncated": true,
+      "captured_head_sha": "34477caf7aeef2731e54caff1ec1596ac0ef7808",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Observability dependency notes include resource, transport and header parsing fixes; relevance to specific FastAPI paths remains inferred."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16616",
+      "repository": "fastapi/fastapi",
+      "number": 16616,
+      "url": "https://github.com/fastapi/fastapi/pull/16616",
+      "title": "Fix bare collections.abc stream annotations",
+      "body": "## Pull Request\n\nDiscussion and team-member invitation: pending; no discussion link or invitation has been recorded.\n\n## Description\n\nBare stream annotations from `typing` are recognized through `get_origin`, but equivalent classes such as `collections.abc.AsyncIterator` have no origin. They fall through to normal response-model construction and can prevent route registration. Some synchronous classes happen to register through Pydantic, but do not receive consistent stream-item metadata.\n\nWhen an annotation is a bare class, use the class itself as the candidate origin. The existing supported-stream check then resolves an unparameterized stream to `Any`. Parameterized and unrelated return annotations keep their existing path.\n\nExtend the existing bare-stream tests with 12 combinations: `Iterable`, `Iterator`, `Generator`, `AsyncIterable`, `AsyncIterator` and `AsyncGenerator`, each for JSONL and SSE. These exercise real route registration, requests, decoded payloads and generated OpenAPI metadata.\n\n## Validation\n\n- Baseline with final regressions: 12 failures and four passing existing tests.\n- Fixed source: 73 tests pass across the six focused streaming modules.\n- Ruff 0.16.10 lint, formatting and Git whitespace checks pass.\n- Follow-up CI fix: narrow the registered route to `APIRoute` before reading `stream_item_type`. The CI failure reproduces with locked ty 0.0.78 before this change; the affected-file type check and all 73 focused tests pass afterward.\n- Validation used Pyt",
+      "original_body_chars": 2698,
+      "body_truncated": true,
+      "captured_head_sha": "b847c8571ce062f872e3fe27d30c2d3a6f413f00",
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            3,
+            5
+          ]
+        },
+        "rationale": "Fixes bare standard-library stream annotations preventing route registration and inconsistent stream metadata acrossJSONL/SSE."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#15967",
+      "repository": "fastapi/fastapi",
+      "number": 15967,
+      "url": "https://github.com/fastapi/fastapi/pull/15967",
+      "title": "📝 Fix links in docs",
+      "body": "## Description\r\n\r\nFix links in docs that return 404, point to incorrect content, or redirect.\r\nAs for redirects - I fixed only part of them that I think are more important. Stopped to prevent the diff of this PR to become too big)\r\n\r\n**2 more links to fix:**\r\n* `https://www.techempower.com/benchmarks/#section=test&runid=7464e520-0dc2-473d-bd34-dbdfd7e85911&hw=ph&test=query&l=zijzen-7` ([source](https://github.com/fastapi/fastapi/blob/b1346bb142c8154950953255eea535e5a83d62eb/docs/en/docs/benchmarks.md?plain=1#L3)) - I din't find the replacement.\r\n* `https://github.com/encode/starlette#performance` ([source](https://github.com/fastapi/fastapi/blob/b1346bb142c8154950953255eea535e5a83d62eb/docs/en/docs/features.md?plain=1#L168)) - no such anchor. Current version of page doesn't state this anymore. I think we should just remove this link\r\n\r\n\r\n**Note:**\r\nThere are also some more redirects (see in the details below), but I think it's Ok to leave them as is.\r\nLet me know if you prefer to fix them all.\r\n\r\n<details>\r\n\r\nStatus code: 301\r\n  - https://www.linkedin.com/in/tiangolo/\r\n  - https://docs.render.com/deploy-fastapi\r\n  - https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS\r\n  - https://www.youtube.com/watch\r\n  - https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS#simple_requests\r\n  - https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/PUT\r\n  - https://www.jetbrains.com/research/python-developers-survey-2018/#development-tools\r\n  - https://docs.docker.com/compose/faq/#wh",
+      "original_body_chars": 2813,
+      "body_truncated": true,
+      "captured_head_sha": "0168d7d5e6cca46e3238c670b506e41546706b49",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Repairs broken or misleading documentation links, improving learning and reference usability."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#15451",
+      "repository": "fastapi/fastapi",
+      "number": 15451,
+      "url": "https://github.com/fastapi/fastapi/pull/15451",
+      "title": "📝 Fix links inside `<div>` displayed as text in `index.md` and `readme.md`",
+      "body": "Closes: https://github.com/fastapi/fastapi/issues/15448\r\n\r\nMarkdown links inside `<div>` block are not parsed and therefore they are displayed as plain text:\r\n\r\n<details>\r\n\r\n<img width=\"722\" height=\"488\" alt=\"image\" src=\"https://github.com/user-attachments/assets/1e85d70d-c982-4889-9cfe-384a16f37419\" />\r\n\r\n</details>\r\n\r\nTo fix this we can specify `markdown=\"1\"` for those DIVs, but it will only work for mkdoks, not for README on github.\r\nSo, I just converted those links to html-links\r\n\r\n---\r\n\r\nI searched for other links inside DIVs and didn't find any other.",
+      "original_body_chars": 563,
+      "body_truncated": false,
+      "captured_head_sha": "c88c0f73ce6135ff23cff46a0d140eeff6b8c245",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1
+          ]
+        },
+        "rationale": "Fixes visible unparsed links in README/docs using HTML links; identifiable navigation benefit."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16617",
+      "repository": "fastapi/fastapi",
+      "number": 16617,
+      "url": "https://github.com/fastapi/fastapi/pull/16617",
+      "title": "🌐 Update zh-hant translations for form and parameter models",
+      "body": "Update the Traditional Chinese (`zh-hant`) translations to match the latest English docs.\n\n### Updated pages\n\n- `docs/zh-hant/docs/tutorial/request-form-models.md`: add Combine Form Models, Optional Form Models, Optional Unions of Form Models, Combine Unions of Form Models, and Form Models and Files.\n- `docs/zh-hant/docs/tutorial/request-forms.md`: add Boolean Form Fields and the `Form(media_type=\"multipart/form-data\")` note.\n- `docs/zh-hant/docs/tutorial/query-param-models.md`: add Combine Parameter Models and Optional Query Parameter Models.\n- `docs/zh-hant/docs/tutorial/header-param-models.md`: add Combine Parameter Models and Optional Header Parameter Models.\n- `docs/zh-hant/docs/tutorial/cookie-param-models.md`: add Combine Parameter Models and Optional Cookie Parameter Models.\n- `docs/zh-hant/docs/advanced/templates.md`: add absolute `url_for()` URL behavior, URL paths in templates, and the proxy note.\n\n### Validation\n\n- `uv run python scripts/translation_fixer.py fix-pages ...`\n- `uv run prek run --files ...` (translation checks, mypy, ty, typos)",
+      "original_body_chars": 1069,
+      "body_truncated": false,
+      "captured_head_sha": "48ff62b4437e386d0ae9246ef16e587cf77fe19f",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Updates Traditional Chinese tutorials for new models and forms, making capabilities accessible to that audience."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16605",
+      "repository": "fastapi/fastapi",
+      "number": 16605,
+      "url": "https://github.com/fastapi/fastapi/pull/16605",
+      "title": "🐛 Restore default handling for omitted boolean form fields",
+      "body": "🐛 Restore default handling for omitted boolean form fields\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 154,
+      "body_truncated": false,
+      "captured_head_sha": "99d2e436c5bf80b93143364df7bc140f3c188967",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Terse but identifiable restoration of boolean form defaults; no detailed reach or urgency is available."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16606",
+      "repository": "fastapi/fastapi",
+      "number": 16606,
+      "url": "https://github.com/fastapi/fastapi/pull/16606",
+      "title": "🔖 Release version 0.162.0",
+      "body": "🔖 Release version 0.162.0\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 121,
+      "body_truncated": false,
+      "captured_head_sha": "3232f67f3195d134d90cd54a3cc8cb054f5f3fdf",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Terse release preparation intent is identifiable; no described features to score as if implemented in this PR."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16604",
+      "repository": "fastapi/fastapi",
+      "number": 16604,
+      "url": "https://github.com/fastapi/fastapi/pull/16604",
+      "title": "git@github.com:microsoft/openjdk-jdk.git",
+      "body": "## Pull Request\n\n<!--\nPlease start with a GitHub Discussion.\n\nOnce a team member asks you to open a PR, create it and link the discussion here.\n\nTypos, grammar issues, broken links and other small docs improvements should be reported in the pinned Discussion thread \"✏️ Report small docs improvements, including typos or broken links\".\nPlease do not open a PR for these yourself.\n-->\n\nDiscussion: <!-- Link to the GitHub Discussion -->\n\n## Description\n\n<!-- Write the description of your PR here -->\n\n## AI Disclaimer\n\n<!-- If using AI, write here the prompt and model used -->\n\n<details>\n<summary>AI transcript</summary>\n\n<!-- Paste here the entire AI transcript -->\n\n</details>\n\n## Checklist\n\n- [ ] This PR links to a GitHub Discussion for the proposed code change.\n- [ ] I added tests for the change.\n- [ ] The new or updated tests fail on the main branch and pass on this PR.\n- [ ] Coverage stays at 100%.\n- [ ] The documentation explains the change if needed.\n",
+      "original_body_chars": 965,
+      "body_truncated": false,
+      "captured_head_sha": "c5236d669f1e9b6daf35ed003864d33189b4b568",
+      "partition": "development",
+      "expected": {
+        "assessable": false,
+        "dimensions": {},
+        "rationale": "Untouched contribution template contains no substantive change. A repository URL-like title does not supply description evidence."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16599",
+      "repository": "fastapi/fastapi",
+      "number": 16599,
+      "url": "https://github.com/fastapi/fastapi/pull/16599",
+      "title": "🔖 Release version 0.161.1",
+      "body": "🔖 Release version 0.161.1\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 121,
+      "body_truncated": false,
+      "captured_head_sha": "79429e3fb791dbc27fc44f13e2f70639d3839ee9",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Terse release preparation intent is identifiable without assuming release contents."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16600",
+      "repository": "fastapi/fastapi",
+      "number": 16600,
+      "url": "https://github.com/fastapi/fastapi/pull/16600",
+      "title": "Support hyphenated headers with AliasChoices and populate_by_name",
+      "body": "Fixes #8834.\r\n\r\nWhen `disable_noqa_except` is set, `allowed_rule_ref_map` maps rules not included in the allowlist to empty sets, causing directives for those rules to parse with `rules = ()`.\r\n\r\nIn `IgnoreMask._ignore_masked_violations_line_range` (`src/sqlfluff/core/rules/noqa.py`), the directive filter checked:\r\n\r\n\r\nif not ignore.rules or (v.rule_code() in ignore.rules):",
+      "original_body_chars": 376,
+      "body_truncated": false,
+      "captured_head_sha": "9f2d847f1ab3e3c2aa898de9c41cd72f1a1381d9",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1
+          ],
+          "risk_reduction": [
+            1
+          ]
+        },
+        "rationale": "Body describes SQLFluff noqa filtering, which is unrelated to this repository. The contradictory title must not silently substitute for body-only evidence."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16596",
+      "repository": "fastapi/fastapi",
+      "number": 16596,
+      "url": "https://github.com/fastapi/fastapi/pull/16596",
+      "title": "✨ Add support for combining unions of form models",
+      "body": "✨ Add support for combining unions of form models\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 145,
+      "body_truncated": false,
+      "captured_head_sha": "380dc220135dac5e4589e3cdcf20a7ae3a863cc0",
+      "partition": "held_out",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            3,
+            5
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Terse identifiable new form-model composition capability, aligned with typed API ergonomics."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16598",
+      "repository": "fastapi/fastapi",
+      "number": 16598,
+      "url": "https://github.com/fastapi/fastapi/pull/16598",
+      "title": "🐛 Fix OpenAPI schemas for standalone nullable form unions",
+      "body": "🐛 Fix OpenAPI schemas for standalone nullable form unions\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 153,
+      "body_truncated": false,
+      "captured_head_sha": "8ca3ce98fcefc99ea5a9101d933015719d5f0b5d",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Terse identifiable correction to nullable-form-union OpenAPI contracts; no security impact is claimed."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16597",
+      "repository": "fastapi/fastapi",
+      "number": 16597,
+      "url": "https://github.com/fastapi/fastapi/pull/16597",
+      "title": "🔖 Release version 0.161.0",
+      "body": "🔖 Release version 0.161.0\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 121,
+      "body_truncated": false,
+      "captured_head_sha": "7b76c132025decfcbe83ebfb367ac34bde802181",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Release preparation is discernible; specific user benefits are unspecified."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16595",
+      "repository": "fastapi/fastapi",
+      "number": 16595,
+      "url": "https://github.com/fastapi/fastapi/pull/16595",
+      "title": "🔖 Release version 0.160.0",
+      "body": "🔖 Release version 0.160.0\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 121,
+      "body_truncated": false,
+      "captured_head_sha": "a721c0f4c624b54cad59885f9462ac0224df9f48",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Release preparation is discernible; do not infer major value from the version number."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16594",
+      "repository": "fastapi/fastapi",
+      "number": 16594,
+      "url": "https://github.com/fastapi/fastapi/pull/16594",
+      "title": "🐛 Apply each parameter model's `extra` configuration to sibling fields",
+      "body": "🐛 Apply each parameter model's `extra` configuration to sibling fields\n\n## AI Disclaimer\n\nMade with the help of AI, using Codex with `gpt-6-astra`, manually reviewed.",
+      "original_body_chars": 166,
+      "body_truncated": false,
+      "captured_head_sha": "10356384dbd4fea493ff008f98946cbc32bb7c59",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Terse identifiable request-validation consistency fix for parameter model extra-field behavior."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16571",
+      "repository": "fastapi/fastapi",
+      "number": 16571,
+      "url": "https://github.com/fastapi/fastapi/pull/16571",
+      "title": "⬆ Bump certifi from 2026.1.4 to 2026.10.19",
+      "body": "Bumps [certifi](https://github.com/certifi/python-certifi) from 2026.1.4 to 2026.10.19.\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a href=\"https://github.com/certifi/python-certifi/commit/662df63d7906df66f1f07c0751a3dfe9da14d914\"><code>662df63</code></a> Restore unaffected emSign roots (<a href=\"https://redirect.github.com/certifi/python-certifi/issues/439\">#439</a>) (<a href=\"https://redirect.github.com/certifi/python-certifi/issues/440\">#440</a>)</li>\n<li><a href=\"https://github.com/certifi/python-certifi/commit/5cb238caeeb6c30ec1a7309ad3e16a5aa7b10ce8\"><code>5cb238c</code></a> Remove emsign (<a href=\"https://redirect.github.com/certifi/python-certifi/issues/437\">#437</a>)</li>\n<li><a href=\"https://github.com/certifi/python-certifi/commit/69494a764d0a08f90838d53d4b0fefd3e84045d6\"><code>69494a7</code></a> Bump actions/download-artifact from 8.0.1 to 8.0.2 (<a href=\"https://redirect.github.com/certifi/python-certifi/issues/436\">#436</a>)</li>\n<li><a href=\"https://github.com/certifi/python-certifi/commit/029c7b0913d79e2efb73a216fc5c5e13ef958536\"><code>029c7b0</code></a> Bump actions/upload-artifact from 7.0.1 to 7.0.2 (<a href=\"https://redirect.github.com/certifi/python-certifi/issues/435\">#435</a>)</li>\n<li><a href=\"https://github.com/certifi/python-certifi/commit/9d0a8f1f3a0d6b2e38d5773db7afe1a37e4527b6\"><code>9d0a8f1</code></a> Add support for Python 3.15 (<a href=\"https://redirect.github.com/certifi/python-certifi/issues/432\">#432</a>)</li>\n<li><a href=\"https://github.",
+      "original_body_chars": 4569,
+      "body_truncated": true,
+      "captured_head_sha": "b954c7ab9704ce666b839a481832e5d1b9cf3389",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1,
+            2
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Updates trust-store dependency, with root restoration/removal and Python support notes; no urgent exploitation evidence."
+      }
+    },
+    {
+      "id": "fastapi/fastapi#16589",
+      "repository": "fastapi/fastapi",
+      "number": 16589,
+      "url": "https://github.com/fastapi/fastapi/pull/16589",
+      "title": "🐛 Fix `include_in_schema=False` ignored for fields of `Query`, `Header` and `Cookie` parameter models",
+      "body": "## Pull Request\n\nDiscussion: https://github.com/fastapi/fastapi/discussions/16587\n\n## Description\n\nFields of a `Query`, `Header` or `Cookie` parameter model declared with `include_in_schema=False` were still listed in the generated OpenAPI `parameters`, while the same declaration on a top-level parameter correctly hides it.\n\n```python\nclass Filter(BaseModel):\n    visible: str = \"ok\"\n    hidden: str = Query(\"secret\", include_in_schema=False)\n\n\n@app.get(\"/items\")\ndef get_items(f: Annotated[Filter, Query()]):\n    return f\n```\n\nBefore: `/items` exposes `visible` and `hidden`. After: only `visible`. The hidden field is still read from the request and validated as before, this only affects the OpenAPI schema (the same behavior as for top-level parameters).\n\nRoot cause: `_get_openapi_operation_parameters()` in `fastapi/openapi/utils.py` checks `include_in_schema` on the parent (model) parameter only, and then flattens the model fields without repeating that check for each field. Other per-field attributes (`description`, `deprecated`, `example`, `convert_underscores`) are already read from the flattened field, so this adds the missing `include_in_schema` check next to them. Request handling is untouched.\n\nNote: the fix applies to fields declared as `field: str = Query(..., include_in_schema=False)`. With `Annotated[str, Query(include_in_schema=False)]` inside a Pydantic model, Pydantic merges the metadata into a plain `FieldInfo` (the FastAPI subclass is only preserved for the assig",
+      "original_body_chars": 3001,
+      "body_truncated": true,
+      "captured_head_sha": "ec949d030f39179b02c862db28d744ef78aaca64",
+      "partition": "development",
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            2,
+            3
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1,
+            2
+          ],
+          "risk_reduction": [
+            2,
+            3
+          ]
+        },
+        "rationale": "Aligns hidden model-field schema behavior with top-level parameters; request reading/validation is explicitly unchanged, not a security access-control fix."
+      }
+    }
+  ],
+  "controls": [
+    {
+      "id": "control/cosmetic",
+      "repository": "control/product",
+      "number": 9000000,
+      "url": null,
+      "title": "cosmetic",
+      "body": "Normalize footer spacing and punctuation. No behavior, API, documentation meaning or workflow changes.",
+      "original_body_chars": 102,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            1
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            1
+          ],
+          "risk_reduction": [
+            1
+          ]
+        },
+        "rationale": "Cosmetic-only intent has minimal contribution; no need to abstain."
+      }
+    },
+    {
+      "id": "control/vague",
+      "repository": "control/product",
+      "number": 9000001,
+      "url": null,
+      "title": "vague",
+      "body": "Various improvements and fixes.",
+      "original_body_chars": 31,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": false,
+        "dimensions": {},
+        "rationale": "No identifiable change or beneficiary; indeterminate."
+      }
+    },
+    {
+      "id": "control/template",
+      "repository": "control/product",
+      "number": 9000002,
+      "url": null,
+      "title": "template",
+      "body": "## Description\n<!-- Explain the change here -->\n## Testing\n- [ ] Add tests\n## AI disclosure\n<!-- Fill in -->",
+      "original_body_chars": 108,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": false,
+        "dimensions": {},
+        "rationale": "Placeholder-only content is not evidence of a change."
+      }
+    },
+    {
+      "id": "control/blank",
+      "repository": "control/product",
+      "number": 9000003,
+      "url": null,
+      "title": "blank",
+      "body": "",
+      "original_body_chars": 0,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": false,
+        "dimensions": {},
+        "rationale": "No description evidence."
+      }
+    },
+    {
+      "id": "control/terse_2fa",
+      "repository": "control/product",
+      "number": 9000004,
+      "url": null,
+      "title": "terse_2fa",
+      "body": "Add optional two-factor authentication for maintainer accounts.",
+      "original_body_chars": 63,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            5,
+            8
+          ]
+        },
+        "rationale": "Prevents account compromise by intent; no previous compromise or realized benefit needed."
+      }
+    },
+    {
+      "id": "control/preventive_chaos",
+      "repository": "control/product",
+      "number": 9000005,
+      "url": null,
+      "title": "preventive_chaos",
+      "body": "Add scheduled chaos experiments that terminate staging service instances and verify automatic failover, to find outage weaknesses before production incidents.",
+      "original_body_chars": 158,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            5,
+            8
+          ]
+        },
+        "rationale": "Preventive availability contribution; implementation risk is outside the risk-reduction question."
+      }
+    },
+    {
+      "id": "control/ci_feedback",
+      "repository": "control/product",
+      "number": 9000006,
+      "url": null,
+      "title": "ci_feedback",
+      "body": "Run the unchanged test suite in parallel so contributors get CI feedback in10minutes instead of30. Keep all test coverage and platform jobs.",
+      "original_body_chars": 140,
+      "body_truncated": false,
+      "captured_head_sha": null,
+      "partition": "control",
+      "synthetic": true,
+      "expected": {
+        "assessable": true,
+        "dimensions": {
+          "value": [
+            3,
+            5
+          ],
+          "time_criticality": [
+            1
+          ],
+          "opportunity_runway": [
+            2,
+            3
+          ],
+          "risk_reduction": [
+            1,
+            2
+          ]
+        },
+        "rationale": "Developer productivity is valuable enabling work; lower cycle time is not a deadline."
+      }
+    }
+  ],
+  "reference_scope": {
+    "value": "Intended user or developer benefit in repository context.",
+    "time_criticality": "Stated temporal sensitivity;1 means no time-critical intent discernible, not proof benefit is timeless.",
+    "opportunity_runway": "Intended enablement aligned with sourced product capabilities; no invented official roadmap.",
+    "risk_reduction": "Intended prevention of product/user/operational harm, not risk of implementing the PR.",
+    "scale": [
+      1,
+      2,
+      3,
+      5,
+      8,
+      13
+    ],
+    "assessment_rule": "An identifiable change can be assessed even when terse or its intent must reasonably be inferred. Placeholder-only/vague descriptions cannot."
+  },
+  "context_provenance": {
+    "kind": "Manual agent synthesis of public documentation, not an official strategic roadmap or the new LLM research output. Context overrides allow a separate researched-profile arm.",
+    "sources": {
+      "github/spec-kit": [
+        "https://github.com/github/spec-kit/blob/main/README.md",
+        "https://github.com/github/spec-kit/blob/main/docs/reference/presets.md"
+      ],
+      "fastapi/fastapi": [
+        "https://github.com/fastapi/fastapi/blob/master/README.md",
+        "https://github.com/fastapi/fastapi/blob/master/docs/en/docs/features.md"
+      ]
+    },
+    "inferences": [
+      "Reliable contributor feedback is an enabling benefit rather than an explicitly prioritized roadmap item.",
+      "Capability alignment is not proof of current maintainer priority."
+    ],
+    "control/product": "Synthetic context; no external source."
+  }
+}

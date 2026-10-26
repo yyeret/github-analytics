@@ -59,29 +59,49 @@ Existing caches remain usable with title-only classification. Use `python analyz
 `/api/analyze` exposes the additive `value_classification` field; AI contribution
 classification remains in `classification`.
 
-### Expected cost of delay
+### Cost-of-delay intent analysis
 
 Each sampled PR receives four independent Jev classifications, each mapped to
 `1, 2, 3, 5, 8, 13` Fibonacci points:
 
 | Element | Meaning |
 | --- | --- |
-| Value | Expected benefit to the product's users |
-| Time criticality | How quickly delaying the change reduces its benefit |
-| Opportunity runway | Future capabilities unlocked along the repository's inferred strategic direction |
-| Risk reduction | Concrete reliability, security, data or operational risk removed |
+| Value | Significance of intended benefit to users or contributors, including developer productivity |
+| Time criticality | Stated or reasonably implied time sensitivity of the intended contribution |
+| Opportunity runway | Future capabilities intended to be enabled along the repository's inferred direction |
+| Risk reduction | Significance of existing or potential product risk the change intends to reduce, including preventive controls |
 
 **Cost of delay = value + time criticality + opportunity runway + risk reduction.**
-The total ranges from 4 to 52. These are relative estimates, not money, measured
-impact or WSJF; no job-size divisor is used. Merged PRs are assessed retrospectively.
-A low total means low estimated cost of delay across these four elements; inspect
-the separate value score before judging user benefit. Missing provider answers are
-failures, not zero scores. Lack of a stated deadline does not imply urgency.
+The total ranges from 4 to 52 for assessable items. This is a relative intent index,
+not money, measured impact or WSJF; no job-size divisor is used. Risk reduction does
+not assess implementation difficulty or regression risk. Preventive work needs no
+prior incident or proof of realized benefit. No discernible timing intent is distinct
+from establishing that delay has no consequence. Missing answers remain failures.
 
-One Gemini call infers product context and strategic goals from public repository
-metadata and README (up to 12,000 characters). Jev receives that compact context
-plus only the first 1,500 characters of each PR description. Titles, code size, and framing labels are not sent to Jev. Empty descriptions return `insufficient_context` with no score or Jev request. Four Score questions share one
-request per PR. Code chooses the most probable rubric level (lower wins ties),
+Gemini researches the repository once per analysis. A planning call selects up to
+five documents from a catalog capped at 120 ranked Markdown/RST/text paths. A
+synthesis call investigates primary users, critical jobs, strategic options, adoption
+friction, contributor workflows and preventive product risks. Inputs include metadata,
+README (12,000 characters), selected documents (4,000 each), up to three recent release
+notes and five open issue signals, under a shared 36,000-character source budget.
+The API exposes `product_value.sources.research` with source IDs/URLs and truncation,
+and collection limitations. Missing optional sources are reported as unknown.
+`context.repository_research` contains source-linked claims marked `stated` or `inferred`
+for primary users, critical workflows, value drivers and product risks. Source links
+establish provenance, not independently verified strategic truth; issue signals are a
+small comment-ranked sample. The LLM selects only supplied repository paths; external
+sites and arbitrary URLs are not fetched. Optional planning failure preserves other
+evidence and is disclosed.
+
+Jev receives that compact researched profile plus only the first 1,500 characters
+of each PR description. Titles, code size and framing labels are not sent. A bundled
+Noul asks whether the description identifies a change whose intent can be assessed.
+Code requires probability at least 0.7; this default is not a calibrated accuracy claim.
+Terse identifiable changes can have inferred intent without an explicit business case.
+Vague/template-only descriptions return `insufficient_context` and no numeric total;
+empty descriptions also skip the provider call. `intent_assessability` and
+`body_truncated` make that decision and input limit inspectable. Four Score questions
+share the same request. Code chooses the most probable rubric level (lower wins ties),
 maps its index to Fibonacci points, and sums the four points. The API retains each
 rubric and probability distribution for review, rather than treating model
 confidence as proof of correctness. There is no diff inspection or measured-impact
@@ -120,16 +140,21 @@ hosted results cache for six hours, shortened to ten minutes after assessment
 failures or unavailable provider configuration. Force-refresh after changing deployment keys.
 Each caller-key analysis starts fresh provider requests; avoid concurrent retries.
 
-Only public repositories are assessed. The README is fetched without a GitHub
-token so a visibility transition cannot expose private content. A refused or
-rate-limited README falls back to metadata. Review inferred context and scores
+Only public repositories are assessed. README and research content are fetched
+without a GitHub token so a visibility transition cannot expose private content.
+A refused or rate-limited source is omitted with a collection limitation. Review inferred context and scores
 before using them to prioritize work. Assessments have a 90-second overall budget;
 completed PR scores are retained and unfinished items are marked failed on expiry.
 
-Context generation starts with a 4,096-token output budget and asks for under 600
-words. A `MAX_TOKENS` finish triggers one fresh attempt with 8,192 tokens; both
-attempts share a 45-second deadline, with a 25-second limit per request. Other
-Gemini errors, blocked responses, and invalid JSON are not retried. Incomplete
+Planning uses a 768-token output budget. Synthesis starts with 4,096 tokens and
+asks for under 700 words. A `MAX_TOKENS` synthesis finish or a parsed profile rejected
+by context validation triggers one fresh attempt with 8,192 tokens (at most two
+synthesis attempts total). Planning, optional source collection and synthesis share a
+45-second deadline. Optional research has a 15-second total allowance, preserving
+the remaining time for synthesis and returning already collected sources when
+optional calls expire; each GitHub research request is limited to 8 seconds and
+Gemini requests to 25 seconds. Other
+Gemini HTTP errors, blocked responses, and invalid JSON are not retried. Incomplete
 responses are never used to score PRs. Each PR call remains independent, so one
 failed assessment does not discard successful ones. When a deadline cancels a
 Worker request, its abort signal cancels the outgoing fetch, including a pending
@@ -137,7 +162,7 @@ response-body read.
 
 For diagnosis, `/api/analyze` includes `product_value.analysis_id`; failures also
 include a stable `error_code` and a safe explanation. Search Worker logs for that
-analysis ID. Events identify `product_sources`, `product_context`, or
+analysis ID. Events identify `product_sources`, `repo_research_plan`, `repository_research`, `product_context`, or
 `pr_assessment`; Gemini events include the model, attempt, output budget, HTTP status, finish reason, token usage, and elapsed milliseconds when available. Jev events include model, attempt, HTTP status, token usage, elapsed time, and a stable error code on failure.
 A PR failure also records its number and cohort. Workers receive structured
 console objects; local runs emit JSON through Python logging. Prompts, source
@@ -145,6 +170,11 @@ text, model output, credentials, raw error bodies, and exception messages are
 excluded. Cache hits reuse the previous analysis ID and do not run the model;
 use `force_refresh: true` to verify a fresh attempt. Existing failed results can
 remain cached for ten minutes after an update.
+
+The offline/opt-in live evaluator is `scripts/evaluate_value_intent.py`. Its frozen
+40-PR/two-repository fixture has a held-out partition and focused controls. Reference
+labels are agent-provisional, not human ground truth; agreement is not validated
+accuracy. See [benchmark protocol](docs/experiments/2026-10-26-value-intent-benchmark.md).
 ## Cloudflare deployment
 
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.

@@ -32,7 +32,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["analyze", "app", "issues", "product_value", "value_classification"]
+source = ["analyze", "app", "issues", "product_value", "repo_research", "value_classification"]
 branch = true
 
 [tool.coverage.report]
