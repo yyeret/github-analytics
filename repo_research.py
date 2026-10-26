@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import re
 from pathlib import PurePosixPath
 from urllib.parse import quote
 
@@ -24,7 +25,7 @@ Select only exact paths from the supplied catalog; return {{"paths": [...]}}. Do
 paths, browse external URLs, or assume document names prove their contents.
 
 Repository: {repo}
-Public metadata: {metadata}
+Repository metadata: {metadata}
 README excerpt:
 {readme}
 Available document paths:
@@ -59,17 +60,47 @@ def _catalog(tree):
     return ranked[:MAX_CATALOG], len(ranked) > MAX_CATALOG
 
 
-async def build_research_sources(repo, metadata_sources, token, request, generate, diagnostics=None):
+def owner_evidence_sources(owner_context):
+    if not isinstance(owner_context, list) or len(owner_context) > 8:
+        raise ValueError("Owner context must contain at most eight sources")
+    sources, limitations, owner_ids = [], [], set()
+    remaining = 12_000
+    for source in owner_context:
+        if not isinstance(source, dict):
+            raise ValueError("Invalid owner evidence")
+        source_id, text = source.get("source_id"), source.get("text")
+        if (not isinstance(source_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", source_id)
+                or source_id in owner_ids or not isinstance(text, str) or not text.strip()):
+            raise ValueError("Invalid owner evidence")
+        owner_ids.add(source_id)
+        for field in ("path", "url"):
+            if source.get(field) is not None and (not isinstance(source[field], str) or len(source[field]) > 500):
+                raise ValueError("Invalid owner evidence provenance")
+        bounded = text[:min(4000, remaining)]
+        if not bounded:
+            limitations.append("Owner evidence exceeded its 12000 character budget.")
+            break
+        sources.append({"id": f"owner-{source_id}", "kind": "owner_context", "text": bounded,
+            "path": source.get("path"), "url": source.get("url"), "truncated": len(text) > len(bounded)})
+        remaining -= len(bounded)
+    return sources, limitations
+
+
+async def build_research_sources(repo, metadata_sources, token, request, generate, diagnostics=None, *, allow_private=False, owner_context=None):
     """Return {sources, limitations} using public requests and a key-bound planner.
 
     ``request(url, timeout, headers=...)`` returns status, headers, JSON.
     ``generate(prompt, schema, max_tokens, diagnostics=...)`` returns parsed JSON.
-    ``token`` is accepted alongside existing source APIs but deliberately never sent:
-    the caller has already verified that the repository is public.
+    Private reads require verified private metadata and explicit caller authorization.
+    Public source reads remain anonymous even when a token is supplied.
     """
     base = f"https://api.github.com/repos/{repo}"
     web = f"https://github.com/{repo}"
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "github-flow-analytics/0.1"}
+    if metadata_sources.get("private") is True:
+        if allow_private is not True or not token:
+            raise ValueError("Private source access requires caller authorization")
+        headers["Authorization"] = f"Bearer {token}"
     sources, limitations = [], []
     remaining = MAX_SOURCE_CHARS
     loop = asyncio.get_running_loop()
@@ -114,6 +145,13 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
     if not readme:
         limitations.append("README text was not available; its contents are unknown.")
 
+    if owner_context is not None:
+        owner_sources, owner_limits = owner_evidence_sources(owner_context)
+        limitations.extend(owner_limits)
+        for source in owner_sources:
+            add(source["id"], source["kind"], source["text"], len(source["text"]),
+                path=source["path"], url=source["url"], truncated=source["truncated"])
+
     tree, releases, issues = await asyncio.gather(
         fetch("git/trees/HEAD?recursive=1", "Document catalog"),
         fetch("releases?per_page=5", "Recent releases"),
@@ -148,7 +186,7 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
                     limitations.append("The research planner selection was limited to five documents.")
                 selected = selected[:MAX_DOCUMENTS]
         except Exception:
-            limitations.append("Research document planning failed; the profile uses the remaining public evidence.")
+            limitations.append("Research document planning failed; the profile uses the remaining supplied evidence.")
 
     documents = await asyncio.gather(*(fetch(f"contents/{quote(path, safe='/')}", f"Document {path}") for path in selected))
     for index, (path, document) in enumerate(zip(selected, documents), 1):

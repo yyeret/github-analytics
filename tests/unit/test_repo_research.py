@@ -140,3 +140,32 @@ def test_optional_research_budget_preserves_available_sources(monkeypatch, slow_
     assert {"metadata", "readme"}.issubset({source["kind"] for source in result["sources"]})
     assert not any(source["kind"] == "document" for source in result["sources"])
     assert result["limitations"]
+
+
+def test_authorized_private_research_uses_only_caller_token():
+    service = ResearchServices()
+    result = asyncio.run(build_research_sources('owner/private',
+        {'private': True, 'readme': 'Private strategy'}, 'caller', service.request, service.generate,
+        allow_private=True))
+    assert result['sources']
+    assert all(kwargs['headers'].get('Authorization') == 'Bearer caller' for _, _, kwargs in service.calls)
+    refused = ResearchServices()
+    with pytest.raises(ValueError):
+        asyncio.run(build_research_sources('owner/private', {'private': True}, 'caller',
+            refused.request, refused.generate))
+    assert refused.calls == []
+
+
+def test_owner_sources_total_budget_and_duplicates():
+    service = ResearchServices()
+    owner = [{'source_id': f's{i}', 'text': 'x' * 5000} for i in range(8)]
+    result = asyncio.run(build_research_sources('owner/public', {}, None, service.request,
+        service.generate, owner_context=owner))
+    owner_sources = [source for source in result['sources'] if source['kind'] == 'owner_context']
+    assert sum(len(source['text']) for source in owner_sources) == 12000
+    assert all(len(source['text']) <= 4000 and source['truncated'] for source in owner_sources)
+    assert result['limitations']
+    for invalid in (owner + [owner[0]], [owner[0], owner[0]], [{'source_id': '../bad', 'text': 'x'}]):
+        with pytest.raises(ValueError):
+            asyncio.run(build_research_sources('owner/public', {}, None, service.request,
+                service.generate, owner_context=invalid))

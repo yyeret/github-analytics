@@ -1,10 +1,10 @@
 # GitHub Flow & Value Stream Analytics
 
-A dashboard that analyzes pull request flow in public GitHub repositories and maps it to Theory of Constraints and Evidence-Based Management metrics.
+A dashboard and API that analyze GitHub flow and intended contribution. Private repositories use the caller's authorized GitHub identity.
 
 ## Try it
 
-Enter a public repository such as `sveltejs/svelte` or `https://github.com/owner/repo`. Analysis runs on Cloudflare Workers; results are cached for six hours. Chat reads that cache on the server and sends Gemini a compact summary of cycle time, complete-week throughput, and aging work. Reanalyze the repository when the cache expires. Private repositories are rejected. Each visitor's IP is limited to six analyses and twelve AI questions per minute. Gemini chat is enabled when `GEMINI_API_KEY` is configured.
+Enter a repository such as `sveltejs/svelte` or `https://github.com/owner/repo`. Public analysis supports Google sign-in. For private repositories, connect GitHub and explicitly allow private processing, or supply the current GitHub identity's bearer token through the API. Public results are cached for six hours; private results use identity-scoped snapshots. Chat sends Gemini compact metrics and rechecks private access. Gemini chat requires `GEMINI_API_KEY`.
 
 ## Local development
 
@@ -125,7 +125,7 @@ X-Gemini-Api-Key: <your Gemini key>
 Omit either header to use its configured default. Keys stay server-side when set
 as runtime secrets; caller-supplied keys travel over HTTPS, are not persisted in
 browser storage or analysis results. Hosted caller-key requests bypass the shared analysis cache. The
-hosted API still requires a Google session; provider keys do not grant app access.
+hosted API requires a Google session or verified GitHub identity; provider keys do not grant app access.
 Caller-key hosted responses include an `analysis_id` tied to the signed-in session.
 Pass it to `/api/chat` to coach against that exact analysis; these snapshots expire
 after the normal analysis TTL and cannot be read from another session. Chat still
@@ -140,11 +140,42 @@ hosted results cache for six hours, shortened to ten minutes after assessment
 failures or unavailable provider configuration. Force-refresh after changing deployment keys.
 Each caller-key analysis starts fresh provider requests; avoid concurrent retries.
 
-Only public repositories are assessed. README and research content are fetched
+Public README and research content are fetched
 without a GitHub token so a visibility transition cannot expose private content.
+Explicit private requests instead use the caller's verified GitHub credential for source reads.
 A refused or rate-limited source is omitted with a collection limitation. Review inferred context and scores
 before using them to prioritize work. Assessments have a 90-second overall budget;
 completed PR scores are retained and unfinished items are marked failed on expiry.
+
+### Authenticated private repositories and proposed issues
+
+`POST /api/issues/value` evaluates issue value intent without requiring merged PRs. Value priority applies throughout discovery, implementation, refinement and learning, including prioritizing human decisions. Use a GitHub OAuth session or `Authorization: Bearer <current GitHub token>`. The token is verified against GitHub's `/user`, then GitHub checks repository access. Deployment credentials never authorize private access. Private requests require `allow_private:true`, acknowledging model processing described in [Privacy](privacy.html).
+
+```json
+{"repo_url":"owner/private-repo","allow_private":true,"max_issues":20,"owner_context":[{"source_id":"strategy","text":"Owner-approved value drivers and current strategic priorities."}]}
+```
+
+Issues use title[:200] and description[:1500]; PRs remain description-only. `product_value.ranking` sorts assessed issues by summed cost of delay, with issue number breaking ties. Unscored issues are excluded. Scores estimate intended contribution, not effort, implementation readiness or permission to execute. The search excludes PR closing-reference links; it cannot prove work is unimplemented. Inspect current state, holds, approvals and dependencies before selecting agent work.
+
+Optional `issue_numbers` fetches up to `max_issues` distinct positive issue IDs directly, regardless of open/closed state or PR linkage, with five concurrent reads and a 30-second overall selection deadline. Actual PR numbers are rejected by this issue endpoint. Without explicit IDs, discovery takes the most recently updated open issues without a PR closing reference from the first 100 search results. Selection counts, truncation and policy are returned. `max_issues` defaults to 20, maximum 50. Owner evidence accepts eight sources, at most 4,000 characters each and 12,000 combined; URLs are provenance only and are never fetched. Supplied source text is evidence, never executable instructions. Issue requests and owner context are not cached.
+
+An optional `owner_profile` supplies an explicit reusable value-driver profile in the same shape as `product_value.context`. Its claims must cite the supplied `owner_context` IDs (prefixed `owner-`). The API validates structure and provenance membership, skips Gemini/repository research, and labels `context_method:owner_profile` and `context_model:null`. This validates the contract, not the truth or approval of the owner's priorities. Jev still performs classification. This path requires a Jev key but no Gemini key and avoids regenerating strategy on every scan.
+
+To use the active local `gh` identity and environment model keys through the actual API:
+
+```text
+python scripts/analyze_issue_value.py owner/private-repo --owner-context /private/context.json --output /private/new-study
+```
+
+The context file is a source list (or an object with `sources`); each source has `source_id` or `id`, `text`, and optional `path`/`url`. `--issue-sample` accepts a JSON object with a `numbers` array, rechecked live. Existing evidence is not overwritten. Keep all private input/output outside this public repository. The script invokes the hosted ASGI endpoint locally, with real GitHub and model requests, no browser or production deployment. For a loopback HTTP API, run `uvicorn local_private_api:application --host 127.0.0.1 --port 8001`; private callers supply bearer credentials. Local limits are process-local, so use Worker bindings for multi-instance hosting.
+
+Use `--owner-profile /private/profile.json` to reuse an inspected profile. Each CLI run limits Gemini calls to three and Jev calls to `--limit`, and saves key-free model request/response receipts under the selected private output directory. A failed context returns a nonzero exit; failed evidence is retained rather than overwritten.
+
+Browser GitHub sign-in requires deployment secrets `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`, and `GITHUB_OAUTH_REDIRECT_URI=https://your-host/api/auth/github/callback`. Apply D1 migrations before enabling it. Authorization uses state and PKCE; tokens stay in server-side D1 sessions, expire within eight hours, and are never returned to browser code. An OAuth App defaults to the `repo` scope, which grants broader rights than this service uses; the service itself only reads repository APIs. `GITHUB_OAUTH_SCOPE` can be configured for a GitHub App with preconfigured repository permissions. Registering/installing an app or granting scopes is a separate account action. The bearer API path works without this registration.
+
+The production Worker runs an hourly credential cleanup through the cron in `wrangler.jsonc`, removing expired GitHub sessions and OAuth state even without another sign-in. Authentication rejects expired sessions immediately; database deletion waits for the next successful cleanup. Monitor failed scheduled invocations. [Cloudflare Cron Triggers do not run on Previews](https://developers.cloudflare.com/workers/previews/resources/#cron-triggers), so do not configure browser GitHub OAuth on a Preview until independent scheduled retention cleanup exists for its database. Bearer API authentication does not persist credentials and remains usable there.
+
+Private PR snapshots use GitHub user ID plus hashed repository identity and random analysis ID, never the public/shared key. Pass `analysis_id` to chat using the same GitHub identity; chat verifies current repository access. Do not put GitHub tokens in URLs or saved requests. The original `app:app` local interface retains its public-only behavior; use `local_private_api:application` for the new authenticated API.
 
 Planning uses a 768-token output budget. Synthesis starts with 4,096 tokens and
 asks for under 700 words. A `MAX_TOKENS` synthesis finish or a parsed profile rejected

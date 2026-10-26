@@ -7,6 +7,9 @@
     "python_workers"
   ],
   "workers_dev": true,
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
   "limits": {
     "cpu_ms": 30000
   },
