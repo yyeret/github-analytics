@@ -88,10 +88,10 @@ def main():
     if database is None:
         database = api(account, 'd1/database', 'POST', {'name': manifest['users_database']})
     assert_isolated(config, kv, database)
-    # This initial schema is idempotent (IF NOT EXISTS), contains no user records,
+    # These schemas are idempotent (IF NOT EXISTS), contain no user records,
     # and runs only against the independently resolved Preview database.
     api(account, f'd1/database/{database["uuid"]}/query', 'POST',
-        {'sql': (ROOT / 'migrations' / '0001_users.sql').read_text(encoding='utf-8')})
+        {'sql': '\n'.join(path.read_text(encoding='utf-8') for path in sorted((ROOT / 'migrations').glob('*.sql')))})
     preview = config.setdefault('previews', {})
     preview['vars'] = {**preview.get('vars', {}), 'AUTH_REQUIRED': 'true',
                        'GOOGLE_OAUTH_CLIENT_ID': config['vars']['GOOGLE_OAUTH_CLIENT_ID']}

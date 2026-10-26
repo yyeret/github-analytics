@@ -13,11 +13,13 @@ An authenticated owner can inspect intended value in a private repository's open
 
 Repository owners and their agents need a ranked, inspectable backlog of intended contribution. Ranking informs selection; dependencies, effort, ownership and execution permission remain separate decisions. A logged-in browser identity must be explicitly authorized to this application before accessing private GitHub data.
 
+Owner amendment, October 26: priority applies throughout refinement, implementation and learning, including merged work still on the board and ordering needs-yuval asks. Open/unlinked discovery is a convenience filter; explicit issue selection must accept any lifecycle state and PR linkage. The owner separately authorized milestone assignments using Hold/Normal/High; the initial application is bounded to the 20 studied issues. This supersedes the implementation-only shortlist and no-issue-mutation constraints below solely for that pilot; it does not authorize publication or execution.
+
 ## Solution and scenarios
 
 Retain public analysis. Add GitHub authentication and an API bearer-token path for existing CLI identities. Verify identity and repository access, carry caller credentials only to GitHub, and scope private results to that identity. OAuth credentials remain server-side with short-lived sessions; state/PKCE protect browser authorization. Existing Google sign-in remains supported. Add an issue value endpoint independent of merged-PR flow metrics, including repositories with no merged PRs.
 
-Reuse Gemini research and Jev scoring. Private research explicitly uses the caller credential; public research remains anonymous after metadata verification. Accept bounded owner-supplied strategic evidence so private business context need not be committed to this public code repository. Assess issue descriptions with the existing 1,500-character budget; include issue titles for issues because requests often state the proposed work there. Preserve description-only PR behavior. Exclude known PR-linked issues from an agent-ready shortlist, expose unknown eligibility, and never infer that a textual mention proves no implementation exists.
+Reuse Gemini research and Jev scoring. Private research explicitly uses the caller credential; public research remains anonymous after metadata verification. Accept bounded owner-supplied strategic evidence so private business context need not be committed to this public code repository. Assess issue descriptions with the existing 1,500-character budget; include issue titles for issues because requests often state the proposed work there. Preserve description-only PR behavior. Keep explicit value eligibility independent of state or PR linkage, expose lifecycle metadata, and never infer that a textual mention proves no implementation exists.
 
 ## Hypotheses, conviction and learning
 

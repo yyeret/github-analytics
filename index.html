@@ -459,9 +459,10 @@
 <div id="login-gate" role="dialog" aria-modal="true" aria-labelledby="login-title">
   <div class="login-card">
     <h2 id="login-title">Sign in to use GitHub Flow Analytics</h2>
-    <p>Sign in with Google to continue. We store your verified email, a Google account identifier, and first and last sign-in times to manage access. We do not use them for marketing or send them to the AI coach.</p>
+    <p>Sign in with Google for public analysis, or connect GitHub to use repositories your GitHub identity can read. Private analysis requires your explicit consent to send repository context to Gemini and issue or PR text to Jev.</p>
     <p><a href="/privacy.html" target="_blank" rel="noopener">How account data is used and deleted</a></p>
     <div id="google-signin"></div>
+    <p><a id="github-signin" href="/api/auth/github/start" hidden>Sign in with GitHub</a></p>
     <div id="login-error" role="status"></div>
   </div>
 </div>
@@ -508,6 +509,8 @@
     <label for="gemini-key">Gemini key</label>
     <input id="gemini-key" type="password" autocomplete="off" placeholder="Gemini API key">
   </details>
+  <p><a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a></p>
+  <label><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev.</label>
 
   <div id="placeholder">
     <div class="placeholder-icon">📊</div>
@@ -683,15 +686,17 @@
     try {
       const response = await fetch('/api/auth/config');
       authConfig = await response.json();
+      document.getElementById('github-signin').hidden = !authConfig.github_enabled;
+      document.getElementById('github-connect').hidden = !authConfig.github_enabled;
       if (!authConfig.required) return;
       document.getElementById('login-gate').classList.add('visible');
-      if (!authConfig.client_id) {
-        document.getElementById('login-error').textContent = 'Google sign-in is being configured.';
-        return;
-      }
       const session = await fetch('/api/auth/session', {credentials:'same-origin'}).then(r => r.json());
       if (session.signed_in) {
-        completeSignIn(session.email);
+        completeSignIn(session.login || session.email);
+        return;
+      }
+      if (!authConfig.client_id) {
+        document.getElementById('login-error').textContent = authConfig.github_enabled ? '' : 'Sign-in is being configured.';
         return;
       }
       const nonceResponse = await fetch('/api/auth/nonce', {credentials:'same-origin'});
@@ -771,7 +776,7 @@
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ repo_url: input, force_refresh: false })
+        body: JSON.stringify({ repo_url: input, force_refresh: false, allow_private: document.getElementById('allow-private').checked })
       });
       const data = await readApiResponse(res);
       currentMetrics = data;
