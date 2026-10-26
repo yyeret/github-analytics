@@ -386,6 +386,7 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
     context = {
         "repo": metrics.get("repo"),
+        "repository_visibility": metrics.get("repository_visibility", "public"),
         "captured_at": metrics.get("captured_at"),
         "recent_merged_prs": stats.get("total"),
         "average_cycle_hours": stats.get("avg_cycle"),
@@ -409,7 +410,7 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
         ],
     }
     return ("You are the GitHub Flow Analytics coach. Answer concisely using only the supplied "
-            "public repository metrics. Cite specific dates, values, and PR numbers where useful. "
+            "repository metrics. Cite specific dates, values, and PR numbers where useful. "
             "Throughput is merged PRs per complete week; the first and current partial weeks are excluded. "
             "The hosted collector does not fetch change counts, review timelines, or commit details. "
             "Do not treat missing batch size, review wait, flow efficiency, or AI-assistance values "

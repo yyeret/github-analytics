@@ -52,11 +52,18 @@ def test_private_issue_api_uses_caller_identity_without_pr_metrics(monkeypatch):
     assert all(secret not in response.text for secret in ['caller-a', 'deployment-token'])
 
 
-def test_private_analysis_requires_explicit_consent_and_caller(monkeypatch):
+@pytest.mark.parametrize('endpoint', ['/api/analyze', '/api/issues/value'])
+def test_private_analysis_requires_explicit_consent_and_caller(monkeypatch, endpoint):
     client, _, _, _ = setup(monkeypatch)
     monkeypatch.setattr(hosted, 'collect_public_data', lambda *_: pytest.fail('private data collected'))
-    assert client.post('/api/analyze', headers={'Authorization': 'Bearer caller-a'}, json={'repo_url': 'o/r'}).status_code == 400
-    assert client.post('/api/analyze', json={'repo_url': 'o/r', 'allow_private': True}).status_code == 401
+    assert client.post(endpoint, headers={'Authorization': 'Bearer caller-a'}, json={'repo_url': 'o/r'}).status_code == 400
+    assert client.post(endpoint, json={'repo_url': 'o/r', 'allow_private': True}).status_code == 401
+
+
+def test_private_chat_prompt_preserves_visibility():
+    prompt = hosted.chat_prompt({'repo': 'o/r', 'repository_visibility': 'private'})
+    assert '"repository_visibility":"private"' in prompt
+    assert 'public repository metrics' not in prompt
 
 
 def test_private_pr_cache_is_identity_scoped_and_chat_rechecks_access(monkeypatch):
