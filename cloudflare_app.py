@@ -17,7 +17,7 @@ from google_auth import verify_id_token
 from product_value import assess_product_value
 
 app = FastAPI(title="GitHub Flow Analytics")
-METRICS_CACHE_PREFIX = "metrics:v4:"
+METRICS_CACHE_PREFIX = "metrics:v5:"
 SESSION_COOKIE = "gha_session"
 NONCE_COOKIE = "gha_nonce"
 SESSION_SECONDS = 60 * 60 * 24 * 14

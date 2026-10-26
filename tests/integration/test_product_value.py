@@ -12,7 +12,13 @@ CONTEXT = {"product_summary": "Flow analytics for GitHub repositories.",
            "value_proposition": "Coaches teams to deliver faster.",
            "lean_canvas": {"customer_segments": "Engineering leads"},
            "strategic_goals": ["Trustworthy flow metrics", "Hosted dashboard adoption"],
-           "missing_context": "No pricing information."}
+           "missing_context": "No pricing information.",
+           "repository_research": {
+               "primary_users": [{"claim": "Engineering leads", "basis": "inferred", "source_ids": ["metadata"]}],
+               "critical_workflows": [{"claim": "Review delivery flow", "basis": "inferred", "source_ids": ["metadata"]}],
+               "value_drivers": [{"claim": "Trustworthy feedback", "basis": "inferred", "source_ids": ["metadata"]}],
+               "product_risks": [{"claim": "Misleading metrics", "basis": "inferred", "source_ids": ["metadata"]}],
+           }}
 DATA = {"recent_prs": [
     {"number": 1, "title": "Users can export reports faster", "body": "Adds CSV export."},
     {"number": 2, "title": "Bump lint config", "body": "Routine lint update."}],
@@ -34,6 +40,7 @@ class FakeServices:
         self.assessments = assessments or {}
         self.context_status, self.readme, self.context, self.private = context_status, readme, context, private
         self.prompts, self.jev_requests, self.urls = [], [], []
+        self.context_schemas = []
         self.readme_headers = None
 
     async def __call__(self, url, *, headers, method="GET", body=None, timeout=15):
@@ -53,6 +60,7 @@ class FakeServices:
                 return answer, {}, {"error": "provider-secret-sentinel"}
             return 200, {}, answer
         self.prompts.append(body["contents"][0]["parts"][0]["text"])
+        self.context_schemas.append(body["generationConfig"]["responseSchema"])
         return self.context_status, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(self.context)}]}}]}
 
 
@@ -191,6 +199,39 @@ def test_readme_is_unauthenticated_and_can_fall_back_to_metadata(services):
     result = run(token="secret")
     assert "Authorization" not in fake.readme_headers
     assert result["status"] == "ok" and result["sources"]["readme"] is False
+
+
+def test_research_profile_reaches_jev_with_traceable_public_sources(services):
+    fake = services()
+    result = run(token="credential-sentinel")
+    profile = result["context"]["repository_research"]
+    assert profile["product_risks"][0]["claim"] == "Misleading metrics"
+    sources = result["sources"]["research"]
+    assert any(source["id"] == "metadata" for source in sources)
+    assert all("text" not in source for source in sources)
+    state = fake.jev_requests[0]["state"]
+    assert state["repository"]["repository_research"] == profile
+    assert result["sources"]["limitations"]
+    assert "credential-sentinel" not in json.dumps(result)
+
+
+def test_research_claims_cannot_cite_sources_that_were_not_loaded(services):
+    context = json.loads(json.dumps(CONTEXT))
+    context["repository_research"]["value_drivers"][0]["source_ids"] = ["invented-web-page"]
+    fake = services(context=context)
+    result = run()
+    assert result["status"] == "failed" and result["error_code"] == "invalid_response"
+    assert not fake.jev_requests
+
+
+def test_context_generation_constrains_references_to_loaded_source_ids(services):
+    fake = services()
+    result = run()
+    allowed = {source["id"] for source in result["sources"]["research"]}
+    claims = fake.context_schemas[-1]["properties"]["repository_research"]["properties"]
+    for field in product_value.RESEARCH_FIELDS:
+        references = claims[field]["items"]["properties"]["source_ids"]["items"]
+        assert set(references["enum"]) == allowed
 
 
 def test_provider_deadline_is_enforced(monkeypatch):

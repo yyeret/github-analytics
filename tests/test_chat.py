@@ -90,7 +90,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         with patch("cloudflare_app.httpx.AsyncClient", return_value=client):
             result = await chat(req, fake_request)
         self.assertEqual(result["reply"], "Throughput rose.")
-        self.assertEqual(cache.keys, ["metrics:v4:github/spec-kit"])
+        self.assertEqual(cache.keys, ["metrics:v5:github/spec-kit"])
         self.assertIn("throughput", client.body["system_instruction"]["parts"][0]["text"].lower())
         self.assertIn("gemini-3.5-flash-lite", client.url)
         self.assertEqual(client.headers["x-goog-api-key"], "test")
