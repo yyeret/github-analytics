@@ -22,11 +22,11 @@ DIMS = ("value", "time_criticality", "opportunity_runway", "risk_reduction")
 
 def jev_reply(scores=(3, 5, 8, 13)):
     scale = [1, 2, 3, 5, 8, 13]
-    return {"model": "jev-1.14.0", "answers": {
+    return {"model": "jev-1.14.0", "answers": {"intent_assessable": {"type": "noul", "noul": .95}, **{
         name: {"type": "score", "score": scale.index(score), "confidence": .8,
                "legend": {str(i): "rubric" for i in range(6)},
                "probabilities": {str(i): float(i == scale.index(score)) for i in range(6)}}
-        for name, score in zip(DIMS, scores)}, "usage": {"input_tokens": 500, "output_tokens": 20}}
+        for name, score in zip(DIMS, scores)}}, "usage": {"input_tokens": 500, "output_tokens": 20}}
 
 
 class FakeServices:
@@ -96,6 +96,38 @@ def test_uses_most_probable_level_not_rounded_average_or_confidence(services):
     assert item["dimensions"]["value"]["score"] == 13
     assert item["dimensions"]["value"]["confidence"] == .2
     assert item["dimensions"]["value"]["probabilities"]["13"] == .51
+
+
+@pytest.mark.parametrize("probability", [.05, .5, .69])
+def test_indeterminate_nonempty_description_has_no_numeric_contribution(services, probability):
+    answer = jev_reply()
+    answer["answers"]["intent_assessable"]["noul"] = probability
+    services(assessments={1: answer})
+    result = run(data={"recent_prs": [{"number": 1, "body": "Various improvements and fixes."}]})
+    item = result["items"][0]
+    assert item["status"] == "failed" and item["error_code"] == "insufficient_context"
+    assert item["cost_of_delay"] is None and "dimensions" not in item
+    assert "empty" not in item["reason"]
+
+
+@pytest.mark.parametrize("description", ["Add 2FA.", "Run chaos experiments against recovery paths.", "Parallelize CI tests."])
+def test_inferable_intent_needs_no_explicit_business_case(services, description):
+    fake = services()
+    item = run(data={"recent_prs": [{"number": 1, "body": description}]})["items"][0]
+    assert item["status"] == "assessed" and item["cost_of_delay"] == 29
+    assert item["intent_assessability"] == .95
+    assert "intent_assessable" in fake.jev_requests[0]["questions"]
+    assert item["body_truncated"] is False
+
+
+@pytest.mark.parametrize("answer", [None, {"type": "score", "noul": .99}, {"type": "noul", "noul": True}, {"type": "noul", "noul": float("nan")}])
+def test_malformed_assessability_does_not_turn_into_a_score(services, answer):
+    reply = jev_reply()
+    reply["answers"]["intent_assessable"] = answer
+    services(assessments={1: reply})
+    item = run()["items"][0]
+    assert item["status"] == "failed" and item["error_code"] == "invalid_response"
+    assert item["cost_of_delay"] is None
 
 
 @pytest.mark.parametrize("failure", [429, {"answers": {}}, {"answers": {"value": {"type": "score"}}}])
