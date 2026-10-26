@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 from urllib.parse import quote
 
 REQUEST_TIMEOUT = 8
+RESEARCH_TIMEOUT = 15
 MAX_CATALOG = 120
 MAX_DOCUMENTS = 5
 MAX_SOURCE_CHARS = 36_000
@@ -71,6 +72,8 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "github-flow-analytics/0.1"}
     sources, limitations = [], []
     remaining = MAX_SOURCE_CHARS
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + RESEARCH_TIMEOUT
 
     def add(source_id, kind, text, limit, *, path=None, url=None, truncated=False):
         nonlocal remaining
@@ -86,9 +89,13 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
         remaining -= len(bounded)
 
     async def fetch(suffix, label):
+        timeout = min(REQUEST_TIMEOUT, max(0, deadline - loop.time()))
+        if not timeout:
+            limitations.append(f"{label} was skipped after the research budget expired; availability is unknown.")
+            return None
         try:
             status, _, payload = await asyncio.wait_for(
-                request(f"{base}/{suffix}", REQUEST_TIMEOUT, headers=headers), REQUEST_TIMEOUT)
+                request(f"{base}/{suffix}", timeout, headers=headers), timeout)
         except Exception:
             limitations.append(f"{label} could not be loaded; availability is unknown.")
             return None
@@ -126,8 +133,8 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
         prompt = SELECTION_PROMPT.format(repo=repo, metadata=metadata_text[:2_000], readme=readme[:README_CHARS],
                                          catalog=json.dumps(catalog, ensure_ascii=False))
         try:
-            selection = await generate(prompt, SELECTION_SCHEMA, 768,
-                                       diagnostics={**(diagnostics or {}), "stage": "repo_research_plan"})
+            selection = await asyncio.wait_for(generate(prompt, SELECTION_SCHEMA, 768,
+                diagnostics={**(diagnostics or {}), "stage": "repo_research_plan"}), max(0, deadline - loop.time()))
             paths = selection.get("paths") if isinstance(selection, dict) else None
             if not isinstance(paths, list):
                 limitations.append("The research planner returned an unreadable document selection.")

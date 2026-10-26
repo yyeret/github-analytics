@@ -150,7 +150,9 @@ Planning uses a 768-token output budget. Synthesis starts with 4,096 tokens and
 asks for under 700 words. A `MAX_TOKENS` synthesis finish or a parsed profile rejected
 by context validation triggers one fresh attempt with 8,192 tokens (at most two
 synthesis attempts total). Planning, optional source collection and synthesis share a
-45-second deadline; each GitHub research request is limited to 8 seconds and
+45-second deadline. Optional research has a 15-second total allowance, preserving
+the remaining time for synthesis and returning already collected sources when
+optional calls expire; each GitHub research request is limited to 8 seconds and
 Gemini requests to 25 seconds. Other
 Gemini HTTP errors, blocked responses, and invalid JSON are not retried. Incomplete
 responses are never used to score PRs. Each PR call remains independent, so one

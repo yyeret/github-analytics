@@ -111,3 +111,32 @@ def test_selection_provider_failure_keeps_other_evidence():
     assert any(source["kind"] == "issue" for source in result["sources"])
     assert not any(source["kind"] == "document" for source in result["sources"])
     assert result["limitations"] and "provider-secret-sentinel" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("slow_stage", ["catalog", "planner", "documents"])
+def test_optional_research_budget_preserves_available_sources(monkeypatch, slow_stage):
+    import repo_research
+
+    service = ResearchServices()
+    request, generate = service.request, service.generate
+    monkeypatch.setattr(repo_research, "RESEARCH_TIMEOUT", .02, raising=False)
+
+    async def delayed_request(url, timeout, **kwargs):
+        if slow_stage == "catalog" or (slow_stage == "documents" and "/contents/" in url):
+            await asyncio.sleep(1)
+        return await request(url, timeout, **kwargs)
+
+    async def delayed_generate(*args, **kwargs):
+        if slow_stage == "planner":
+            await asyncio.sleep(1)
+        return await generate(*args, **kwargs)
+
+    async def bounded():
+        return await asyncio.wait_for(build_research_sources(
+            "owner/product", {"description": "Exports", "readme": "Existing product evidence"},
+            None, delayed_request, delayed_generate), .2)
+
+    result = asyncio.run(bounded())
+    assert {"metadata", "readme"}.issubset({source["kind"] for source in result["sources"]})
+    assert not any(source["kind"] == "document" for source in result["sources"])
+    assert result["limitations"]
