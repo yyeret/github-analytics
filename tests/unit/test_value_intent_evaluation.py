@@ -95,3 +95,29 @@ def test_budget_is_hard_capped_and_missing_key_never_calls(tmp_path):
         asyncio.run(run_cases([case()], {"org/repo": {}}, "r", tmp_path / "out", "key", assessor, budget=61))
     with pytest.raises(ValueError, match="key"):
         asyncio.run(run_cases([case()], {"org/repo": {}}, "r", tmp_path / "out", "", assessor, budget=1))
+
+
+@pytest.mark.parametrize("changed_input", ["body", "context"])
+def test_offline_cli_rejects_stale_inputs_even_with_same_case_id(tmp_path, changed_input):
+    from scripts.evaluate_value_intent import main
+
+    cases = [case()]
+    contexts = {"org/repo": {"product_summary": "Original product"}}
+    output, dataset, overrides = (tmp_path / name for name in ("result.json", "dataset.json", "contexts.json"))
+
+    async def assessor(*args):
+        return scored()
+
+    asyncio.run(run_cases(cases, contexts, "r1", output, "key", assessor, budget=1))
+    dataset.write_text(json.dumps({"cases": cases, "controls": [], "contexts": contexts}))
+    args = ["--dataset", str(dataset), "--results", str(output)]
+    assert main(args) == 0
+    if changed_input == "body":
+        cases[0]["body"] = "A different change with the same ID"
+        dataset.write_text(json.dumps({"cases": cases, "controls": [], "contexts": contexts}))
+    else:
+        overrides.write_text(json.dumps({"org/repo": {"product_summary": "A different product"}}))
+        args += ["--contexts", str(overrides)]
+    with pytest.raises(SystemExit) as error:
+        main(args)
+    assert error.value.code == 2

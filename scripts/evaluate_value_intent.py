@@ -98,6 +98,23 @@ def _save(path, payload):
     temporary.replace(path)
 
 
+def offline_evaluate(cases, checkpoint, contexts=None):
+    """Verify inference inputs before attributing saved scores to selected cases."""
+    effective_contexts = contexts if contexts is not None else checkpoint.get("contexts")
+    if not isinstance(effective_contexts, dict):
+        raise ValueError("Offline comparison requires the original repository contexts")
+    if any(case["repository"] not in effective_contexts for case in cases):
+        raise ValueError("Repository context missing for selected case")
+    rubric = checkpoint.get("rubric_version")
+    expected = {case["id"]: fingerprint(case, effective_contexts[case["repository"]], rubric) for case in cases}
+    if not isinstance(rubric, str) or checkpoint.get("manifest") != expected:
+        raise ValueError("Offline fingerprint mismatch; descriptions or contexts changed")
+    records = checkpoint["records"]
+    if any(record.get("fingerprint") != expected.get(record.get("case_id")) for record in records):
+        raise ValueError("Offline record fingerprint mismatch")
+    return evaluate(cases, records)
+
+
 async def run_cases(cases, contexts, rubric_version, output, key, assessor, *, budget=MAX_REQUESTS, resume=False):
     if not key:
         raise ValueError("Jev key is not configured in the environment")
@@ -109,7 +126,9 @@ async def run_cases(cases, contexts, rubric_version, output, key, assessor, *, b
     manifest = {case["id"]: fingerprint(case, contexts[case["repository"]], rubric_version) for case in cases}
     if len(manifest) != len(cases):
         raise ValueError("Duplicate dataset case ID")
-    checkpoint = {"schema_version": 1, "rubric_version": rubric_version, "manifest": manifest, "attempts": 0, "records": []}
+    checkpoint = {"schema_version": 2, "rubric_version": rubric_version, "manifest": manifest,
+                  "contexts": {repo: contexts[repo] for repo in {case["repository"] for case in cases}},
+                  "attempts": 0, "records": []}
     if output.exists():
         if not resume:
             raise ValueError("Output already exists; use --resume or a new output file")
@@ -118,6 +137,7 @@ async def run_cases(cases, contexts, rubric_version, output, key, assessor, *, b
             raise ValueError("Resume fingerprint mismatch; inputs/rubric changed. Use a new output file")
         if checkpoint.get("attempts") != len(checkpoint.get("records", [])):
             raise ValueError("Invalid checkpoint attempt count")
+        checkpoint["contexts"] = {repo: contexts[repo] for repo in {case["repository"] for case in cases}}
     completed = {record["case_id"] for record in checkpoint["records"]}
     for case in cases:
         if case["id"] in completed or checkpoint["attempts"] >= budget:
@@ -178,7 +198,15 @@ def main(argv=None):
         else:
             if not args.results:
                 raise ValueError("Supply --results for offline evaluation or --live for explicit paid calls")
-            summaries = {str(path): evaluate(cases, json.loads(path.read_text(encoding="utf-8"))["records"]) for path in args.results}
+            summaries = {}
+            for path in args.results:
+                checkpoint = json.loads(path.read_text(encoding="utf-8"))
+                contexts = None
+                if args.contexts or not checkpoint.get("contexts"):
+                    contexts = dict(dataset["contexts"])
+                    if args.contexts:
+                        contexts.update(json.loads(args.contexts.read_text(encoding="utf-8")))
+                summaries[str(path)] = offline_evaluate(cases, checkpoint, contexts)
         print(json.dumps(summaries, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, KeyError) as exc:
