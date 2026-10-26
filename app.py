@@ -106,7 +106,7 @@ def _parse_repo_slug(repo_url: str) -> str:
     raise ValueError(f"Cannot parse repo slug from: {repo_url!r}")
 
 
-def _run_analysis(repo: str, force: bool) -> dict:
+def _run_analysis(repo: str, force: bool, gemini_key=None, jev_key=None) -> dict:
     """Blocking function that collects raw data and computes metrics."""
     result = subprocess.run(
         ["gh", "api", "--hostname", "github.com", f"repos/{repo}", "--jq", ".private"],
@@ -117,7 +117,8 @@ def _run_analysis(repo: str, force: bool) -> dict:
     raw = collect_data(repo)
     metrics = compute_flow_metrics(raw)
     metrics["product_value"] = asyncio.run(assess_product_value(
-        repo, raw, _get_gemini_key(), os.environ.get("GITHUB_TOKEN")))
+        repo, raw, gemini_key or _get_gemini_key(), os.environ.get("GITHUB_TOKEN"),
+        jev_key=jev_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")))
     return metrics
 
 
@@ -260,7 +261,7 @@ def _interpret_corr(corr: float) -> str:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/analyze")
-async def analyze_repo(req: AnalyzeRequest):
+async def analyze_repo(req: AnalyzeRequest, request: Request):
     try:
         repo = _parse_repo_slug(req.repo_url)
     except ValueError as e:
@@ -269,7 +270,8 @@ async def analyze_repo(req: AnalyzeRequest):
     # Run blocking collection+computation in thread pool
     loop = asyncio.get_event_loop()
     try:
-        metrics = await loop.run_in_executor(_executor, _run_analysis, repo, req.force_refresh)
+        metrics = await loop.run_in_executor(_executor, _run_analysis, repo, req.force_refresh,
+            request.headers.get("X-Gemini-Api-Key"), request.headers.get("X-TypeSafe-Api-Key"))
     except HTTPException:
         raise
     except Exception:

@@ -21,7 +21,7 @@ def isolated_env(tmp_path, monkeypatch, blocked_calls):
         raise AssertionError(f"test attempted a real subprocess call: {cmd}")
 
     monkeypatch.setattr(subprocess, "run", _blocked)
-    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GITHUB_TOKEN"):
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GITHUB_TOKEN", "TYPESAFE_API_KEY", "JEV_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)
     yield tmp_path

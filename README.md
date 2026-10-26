@@ -59,30 +59,77 @@ Existing caches remain usable with title-only classification. Use `python analyz
 `/api/analyze` exposes the additive `value_classification` field; AI contribution
 classification remains in `classification`.
 
-### Expected product value
+### Expected cost of delay
 
-When `GEMINI_API_KEY` is configured, each analysis also judges the value each sampled
-PR is expected to deliver to the repository's product (`product_value.py`). A Gemini
-call turns the repository description, topics and README into product context: a
-summary, value proposition, lean canvas, and the strategic goals the repository
-appears focused on. Only public repositories are assessed, and the README is fetched
-without the GitHub token so GitHub refuses it if the repository has just gone private;
-unauthenticated GitHub calls are limited to 60 per hour per IP, so when that limit is
-hit the context uses the description and topics alone. One Gemini call per PR, for the 30 most recent sampled PRs (up to
-10 open), then rates expected value as High, Medium, Low or Unclear with confidence,
-who benefits, why it matters, the matching goal, and missing context. Content framing
-is passed as evidence, but clear outcome language alone does not imply high value.
-These are expectations, not verified realized impact. Without a key, or if the context
-call fails, `/api/analyze` returns `product_value` with a status and reason and the
-rest of the analysis is unchanged. The hosted Worker caches each analysis for up to six
-hours (ten minutes when a Gemini call failed), so adding or removing the key shows on the
-next uncached or force-refreshed analysis. The dashboard shows the context and per-PR
-assessments under Content framing.
+Each sampled PR receives four independent Jev classifications, each mapped to
+`1, 2, 3, 5, 8, 13` Fibonacci points:
+
+| Element | Meaning |
+| --- | --- |
+| Value | Expected benefit to the product's users |
+| Time criticality | How quickly delaying the change reduces its benefit |
+| Opportunity runway | Future capabilities unlocked along the repository's inferred strategic direction |
+| Risk reduction | Concrete reliability, security, data or operational risk removed |
+
+**Cost of delay = value + time criticality + opportunity runway + risk reduction.**
+The total ranges from 4 to 52. These are relative estimates, not money, measured
+impact or WSJF; no job-size divisor is used. Merged PRs are assessed retrospectively.
+A low total means low estimated cost of delay across these four elements; inspect
+the separate value score before judging user benefit. Missing provider answers are
+failures, not zero scores. Lack of a stated deadline does not imply urgency.
+
+One Gemini call infers product context and strategic goals from public repository
+metadata and README (up to 12,000 characters). Jev receives that compact context
+plus only the first 1,500 characters of each PR description. Titles, code size, and framing labels are not sent to Jev. Empty descriptions return `insufficient_context` with no score or Jev request. Four Score questions share one
+request per PR. Code chooses the most probable rubric level (lower wins ties),
+maps its index to Fibonacci points, and sums the four points. The API retains each
+rubric and probability distribution for review, rather than treating model
+confidence as proof of correctness. There is no diff inspection or measured-impact
+input. The most recent 30 sampled PRs are assessed, including up to 10 open PRs.
+
+For local use, export `GEMINI_API_KEY` and `TYPESAFE_API_KEY`; `GOOGLE_API_KEY` and
+`JEV_API_KEY` are also accepted locally. Credentials may be injected from Bitwarden;
+do not commit populated environment files. The hosted deployment accepts configured
+`GEMINI_API_KEY` and `TYPESAFE_API_KEY` runtime secrets. Alternatively, supply keys
+for one analysis in the optional dashboard fields or these request headers:
+
+```http
+POST /api/analyze
+Content-Type: application/json
+X-TypeSafe-Api-Key: <your Jev key>
+X-Gemini-Api-Key: <your Gemini key>
+
+{"repo_url":"github/spec-kit","force_refresh":true}
+```
+
+Omit either header to use its configured default. Keys stay server-side when set
+as runtime secrets; caller-supplied keys travel over HTTPS, are not persisted in
+browser storage or analysis results. Hosted caller-key requests bypass the shared analysis cache. The
+hosted API still requires a Google session; provider keys do not grant app access.
+Caller-key hosted responses include an `analysis_id` tied to the signed-in session.
+Pass it to `/api/chat` to coach against that exact analysis; these snapshots expire
+after the normal analysis TTL and cannot be read from another session. Chat still
+uses the deployment Gemini key. Coaching caller-key hosted results requires a
+signed-in session, including when authentication is disabled for development;
+without one, chat returns 401 rather than selecting a shared result.
+The local development server is a single-user localhost tool: its process-wide
+coaching cache is shared by clients of that process. Use the authenticated hosted
+entry point for multiple users.
+Model or configuration failures leave other repository metrics available. Default-key
+hosted results cache for six hours, shortened to ten minutes after assessment
+failures or unavailable provider configuration. Force-refresh after changing deployment keys.
+Each caller-key analysis starts fresh provider requests; avoid concurrent retries.
+
+Only public repositories are assessed. The README is fetched without a GitHub
+token so a visibility transition cannot expose private content. A refused or
+rate-limited README falls back to metadata. Review inferred context and scores
+before using them to prioritize work. Assessments have a 90-second overall budget;
+completed PR scores are retained and unfinished items are marked failed on expiry.
 
 Context generation starts with a 4,096-token output budget and asks for under 600
 words. A `MAX_TOKENS` finish triggers one fresh attempt with 8,192 tokens; both
 attempts share a 45-second deadline, with a 25-second limit per request. Other
-provider errors, blocked responses, and invalid JSON are not retried. Incomplete
+Gemini errors, blocked responses, and invalid JSON are not retried. Incomplete
 responses are never used to score PRs. Each PR call remains independent, so one
 failed assessment does not discard successful ones. When a deadline cancels a
 Worker request, its abort signal cancels the outgoing fetch, including a pending
@@ -91,8 +138,7 @@ response-body read.
 For diagnosis, `/api/analyze` includes `product_value.analysis_id`; failures also
 include a stable `error_code` and a safe explanation. Search Worker logs for that
 analysis ID. Events identify `product_sources`, `product_context`, or
-`pr_assessment`; generation events include the model, attempt, output budget,
-HTTP status, finish reason, token usage, and elapsed milliseconds when available.
+`pr_assessment`; Gemini events include the model, attempt, output budget, HTTP status, finish reason, token usage, and elapsed milliseconds when available. Jev events include model, attempt, HTTP status, token usage, elapsed time, and a stable error code on failure.
 A PR failure also records its number and cohort. Workers receive structured
 console objects; local runs emit JSON through Python logging. Prompts, source
 text, model output, credentials, raw error bodies, and exception messages are
@@ -138,7 +184,7 @@ Preview URLs are public; protected API endpoints still require a session. The
 configured Google OAuth client must allow the Preview's JavaScript origin before
 sign-in can work there. This setup leaves Google OAuth settings unchanged.
 Preview service secrets are configured separately in Cloudflare's Previews Base;
-Gemini assessment requires a Preview `GEMINI_API_KEY`.
+Cost-of-delay assessment requires Preview `GEMINI_API_KEY` and `TYPESAFE_API_KEY` secrets, or caller-supplied headers.
 
 The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
 

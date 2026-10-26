@@ -11,9 +11,10 @@ const end = html.indexOf('// ── Dashboard Renderer', start);
 function dashboard(response) {
   const statuses = [];
   const button = {classList: {add() {}, remove() {}}};
+  const providerInputs = {'typesafe-key': {value: ''}, 'gemini-key': {value: ''}};
   const context = vm.createContext({
     document: {getElementById(id) {
-      return id === 'repo-input' ? {value: 'https://github.com/github/spec-kit'} : button;
+      return providerInputs[id] || (id === 'repo-input' ? {value: 'https://github.com/github/spec-kit'} : button);
     }},
     fetch: async () => response,
     showStatus: (text) => statuses.push(text),
@@ -47,4 +48,24 @@ test('successful JSON is returned without alteration', async () => {
 test('invalid successful response is reported without exposing its body', async () => {
   const {context} = dashboard();
   await assert.rejects(context.readApiResponse(new Response('private-body-sentinel')), /invalid response.*HTTP 200/i);
+});
+
+test('an empty-description PR displays its reason without a score beside assessed PRs', () => {
+  const elements = Object.fromEntries(['product-value-card', 'product-value-note', 'product-value-context', 'product-value-items']
+    .map(id => [id, {style: {}, innerHTML: '', textContent: ''}]));
+  const context = vm.createContext({document: {getElementById: id => elements[id]}});
+  vm.runInContext(html.slice(html.indexOf('  function escapeHtml('), html.indexOf('  function renderIssues(')), context);
+  vm.runInContext(html.slice(html.indexOf('  function renderProductValue('), html.indexOf('  let valueClassification')), context);
+  context.renderProductValue({status: 'ok', assessed: 1, failed: 1, selected: 2,
+    dimensions: {value: 'Value'}, items: [
+      {number: 1, title: 'Scored', cohort: 'merged', status: 'assessed', cost_of_delay: 4,
+        dimensions: {value: {score: 1, rubric: 'Routine change', probabilities: {'1': 1}}}},
+      {number: 2, title: 'Empty description', cohort: 'merged', status: 'failed', cost_of_delay: null,
+        error_code: 'insufficient_context', reason: 'The PR description is empty; there is insufficient context to assess its value.'},
+    ]});
+  const table = elements['product-value-items'].innerHTML;
+  assert.match(table, /<strong>4<\/strong>/);
+  const unscored = table.slice(table.indexOf('#2'), table.indexOf('</tr>', table.indexOf('#2')));
+  assert.match(unscored, /Not scored: The PR description is empty/);
+  assert.doesNotMatch(unscored, /<strong>|null|NaN/);
 });
