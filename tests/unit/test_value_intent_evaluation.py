@@ -87,6 +87,37 @@ def test_truncation_metadata_does_not_invent_missing_evidence(tmp_path):
     assert bodies == ["a" * 1500 + " "]
 
 
+@pytest.mark.parametrize("corruption", ["stale_fingerprint", "duplicate_case", "unselected_case"])
+def test_live_resume_rejects_invalid_completed_records_before_calls(tmp_path, corruption):
+    cases = [case("one"), case("two")]
+    contexts = {"org/repo": {"product_summary": "API"}}
+    output = tmp_path / "checkpoint.json"
+
+    async def assessor(*args):
+        return scored()
+
+    asyncio.run(run_cases(cases, contexts, "r1", output, "key", assessor, budget=1))
+    checkpoint = json.loads(output.read_text())
+    record = checkpoint["records"][0]
+    if corruption == "stale_fingerprint":
+        record["fingerprint"] = "an old description/context/rubric fingerprint"
+    elif corruption == "duplicate_case":
+        checkpoint["records"].append(dict(record))
+        checkpoint["attempts"] = 2
+    else:
+        record["case_id"] = "not-selected"
+    output.write_text(json.dumps(checkpoint))
+    saved = output.read_bytes()
+
+    async def unexpected_assessor(*args):
+        pytest.fail("Invalid resumed records must fail before a provider call")
+
+    with pytest.raises(ValueError, match="checkpoint|fingerprint"):
+        asyncio.run(run_cases(cases, contexts, "r1", output, "key", unexpected_assessor,
+                              budget=3, resume=True))
+    assert output.read_bytes() == saved
+
+
 def test_budget_is_hard_capped_and_missing_key_never_calls(tmp_path):
     async def assessor(*args):
         pytest.fail("Invalid configuration must fail before calling provider")

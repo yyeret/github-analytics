@@ -137,6 +137,11 @@ async def run_cases(cases, contexts, rubric_version, output, key, assessor, *, b
             raise ValueError("Resume fingerprint mismatch; inputs/rubric changed. Use a new output file")
         if checkpoint.get("attempts") != len(checkpoint.get("records", [])):
             raise ValueError("Invalid checkpoint attempt count")
+        record_ids = [record["case_id"] for record in checkpoint["records"]]
+        if len(record_ids) != len(set(record_ids)) or set(record_ids) - manifest.keys():
+            raise ValueError("Invalid checkpoint case IDs; records must be unique selected cases")
+        if any(record.get("fingerprint") != manifest[record["case_id"]] for record in checkpoint["records"]):
+            raise ValueError("Resume record fingerprint mismatch; use a new output file")
         checkpoint["contexts"] = {repo: contexts[repo] for repo in {case["repository"] for case in cases}}
     completed = {record["case_id"] for record in checkpoint["records"]}
     for case in cases:
