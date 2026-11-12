@@ -32,6 +32,7 @@ pytest -m unit          # or -m integration / -m e2e
 
 Tests never touch the network, the `gh`/`bws` CLIs, or Gemini; `subprocess.run` is blocked by default and each test runs in a temp directory.
 
+The API and HTML report use the vendored [flow-metrics](https://github.com/yyeret/flow-metrics) Python core for cycle time, age, percentiles, occupancy, and throughput windows. To update it, run `python3 scripts/vendor.py github-analytics /path/to/github-analytics --revision COMMIT` from the upstream checkout. The vendor file records the pinned revision.
 
 ## Issue and PR content framing
 

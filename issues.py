@@ -9,6 +9,8 @@ import datetime
 import json
 import subprocess
 
+from flow_metrics_core import count_events_in_windows, count_intervals, elapsed, percentiles
+
 STALE_DAYS = 90
 STALE_ITEM_LIMIT = 25
 NET_WINDOW_WEEKS = 8
@@ -65,20 +67,14 @@ def _parse(date_str):
         return None
 
 
-def _percentile(sorted_vals, p):
-    if not sorted_vals:
-        return 0
-    return sorted_vals[min(int(len(sorted_vals) * p), len(sorted_vals) - 1)]
-
-
 def _cycle_stats(issues):
     hours = []
     for it in issues:
         created, closed = _parse(it.get("createdAt")), _parse(it.get("closedAt"))
         if created and closed and closed >= created:
-            hours.append((closed - created).total_seconds() / 3600.0)
-    hours.sort()
-    return {"n": len(hours), "median_hours": _percentile(hours, 0.5), "p85_hours": _percentile(hours, 0.85)}
+            hours.append(elapsed(created, closed, 3600.0))
+    median, p85 = percentiles(hours, (0.5, 0.85), method="upper-index") if hours else (0, 0)
+    return {"n": len(hours), "median_hours": median, "p85_hours": p85}
 
 
 def _last_activity(it):
@@ -110,16 +106,21 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
     closed_rows = [(i, _parse(i.get("createdAt")), _parse(i.get("closedAt"))) for i in closed_issues]
     sampled = open_rows + closed_rows
 
+    arrivals = [made for _, made, _ in sampled if made]
+    resolutions = [done for _, _, done in closed_rows if done]
+    intervals = [(made, done) for _, made, done in sampled if made]
     weekly = []
-    for idx in range(1, len(weekly_bins)):
-        w_start, w_end = weekly_bins[idx - 1], weekly_bins[idx]
-        if w_start < window_start:
+    for start, end, arrived, resolved, open_count in zip(
+        weekly_bins,
+        weekly_bins[1:],
+        count_events_in_windows(arrivals, weekly_bins),
+        count_events_in_windows(resolutions, weekly_bins),
+        count_intervals(intervals, weekly_bins[1:]),
+    ):
+        if start < window_start:
             continue
-        arrived = sum(1 for _, made, _ in sampled if made and w_start < made <= w_end)
-        resolved = sum(1 for _, _, done in closed_rows if done and w_start < done <= w_end)
-        open_count = sum(1 for _, made, done in sampled if made and made <= w_end and (not done or done > w_end))
         weekly.append({
-            "week": w_end.strftime("%Y-%m-%d"),
+            "week": end.strftime("%Y-%m-%d"),
             "arrived": arrived,
             "resolved": resolved,
             "net": arrived - resolved,
@@ -133,13 +134,13 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS):
     for it, made, _ in open_rows:
         if not made:
             continue
-        age_days = (now - made).total_seconds() / 86400.0
+        age_days = elapsed(made, now, 86400.0)
         for label, low, high in AGE_BUCKETS:
             if age_days >= low and (high is None or age_days < high):
                 age_counts[label] += 1
                 break
         last = _last_activity(it)
-        idle_days = (now - last).total_seconds() / 86400.0 if last else age_days
+        idle_days = elapsed(last, now, 86400.0) if last else age_days
         if idle_days > stale_days:
             stale_items.append({
                 "number": it.get("number"),

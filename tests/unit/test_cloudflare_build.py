@@ -28,3 +28,4 @@ def test_cached_build_tool_is_refreshed_when_its_pin_changes(tmp_path, monkeypat
     assert bool(installs) is refresh
     assert any(command[1:4] == ["run", "--locked", "--no-extra"] for command in calls)
     assert any(source.name == "repo_research.py" for source, _ in copied)
+    assert (tmp_path / "flow_metrics_core.py", tmp_path / ".wrangler" / "worker" / "flow_metrics_core.py") in copied
