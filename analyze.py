@@ -6,6 +6,7 @@ import sys
 import re
 import concurrent.futures
 
+from flow_metrics_core import count_events_in_windows, count_intervals, elapsed, percentiles
 from value_classification import compute_value_classification, render_value_report
 from issues import collect_issues, compute_issue_metrics, issue_weekly_bins
 
@@ -478,7 +479,7 @@ def process_pr_metrics(pr):
         
     cycle_time_hours = None
     if merged:
-        cycle_time_hours = (merged - created).total_seconds() / 3600.0
+        cycle_time_hours = elapsed(created, merged, 3600.0)
         
     pr_size = pr.get("additions", 0) + pr.get("deletions", 0)
     
@@ -495,7 +496,7 @@ def process_pr_metrics(pr):
         review_dates = [parse_date(r.get("createdAt")) for r in reviews if parse_date(r.get("createdAt"))]
         if review_dates:
             earliest_review = min(review_dates)
-            wait_time_to_first_review = (earliest_review - created).total_seconds() / 3600.0
+            wait_time_to_first_review = elapsed(created, earliest_review, 3600.0)
             
     # Commits
     commits_nodes = pr.get("commits", {}).get("nodes", [])
@@ -515,7 +516,7 @@ def process_pr_metrics(pr):
     if ready_for_review_dt:
         is_sdd_workflow = True
         # Coding time is draft creation to ready transitioned
-        coding_time_hours = (ready_for_review_dt - created).total_seconds() / 3600.0
+        coding_time_hours = elapsed(created, ready_for_review_dt, 3600.0)
         if coding_time_hours < 0:
             coding_time_hours = 0.0
     else:
@@ -525,7 +526,7 @@ def process_pr_metrics(pr):
             if commit_dates:
                 first_commit = min(commit_dates)
                 if first_commit < created:
-                    coding_time_hours = (created - first_commit).total_seconds() / 3600.0
+                    coding_time_hours = elapsed(first_commit, created, 3600.0)
                 else:
                     coding_time_hours = 0.0
 
@@ -538,9 +539,9 @@ def process_pr_metrics(pr):
         issue_created = parse_date(closing_issues[0].get("createdAt"))
         if issue_created:
             if merged:
-                upstream_issue_lead_time = (merged - issue_created).total_seconds() / 3600.0
+                upstream_issue_lead_time = elapsed(issue_created, merged, 3600.0)
             else:
-                upstream_issue_lead_time = (datetime.datetime.now() - issue_created).total_seconds() / 3600.0
+                upstream_issue_lead_time = elapsed(issue_created, datetime.datetime.now(), 3600.0)
                 
             # Backlog wait: from issue creation to first commit (start of work)
             if commits_nodes:
@@ -548,7 +549,7 @@ def process_pr_metrics(pr):
                 if commit_dates:
                     first_commit = min(commit_dates)
                     if first_commit > issue_created:
-                        upstream_backlog_wait_hours = (first_commit - issue_created).total_seconds() / 3600.0
+                        upstream_backlog_wait_hours = elapsed(issue_created, first_commit, 3600.0)
                     else:
                         upstream_backlog_wait_hours = 0.0
             
@@ -612,6 +613,93 @@ def spearman_rank_correlation(x, y):
         return 0.0
     return num / ((den_x * den_y) ** 0.5)
 
+def _pr_flow_series(recent_prs, sampled_prs, weekly_bins):
+    """Build occupancy and throughput from the application's existing PR cohorts."""
+    merged_intervals = []
+    completion_dates = {"Human": [], "AI-Assisted": [], "AI-Agentic": []}
+    for pr in recent_prs:
+        merged = parse_date(pr["mergedAt"])
+        if merged:
+            merged_intervals.append((merged, None))
+            completion_dates[pr["classification"]].append(merged)
+
+    review_intervals, coding_intervals, backlog_intervals = [], [], []
+    for pr in sampled_prs:
+        created = parse_date(pr["createdAt"])
+        merged = parse_date(pr["mergedAt"])
+        coding_hours = pr["coding_time_hours"]
+        coding_start = created - datetime.timedelta(hours=2.0 if coding_hours is None else coding_hours)
+        review_intervals.append((created, merged))
+        coding_intervals.append((coding_start, created))
+        if pr["has_upstream"] and (issue_created := parse_date(pr["upstream_issue_created"])):
+            backlog_intervals.append((issue_created, coding_start))
+
+    cfd_data = []
+    for day, merged, review, coding, backlog in zip(
+        weekly_bins,
+        count_intervals(merged_intervals, weekly_bins),
+        count_intervals(review_intervals, weekly_bins),
+        count_intervals(coding_intervals, weekly_bins),
+        count_intervals(backlog_intervals, weekly_bins),
+    ):
+        wip = review + coding + backlog
+        cfd_data.append({
+            "month": day.strftime("%Y-%m-%d"),
+            "merged": merged, "review": review, "coding": coding, "backlog": backlog,
+            "wip": wip, "opened": merged + wip,
+        })
+
+    throughput_data = []
+    for day, human, assisted, agentic in zip(
+        weekly_bins[1:],
+        count_events_in_windows(completion_dates["Human"], weekly_bins),
+        count_events_in_windows(completion_dates["AI-Assisted"], weekly_bins),
+        count_events_in_windows(completion_dates["AI-Agentic"], weekly_bins),
+    ):
+        throughput_data.append({
+            "week": day.strftime("%Y-%m-%d"),
+            "human": human, "assisted": assisted, "agentic": agentic,
+            "total": human + assisted + agentic,
+        })
+    return cfd_data, throughput_data
+
+
+def _pr_sle(prs):
+    completed = [pr for pr in prs if pr["cycle_time_hours"] is not None]
+    human_cycles = [pr["cycle_time_hours"] for pr in completed if pr["classification"] == "Human"]
+    cycles = human_cycles or [pr["cycle_time_hours"] for pr in completed]
+    if not cycles:
+        return 12.0, 24.0
+    return tuple(percentiles(cycles, (0.5, 0.85), method="upper-index"))
+
+
+def _pr_stage_percentiles(prs):
+    coding_days, review_days, merge_days = [], [], []
+    for pr in prs:
+        cycle = pr["cycle_time_hours"]
+        if cycle is None:
+            continue
+        coding = pr["coding_time_hours"]
+        if coding is not None:
+            coding_days.append(max(0.5, coding) / 24.0)
+        review = pr["wait_time_to_first_review"]
+        if review is not None:
+            review_days.append(max(0.5, review) / 24.0)
+            merge_days.append(max(0.5, cycle - review) / 24.0)
+
+    stages = {"coding": coding_days, "review": review_days, "merge": merge_days}
+    return {
+        stage: {
+            name: 0.5 if value is None else max(0.02, value)
+            for name, value in zip(
+                ("p50", "p70", "p85", "p95"),
+                percentiles(values, (0.5, 0.7, 0.85, 0.95), method="upper-index"),
+            )
+        }
+        for stage, values in stages.items()
+    }
+
+
 def compute_flow_metrics(data):
     """
     Compute all flow coaching metrics from raw GitHub data.
@@ -644,32 +732,7 @@ def compute_flow_metrics(data):
         current_bin += datetime.timedelta(days=7)
     weekly_bins.append(now)
 
-    cfd_data = []
-    for W in weekly_bins:
-        week_str = W.strftime("%Y-%m-%d")
-        merged_count = sum(1 for p in recent_prs if parse_date(p["mergedAt"]) and parse_date(p["mergedAt"]) <= W)
-        review_count = sum(1 for p in closed_system_prs if parse_date(p["createdAt"]) and parse_date(p["createdAt"]) <= W and (not parse_date(p["mergedAt"]) or parse_date(p["mergedAt"]) > W))
-        coding_count = 0
-        for p in closed_system_prs:
-            created_dt = parse_date(p["createdAt"])
-            if created_dt:
-                coding_h = p.get("coding_time_hours")
-                start_code_dt = created_dt - datetime.timedelta(hours=coding_h) if coding_h is not None else created_dt - datetime.timedelta(hours=2.0)
-                if start_code_dt <= W < created_dt:
-                    coding_count += 1
-        backlog_count = 0
-        for p in closed_system_prs:
-            if p.get("has_upstream") and p.get("upstream_issue_created"):
-                issue_created = parse_date(p["upstream_issue_created"])
-                created_dt = parse_date(p["createdAt"])
-                if issue_created and created_dt:
-                    coding_h = p.get("coding_time_hours")
-                    start_code_dt = created_dt - datetime.timedelta(hours=coding_h) if coding_h is not None else created_dt - datetime.timedelta(hours=2.0)
-                    if issue_created <= W < start_code_dt:
-                        backlog_count += 1
-        wip_count = review_count + coding_count + backlog_count
-        opened_count = merged_count + wip_count
-        cfd_data.append({"month": week_str, "merged": merged_count, "review": review_count, "coding": coding_count, "backlog": backlog_count, "wip": wip_count, "opened": opened_count})
+    cfd_data, throughput_data = _pr_flow_series(recent_prs, closed_system_prs, weekly_bins)
 
     def calc_era_stats(pr_list):
         if not pr_list:
@@ -715,10 +778,10 @@ def compute_flow_metrics(data):
                         if c_dates:
                             first_commit = min(c_dates)
             if first_commit and first_commit > issue_created:
-                backlog_h = (first_commit - issue_created).total_seconds() / 3600.0
+                backlog_h = elapsed(issue_created, first_commit, 3600.0)
             else:
                 backlog_h = 24.0
-            coding_h = max(0.0, (created_dt - first_commit).total_seconds() / 3600.0) if first_commit else p["cycle_time_hours"] * 0.3
+            coding_h = max(0.0, elapsed(first_commit, created_dt, 3600.0)) if first_commit else p["cycle_time_hours"] * 0.3
             review_h = p["wait_time_to_first_review"] if p["wait_time_to_first_review"] is not None else p["cycle_time_hours"] * 0.5
             merge_h = max(0.0, p["cycle_time_hours"] - review_h)
             upstream_breakdown["backlog_wait"] += backlog_h
@@ -734,46 +797,14 @@ def compute_flow_metrics(data):
     cycle_times_list = [p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None]
     spearman_corr = spearman_rank_correlation(sizes, cycle_times_list) if sizes else 0.0
 
-    human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["classification"] == "Human" and p["cycle_time_hours"] is not None])
-    if not human_cycle_times:
-        human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None])
-    p50_sle = 12.0
-    p85_sle = 24.0
-    if human_cycle_times:
-        p50_sle = human_cycle_times[int(len(human_cycle_times) * 0.5)]
-        p85_sle = human_cycle_times[int(len(human_cycle_times) * 0.85)] if len(human_cycle_times) > 1 else p50_sle
-
-    coding_days_list = []
-    review_days_list = []
-    merge_days_list = []
-    for p in recent_prs:
-        ct = p["cycle_time_hours"]
-        if ct is not None:
-            coding_h = p.get("coding_time_hours")
-            if coding_h is not None:
-                coding_days_list.append(max(0.5, coding_h) / 24.0)
-            review_h = p.get("wait_time_to_first_review")
-            if review_h is not None:
-                review_days_list.append(max(0.5, review_h) / 24.0)
-                merge_days_list.append(max(0.5, ct - review_h) / 24.0)
-    coding_days_list.sort(); review_days_list.sort(); merge_days_list.sort()
-
-    def get_pct(lst, p):
-        if not lst: return 0.5
-        idx = min(int(len(lst) * p), len(lst) - 1)
-        return max(0.02, lst[idx])
-
-    stage_percentiles = {
-        "coding": {"p50": get_pct(coding_days_list, 0.5), "p70": get_pct(coding_days_list, 0.70), "p85": get_pct(coding_days_list, 0.85), "p95": get_pct(coding_days_list, 0.95)},
-        "review": {"p50": get_pct(review_days_list, 0.5), "p70": get_pct(review_days_list, 0.70), "p85": get_pct(review_days_list, 0.85), "p95": get_pct(review_days_list, 0.95)},
-        "merge": {"p50": get_pct(merge_days_list, 0.5), "p70": get_pct(merge_days_list, 0.70), "p85": get_pct(merge_days_list, 0.85), "p95": get_pct(merge_days_list, 0.95)},
-    }
+    p50_sle, p85_sle = _pr_sle(recent_prs)
+    stage_percentiles = _pr_stage_percentiles(recent_prs)
 
     active_wip_points = []
     for p in filtered_open:
         created_dt = parse_date(p["createdAt"])
         if not created_dt: continue
-        age_days = max(0.02, (now - created_dt).total_seconds() / 86400.0)
+        age_days = max(0.02, elapsed(created_dt, now, 86400.0))
         ready_dt = p.get("ready_for_review_dt")
         is_draft = p.get("title", "").lower().startswith("[draft]")
         has_reviews = p.get("review_count", 0) > 0
@@ -810,15 +841,6 @@ def compute_flow_metrics(data):
         else:
             lanes[assigned_lane] = end_ts
         comet_points.append({"key": p["number"], "summary": p["title"], "start": start_ts, "end": end_ts, "lane": assigned_lane + 1, "classification": p["classification"], "size": p["pr_size"], "cycle_time": p["cycle_time_hours"]})
-
-    throughput_data = []
-    for idx in range(1, len(weekly_bins)):
-        W_start, W_end = weekly_bins[idx-1], weekly_bins[idx]
-        bin_str = W_end.strftime("%Y-%m-%d")
-        human_completed = sum(1 for p in recent_prs if p["classification"] == "Human" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
-        assisted_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Assisted" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
-        agentic_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Agentic" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
-        throughput_data.append({"week": bin_str, "human": human_completed, "assisted": assisted_completed, "agentic": agentic_completed, "total": human_completed + assisted_completed + agentic_completed})
 
     value_classification = compute_value_classification(data)
     pr_framing = {p["number"]: p for p in value_classification["prs"]["items"]}
@@ -891,60 +913,8 @@ def analyze_and_build_report(data):
         current_bin += datetime.timedelta(days=7)
     weekly_bins.append(now)
     
-    # 5. Populate CFD data points for each weekly bin
-    cfd_data = []
-    for W in weekly_bins:
-        week_str = W.strftime("%Y-%m-%d")
-        
-        # Cumulative Merged (Bottom layer - rightmost completed state)
-        merged_count = sum(1 for p in recent_prs if parse_date(p["mergedAt"]) and parse_date(p["mergedAt"]) <= W)
-        
-        # Review Queue: Created on or before W, and merged/closed after W (or not merged/closed yet)
-        review_count = sum(1 for p in closed_system_prs if parse_date(p["createdAt"]) and parse_date(p["createdAt"]) <= W and (not parse_date(p["mergedAt"]) or parse_date(p["mergedAt"]) > W))
-        
-        # Active Coding: First commit on or before W, and PR created after W
-        coding_count = 0
-        for p in closed_system_prs:
-            created_dt = parse_date(p["createdAt"])
-            if created_dt:
-                coding_h = p.get("coding_time_hours")
-                if coding_h is not None:
-                    start_code_dt = created_dt - datetime.timedelta(hours=coding_h)
-                else:
-                    start_code_dt = created_dt - datetime.timedelta(hours=2.0)
-                    
-                if start_code_dt <= W < created_dt:
-                    coding_count += 1
-                    
-        # Backlog Wait: Upstream issue created on or before W, and coding started after W
-        backlog_count = 0
-        for p in closed_system_prs:
-            if p.get("has_upstream") and p.get("upstream_issue_created"):
-                issue_created = parse_date(p["upstream_issue_created"])
-                created_dt = parse_date(p["createdAt"])
-                if issue_created and created_dt:
-                    coding_h = p.get("coding_time_hours")
-                    if coding_h is not None:
-                        start_code_dt = created_dt - datetime.timedelta(hours=coding_h)
-                    else:
-                        start_code_dt = created_dt - datetime.timedelta(hours=2.0)
-                        
-                    if issue_created <= W < start_code_dt:
-                        backlog_count += 1
-                        
-        wip_count = review_count + coding_count + backlog_count
-        opened_count = merged_count + wip_count
-        
-        cfd_data.append({
-            "month": week_str,
-            "merged": merged_count,
-            "review": review_count,
-            "coding": coding_count,
-            "backlog": backlog_count,
-            "wip": wip_count,
-            "opened": opened_count
-        })
-        
+    cfd_data, throughput_data = _pr_flow_series(recent_prs, closed_system_prs, weekly_bins)
+
     # Era Comparison Calculations
     def calc_era_stats(pr_list):
         if not pr_list:
@@ -1025,12 +995,12 @@ def analyze_and_build_report(data):
             
             # Calculation logic
             if first_commit and first_commit > issue_created:
-                backlog_h = (first_commit - issue_created).total_seconds() / 3600.0
+                backlog_h = elapsed(issue_created, first_commit, 3600.0)
             else:
                 backlog_h = 24.0 # default baseline proxy if first commit is messy
                 
             if first_commit:
-                coding_h = max(0.0, (created - first_commit).total_seconds() / 3600.0)
+                coding_h = max(0.0, elapsed(first_commit, created, 3600.0))
             else:
                 coding_h = p["cycle_time_hours"] * 0.3 # proxy
                 
@@ -1058,72 +1028,16 @@ def analyze_and_build_report(data):
     cycle_times = [p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None]
     spearman_corr = spearman_rank_correlation(sizes, cycle_times) if sizes else 0.0
 
-    # 2. SLE Percentiles (based on completed Human PRs)
-    human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["classification"] == "Human" and p["cycle_time_hours"] is not None])
-    if not human_cycle_times:
-        human_cycle_times = sorted([p["cycle_time_hours"] for p in recent_prs if p["cycle_time_hours"] is not None])
-        
-    p50_sle = 12.0
-    p85_sle = 24.0
-    if human_cycle_times:
-        p50_sle = human_cycle_times[int(len(human_cycle_times) * 0.5)]
-        p85_sle = human_cycle_times[int(len(human_cycle_times) * 0.85)] if len(human_cycle_times) > 1 else p50_sle
+    p50_sle, p85_sle = _pr_sle(recent_prs)
+    stage_percentiles = _pr_stage_percentiles(recent_prs)
 
-    # 3. Historical Stage Percentiles (in days)
-    coding_days_list = []
-    review_days_list = []
-    merge_days_list = []
-    for p in recent_prs:
-        ct = p["cycle_time_hours"]
-        if ct is not None:
-            coding_h = p.get("coding_time_hours")
-            if coding_h is not None:
-                coding_days_list.append(max(0.5, coding_h) / 24.0)
-            
-            review_h = p.get("wait_time_to_first_review")
-            if review_h is not None:
-                review_days_list.append(max(0.5, review_h) / 24.0)
-                merge_days_list.append(max(0.5, ct - review_h) / 24.0)
-                
-    coding_days_list.sort()
-    review_days_list.sort()
-    merge_days_list.sort()
-    
-    def get_pct(lst, p):
-        if not lst:
-            return 0.5
-        idx = int(len(lst) * p)
-        idx = min(idx, len(lst) - 1)
-        return max(0.02, lst[idx])
-        
-    stage_percentiles = {
-        "coding": {
-            "p50": get_pct(coding_days_list, 0.5),
-            "p70": get_pct(coding_days_list, 0.70),
-            "p85": get_pct(coding_days_list, 0.85),
-            "p95": get_pct(coding_days_list, 0.95),
-        },
-        "review": {
-            "p50": get_pct(review_days_list, 0.5),
-            "p70": get_pct(review_days_list, 0.70),
-            "p85": get_pct(review_days_list, 0.85),
-            "p95": get_pct(review_days_list, 0.95),
-        },
-        "merge": {
-            "p50": get_pct(merge_days_list, 0.5),
-            "p70": get_pct(merge_days_list, 0.70),
-            "p85": get_pct(merge_days_list, 0.85),
-            "p95": get_pct(merge_days_list, 0.95),
-        }
-    }
-
-    # 4. Active WIP Stage & Age (in days)
+    # Active WIP stage and age in days
     active_wip_points = []
     for p in filtered_open:
         created_dt = parse_date(p["createdAt"])
         if not created_dt:
             continue
-        age_days = (now - created_dt).total_seconds() / 86400.0
+        age_days = elapsed(created_dt, now, 86400.0)
         age_days = max(0.02, age_days)
         
         ready_dt = p.get("ready_for_review_dt")
@@ -1209,25 +1123,6 @@ def analyze_and_build_report(data):
             "classification": p["classification"],
             "size": p["pr_size"],
             "cycle_time": p["cycle_time_hours"]
-        })
-
-    # 7. PR Throughput by Week
-    throughput_data = []
-    for idx in range(1, len(weekly_bins)):
-        W_start = weekly_bins[idx-1]
-        W_end = weekly_bins[idx]
-        bin_str = W_end.strftime("%Y-%m-%d")
-        
-        human_completed = sum(1 for p in recent_prs if p["classification"] == "Human" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
-        assisted_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Assisted" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
-        agentic_completed = sum(1 for p in recent_prs if p["classification"] == "AI-Agentic" and parse_date(p["mergedAt"]) and W_start < parse_date(p["mergedAt"]) <= W_end)
-        
-        throughput_data.append({
-            "week": bin_str,
-            "human": human_completed,
-            "assisted": assisted_completed,
-            "agentic": agentic_completed,
-            "total": human_completed + assisted_completed + agentic_completed
         })
 
     # Pre-serialize JSON variables to avoid f-string curly-brace parsing issues

@@ -103,6 +103,19 @@ def test_open_count_excludes_issues_created_later_or_closed_at_the_week_edge():
     assert second["open_count"] == 1
 
 
+def test_resolution_without_creation_counts_only_as_a_finish():
+    bins = weekly_bins(weeks=1)
+    incomplete = issue(1, BASE, closed=bins[1])
+    incomplete["createdAt"] = None
+    open_at_first_boundary = issue(2, BASE)
+    out = compute_issue_metrics(raw(open_=[open_at_first_boundary], closed=[incomplete]), bins, NOW)
+    assert out["weekly"] == [
+        {"week": bins[1].strftime("%Y-%m-%d"), "arrived": 0, "resolved": 1, "net": -1, "open_count": 1},
+    ]
+    assert out["resolution"]["closed_total"] == 1
+    assert out["cycle_time"]["modern"]["n"] == 0
+
+
 def test_truncated_closed_sample_drops_weeks_before_the_oldest_sampled_update():
     cutoff = BASE + dt.timedelta(days=14)
     closed = [issue(1, BASE, closed=cutoff + dt.timedelta(days=1), updated=cutoff)]
