@@ -170,7 +170,7 @@ def _build_system_prompt(metrics: dict) -> str:
                        + value.get("scope", "") + "\n" + "\n".join(value_lines) + "\n")
     issue_block = _build_issue_block(metrics.get("issues"))
 
-    return f"""You are the **Antigravity AI Flow Coach** — an expert in software engineering flow metrics, 
+    return f"""You are **Flowy AI Coach**, an expert in software engineering flow metrics,
 Value Stream Mapping, and the Theory of Constraints. You help engineering teams use data to improve 
 delivery speed, predictability, and quality.
 

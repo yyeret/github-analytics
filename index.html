@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GitHub Flow Analytics — Antigravity</title>
+  <title>GitHub Flow Analytics</title>
   <meta name="description" content="Premium GitHub repository flow analytics dashboard with AI coaching. Analyze cycle time, WIP, throughput, and get AI-powered engineering insights." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -342,12 +342,11 @@
     }
     @keyframes dots{0%{content:'.';}33%{content:'..';}66%{content:'...';}100%{content:'.'}}
 
-    /* System message */
-    .msg.system-msg{
-      align-self:center;
-      color:var(--text-muted);font-size:.75rem;
-      text-align:center;padding:.25rem;
-    }
+    .chat-setup{color:var(--text-dim);font-size:.875rem;line-height:1.55;}
+    .chat-setup p{margin:0 0 .75rem;}
+    .chat-setup .btn{margin-bottom:1rem;}
+    .chat-setup a{color:#c4b5fd;}
+    .chip-area[hidden],.chat-input-area[hidden]{display:none;}
 
     /* Chat input */
     .chat-input-area{
@@ -479,12 +478,13 @@
   <header>
     <div class="logo-area">
       <h1>⚡ GitHub Flow Analytics</h1>
-      <div class="tagline">Flow Coaching Metrics · AI-Powered Insights · by Antigravity</div>
+      <div class="tagline">Flow metrics and insights from Flowy AI Coach</div>
     </div>
     <div class="repo-bar">
       <input
         id="repo-input"
         type="text"
+        aria-label="GitHub repository URL"
         placeholder="github.com/owner/repo or owner/repo"
         autocomplete="off"
         spellcheck="false"
@@ -626,25 +626,25 @@
 </div><!-- /app -->
 
 <!-- AI Chat Toggle -->
-<button id="chat-toggle" onclick="toggleChat()" title="Open AI Coach">
-  🤖
-  <div class="chat-toggle-badge" id="chat-badge">!</div>
+<button id="chat-toggle" onclick="toggleChat()" title="Flowy AI Coach" aria-controls="chat-drawer" aria-expanded="false">
+  <span id="chat-toggle-icon" aria-hidden="true">🤖</span>
+  <span class="chat-toggle-badge" id="chat-badge" aria-hidden="true">!</span>
 </button>
 
 <!-- AI Chat Drawer -->
-<div id="chat-drawer" role="complementary" aria-label="AI Flow Coach">
+<div id="chat-drawer" role="complementary" aria-label="Flowy AI Coach" inert>
   <div class="chat-header">
     <div class="chat-header-info">
       <div class="chat-avatar">🤖</div>
       <div>
-        <h3>Antigravity AI Coach</h3>
+        <h3>Flowy AI Coach</h3>
         <p id="chat-repo-label">No repository loaded</p>
       </div>
     </div>
     <button class="chat-close" onclick="toggleChat()" aria-label="Close chat">×</button>
   </div>
 
-  <div class="chip-area" id="chip-area">
+  <div class="chip-area" id="chip-area" hidden>
     <span class="chip" onclick="sendChip(this)">What is our 85% SLE?</span>
     <span class="chip" onclick="sendChip(this)">Where is our primary bottleneck?</span>
     <span class="chip" onclick="sendChip(this)">Do larger PRs correlate with delays?</span>
@@ -655,10 +655,15 @@
   </div>
 
   <div id="chat-messages">
-    <div class="msg system-msg">Load a repository and start asking flow coaching questions.</div>
+    <div class="chat-setup" id="chat-setup">
+      <p>Enter a GitHub repository URL and select <strong>Analyze</strong> to get started.</p>
+      <button class="btn btn-primary" id="chat-repo-setup" onclick="toggleChat(); document.getElementById('repo-input').focus()">Enter repository URL</button>
+      <p id="chat-github-help" hidden>For a private repository, <a href="/api/auth/github/start">Connect GitHub</a> and select <strong>Allow private analysis</strong> before analyzing.</p>
+      <p id="chat-github-unavailable" hidden>GitHub sign-in is unavailable here. You can analyze a public repository in the dashboard.</p>
+    </div>
   </div>
 
-  <div class="chat-input-area">
+  <div class="chat-input-area" id="chat-input-area" hidden>
     <textarea
       id="chat-input"
       placeholder="Ask about cycle time, WIP, throughput…"
@@ -688,6 +693,8 @@
       authConfig = await response.json();
       document.getElementById('github-signin').hidden = !authConfig.github_enabled;
       document.getElementById('github-connect').hidden = !authConfig.github_enabled;
+      document.getElementById('chat-github-help').hidden = !authConfig.github_enabled;
+      document.getElementById('chat-github-unavailable').hidden = authConfig.github_enabled !== false;
       if (!authConfig.required) return;
       document.getElementById('login-gate').classList.add('visible');
       const session = await fetch('/api/auth/session', {credentials:'same-origin'}).then(r => r.json());
@@ -779,14 +786,20 @@
         body: JSON.stringify({ repo_url: input, force_refresh: false, allow_private: document.getElementById('allow-private').checked })
       });
       const data = await readApiResponse(res);
+      renderDashboard(data);
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
 
-      renderDashboard(data);
       showStatus(`✓ Analysis complete for ${data.repo} — ${data.recent_stats?.total || 0} PRs analyzed`, 'success');
       document.getElementById('chat-repo-label').textContent = data.repo;
-      document.getElementById('chat-toggle').classList.add('has-response');
+      if (!chatOpen) document.getElementById('chat-toggle').classList.add('has-response');
+      const setup = document.getElementById('chat-setup');
+      const setupHadFocus = setup.contains(document.activeElement);
+      setup.hidden = true;
+      document.getElementById('chip-area').hidden = false;
+      document.getElementById('chat-input-area').hidden = false;
+      if (setupHadFocus) document.getElementById('chat-input').focus();
 
       // Welcome message in chat
       addChatMessage('assistant', `🎉 **Repository loaded: \`${data.repo}\`**\n\nAsk me about cycle time, aging work, or throughput. Review timing and batch size are not yet available from this hosted data source.`);
@@ -1344,13 +1357,16 @@
     const app    = document.getElementById('app');
 
     drawer.classList.toggle('open', chatOpen);
+    drawer.inert = !chatOpen;
     btn.classList.toggle('open', chatOpen);
     app.classList.toggle('chat-open', chatOpen);
-    btn.textContent = chatOpen ? '✕' : '🤖';
+    btn.setAttribute('aria-expanded', String(chatOpen));
+    document.getElementById('chat-toggle-icon').textContent = chatOpen ? '✕' : '🤖';
     if (chatOpen) {
       btn.classList.remove('has-response');
-      document.getElementById('chat-badge').style.display = 'none';
-      document.getElementById('chat-input').focus();
+      document.getElementById(currentRepo ? 'chat-input' : 'chat-repo-setup').focus();
+    } else {
+      btn.focus();
     }
   }
 
@@ -1399,10 +1415,7 @@
   }
 
   async function sendChat() {
-    if (!currentRepo || !currentMetrics) {
-      addChatMessage('assistant', '⚠️ Please analyze a repository first before chatting.');
-      return;
-    }
+    if (!currentRepo || !currentMetrics) return;
     const inputEl = document.getElementById('chat-input');
     const message = inputEl.value.trim();
     if (!message) return;
@@ -1444,7 +1457,6 @@
       // Badge if chat is closed
       if (!chatOpen) {
         document.getElementById('chat-toggle').classList.add('has-response');
-        document.getElementById('chat-badge').style.display = 'flex';
       }
     } catch(e) {
       thinking.remove();

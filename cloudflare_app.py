@@ -413,7 +413,7 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
             for item in metrics.get("recent_prs_summary", [])[:12]
         ],
     }
-    return ("You are the GitHub Flow Analytics coach. Answer concisely using only the supplied "
+    return ("You are Flowy AI Coach. Answer concisely using only the supplied "
             "repository metrics. Cite specific dates, values, and PR numbers where useful. "
             "Throughput is merged PRs per complete week; the first and current partial weeks are excluded. "
             "The hosted collector does not fetch change counts, review timelines, or commit details. "
