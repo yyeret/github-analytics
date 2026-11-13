@@ -1295,22 +1295,34 @@
     document.getElementById('issue-lifecycle-card').hidden = !cfd;
     if (!cfd) return;
     const {coverage, profile, points, stages} = cfd;
-    const notes = [`${coverage.with_workflow_signal} of ${coverage.issues} sampled issues have observed workflow signals.`,
+    const project = cfd.source === 'github_project';
+    const notes = project ? [
+      `GitHub Project · ${profile}. ${coverage.with_workflow_signal} of ${coverage.issues} sampled issues appear in the chart.`,
+      'Snapshots use UTC. Each issue enters the chart at its first recorded status.'
+    ] : [
+      `${coverage.with_workflow_signal} of ${coverage.issues} sampled issues have observed workflow signals.`,
       profile === 'signals-only' ? 'Stages use linked PR activity.' : `Stages use the workflow mapping for ${profile}.`,
-      'Unobserved means there is no stage evidence. Done means the issue was closed.'];
+      'Unobserved means there is no stage evidence. Done means the issue was closed.'
+    ];
+    if (coverage.planning_horizons_grouped) notes.push('Backlog, Next, and Next+1 are grouped as Unstarted.');
     if (coverage.timeline_truncated) notes.push(`Excluded ${coverage.timeline_truncated} incomplete timelines.`);
+    if (coverage.issues_not_checked) notes.push(`${coverage.issues_not_checked} sampled issues were outside the Project history check.`);
     if (coverage.event_sample_truncated) notes.push('The chart covers the available recent event history.');
     document.getElementById('issue-cfd-note').textContent = notes.join(' ');
-    const colors = ['#34d399', '#f59e0b', '#60a5fa', '#a78bfa', '#f87171', '#94a3b8'];
+    const colors = ['#34d399', '#f59e0b', '#60a5fa', '#a78bfa', '#f87171', '#94a3b8',
+      '#22d3ee', '#e879f9', '#a3e635', '#fb923c', '#818cf8', '#2dd4bf', '#f472b6', '#a8a29e'];
     mkChart('chart-issue-cfd', {
       type: 'line',
       data: {
         labels: points.map(point => point.date),
-        datasets: [...stages].reverse().map((stage, index) => ({
-          label: stage, data: points.map(point => point.counts[stage]),
-          borderColor: colors[index], backgroundColor: colors[index] + '99',
-          fill: true, stepped: 'after', pointRadius: 0, borderWidth: 1
-        }))
+        datasets: [...stages].reverse().map((stage, index) => {
+          const color = colors[index % colors.length];
+          return {
+            label: stage, data: points.map(point => point.counts[stage]),
+            borderColor: color, backgroundColor: color + '99',
+            fill: index === 0 ? 'origin' : '-1', stepped: 'after', pointRadius: 0, borderWidth: 1
+          };
+        })
       },
       options: {
         responsive: true, interaction: {mode: 'index', intersect: false},
@@ -1341,7 +1353,15 @@
     if (iss.closed_truncated) notes.push('Closed issue history is incomplete; trends show the available sample.');
     if (iss.open_truncated) notes.push('The open issue sample is incomplete; the open count is understated.');
     if (iss.weekly.length >= 2) notes.push('Weekly trends count observed reopenings as arrivals. Without complete history, they use creation and final closure dates.');
-    if (!iss.lifecycle_cfd) notes.push('There is not enough observed workflow history to chart issue stages.');
+    if (iss.project_history_status === 'unavailable') {
+      notes.push('GitHub Project history is unavailable. Check that the connected GitHub credential can read the project, then retry.');
+    } else if (iss.project_history_status === 'ambiguous') {
+      notes.push('Several GitHub Projects are linked to this repository. Project status history was skipped.');
+    } else if (iss.project_history_status === 'insufficient') {
+      notes.push('There is not enough recorded GitHub Project status history to chart issue stages.');
+    } else if (!iss.lifecycle_cfd) {
+      notes.push('There is not enough observed workflow history to chart issue stages.');
+    }
     note.textContent = notes.join(' ');
     renderIssueLifecycle(iss.lifecycle_cfd);
 

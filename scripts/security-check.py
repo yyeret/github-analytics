@@ -78,7 +78,7 @@ def main():
         checks.append(run('Publishable source files', [binary, 'dir', temporary, *common,
                                                      f'--report-path={CACHE / "source.json"}']))
     checks.append(run('Source security (medium/high severity)', [sys.executable, '-m', 'bandit', '-r',
-                      'app.py', 'cloudflare_app.py', 'google_auth.py', 'github_api.py', 'analyze.py',
+                      'app.py', 'cloudflare_app.py', 'google_auth.py', 'github_api.py', 'github_projects.py', 'analyze.py',
                       'flow_metrics_core.py', 'github_auth.py', 'mcp_oauth.py', 'mcp_server.py', 'mcp_analytics.py',
                       'issue_candidates.py', 'local_private_api.py', 'issues.py', 'product_value.py', 'repo_research.py',
                       'value_classification.py', 'scripts', '-ll', '-f', 'json', '-o', str(CACHE / 'bandit.json')]))

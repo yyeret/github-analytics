@@ -161,6 +161,14 @@ completed PR scores are retained and unfinished items are marked failed on expir
 
 ### Authenticated private repositories and proposed issues
 
+Private dashboard analyses use recorded issue status changes when the repository has a
+single linked GitHub Project with a Status field and enough history to plot. The chart
+shows the sampled issues with recorded statuses, including issues that later left the
+board. Use a GitHub credential with Projects read access (for example, `read:project`
+on a classic token). Basic issue metrics remain available when GitHub Project history
+is inaccessible or too sparse.
+
+
 `POST /api/issues/value` evaluates issue value intent without requiring merged PRs. Value priority applies throughout discovery, implementation, refinement and learning, including prioritizing human decisions. Use a GitHub OAuth session or `Authorization: Bearer <current GitHub token>`. The token is verified against GitHub's `/user`, then GitHub checks repository access. Deployment credentials never authorize private access. Private requests require `allow_private:true`, acknowledging model processing described in [Privacy](privacy.html).
 
 ```json

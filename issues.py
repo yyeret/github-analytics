@@ -352,6 +352,78 @@ def _compute_lifecycle_cfd(issues, samples, repo, history_start):
     }
 
 
+_PROJECT_PLANNING_HORIZONS = {"Backlog", "Next", "Next+1"}
+
+
+def _project_stage(status, collapse_horizons):
+    if collapse_horizons and status in _PROJECT_PLANNING_HORIZONS:
+        return "Unstarted"
+    return status or None
+
+
+def _project_lifecycle_cfd(issues, history, window_start):
+    if history.get("status") != "available":
+        return None
+
+    now = _parse(history["captured_at"])
+    project_id = history["id"]
+    collapse_horizons = _PROJECT_PLANNING_HORIZONS.issubset(history["options"])
+    intervals = {_project_stage(name, collapse_horizons): [] for name in history["options"]}
+    sampled = {issue["number"] for issue in issues if "number" in issue}
+    timeline_truncated = 0
+    issue_spans = []
+    for number, timeline in history["timelines"].items():
+        if number not in sampled:
+            continue
+        if timeline["pageInfo"]["hasPreviousPage"]:
+            timeline_truncated += 1
+            continue
+        changes = []
+        for event in timeline["nodes"]:
+            if not event or (event.get("project") or {}).get("id") != project_id:
+                continue
+            at = _parse(event.get("createdAt"))
+            if at is None or at > now:
+                continue
+            stage = _project_stage(event.get("status"), collapse_horizons)
+            changes.append((at, stage))
+        changes.sort(key=lambda change: change[0])
+        spans = []
+        for i, (start, stage) in enumerate(changes):
+            end = changes[i + 1][0] if i + 1 < len(changes) else None
+            if not stage or (end is not None and (end <= window_start or end <= start)):
+                continue
+            intervals.setdefault(stage, []).append((start, end))
+            spans.append((start, end))
+        if spans:
+            issue_spans.append(spans)
+
+    if not issue_spans:
+        return None
+    first = max(window_start, min(spans[0][0] for spans in issue_spans))
+    days = (now.date() - first.date()).days
+    step = 7 if days >= 14 else 1
+    midnight = datetime.datetime.combine(now.date(), datetime.time.min)
+    samples = [midnight - datetime.timedelta(days=offset - 1, seconds=1)
+               for offset in range(days - days % step, 0, -step)] + [now]
+    series = {stage: count_intervals(spans, samples) for stage, spans in intervals.items() if spans}
+    series = {stage: counts for stage, counts in series.items() if any(counts)}
+    if not any(stage != "Unstarted" for stage in series) or sum(any(counts) for counts in zip(*series.values())) < 2:
+        return None
+    observed = sum(any(count_intervals(spans, samples)) for spans in issue_spans)
+    return {
+        "source": "github_project",
+        "profile": history["title"],
+        "stages": list(series),
+        "points": [{"date": at.date().isoformat(), "counts": dict(zip(series, counts))}
+                   for at, counts in zip(samples, zip(*series.values()))],
+        "coverage": {"issues": len(sampled), "with_workflow_signal": observed,
+                     "timeline_truncated": timeline_truncated,
+                     "issues_not_checked": len(sampled.difference(history["timelines"])),
+                     "planning_horizons_grouped": collapse_horizons},
+    }
+
+
 def _window_start(issues_raw, weekly_bins):
     start = weekly_bins[0]
     if issues_raw.get("closed_truncated"):
@@ -453,6 +525,12 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         start = max(window_start, history_start)
         days = min(7, (now - start).days)
         lifecycle_samples = [now - datetime.timedelta(days=i) for i in range(days, -1, -1)]
+    lifecycle_issues = open_issues + modern_closed
+    project_history = issues_raw.get("project_history") or {}
+    project_cfd = _project_lifecycle_cfd(lifecycle_issues, project_history, window_start)
+    project_status = project_history.get("status")
+    if project_status == "available" and not project_cfd:
+        project_status = "insufficient"
     return {
         "sample_size": len(sampled),
         "open_available": open_available,
@@ -470,8 +548,9 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]) if len(weekly) >= NET_WINDOW_WEEKS else None,
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
-        "lifecycle_cfd": (_compute_lifecycle_cfd(open_issues + modern_closed, lifecycle_samples, repo, history_start)
-                          if flow_available else None),
+        "lifecycle_cfd": project_cfd or (_compute_lifecycle_cfd(lifecycle_issues, lifecycle_samples, repo, history_start)
+                                         if flow_available else None),
+        **({"project_history_status": project_status} if project_status else {}),
         "resolution": None if rest else _resolution_summary(modern_closed),
     }
 
