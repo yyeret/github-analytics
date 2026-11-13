@@ -266,8 +266,11 @@ def install_mcp(app, analyze, issue_value, coach):
                     result['_meta'] = {'mcp/www_authenticate': [bearer_challenge(origin, invalid=True)]}
         else:
             return error(-32601, 'Method not found.', request_id, 404 if modern else 200)
-        if modern:
-            result.setdefault('_meta', {}).update({'io.modelcontextprotocol/serverInfo': SERVER})
+        if modern or method == 'server/discover':
+            result['resultType'] = 'complete'
+            result.setdefault('_meta', {})['io.modelcontextprotocol/serverInfo'] = SERVER
+            if method in ('server/discover', 'tools/list', 'resources/list', 'resources/templates/list', 'resources/read'):
+                result.update(ttlMs=0, cacheScope='private')
         return {'jsonrpc': '2.0', 'id': request_id, 'result': result}
 
 
