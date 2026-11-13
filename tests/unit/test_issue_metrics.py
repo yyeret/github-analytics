@@ -171,3 +171,35 @@ def test_weekly_backlog_counts_observed_close_and_reopen():
     assert weekly['2026-10-22']['open_count'] == 0 and lifecycle['2026-10-22']['Done'] == 1
     assert weekly['2026-10-01']['resolved'] == 1
     assert weekly['2026-11-05']['arrived'] == 1 and weekly['2026-11-05']['open_count'] == 1
+
+
+def test_capped_history_infers_closed_before_the_first_reopen():
+    from issues import build_github_issue_lifecycle
+
+    row = issue(41, dt.datetime(2026, 9, 1))
+    row.update(state="OPEN", timelineItems={"nodes": [
+        {"__typename": "LabeledEvent", "createdAt": "2026-11-02T00:00:00Z", "label": {"name": "feature-go"}},
+        {"__typename": "ReopenedEvent", "createdAt": "2026-11-05T00:00:00Z"},
+    ]})
+    transitions, _ = build_github_issue_lifecycle(row, "github/spec-kit", history_start=dt.datetime(2026, 11, 1))
+    assert transitions == [(dt.datetime(2026, 11, 1), "Done"), (dt.datetime(2026, 11, 5), "Ready")]
+
+
+def test_lifecycle_and_backlog_respect_final_close_when_events_share_a_second():
+    from issues import build_github_issue_lifecycle
+
+    closed = dt.datetime(2026, 11, 5)
+    row = issue(41, dt.datetime(2026, 9, 1), closed=closed)
+    row.update(state="CLOSED", timelineItems={"nodes": [
+        {"__typename": "LabeledEvent", "createdAt": "2026-09-02T00:00:00Z", "label": {"name": "feature-go"}},
+        {"__typename": "ClosedEvent", "createdAt": "2026-10-01T00:00:00Z"},
+        {"__typename": "ReopenedEvent", "createdAt": "2026-11-05T00:00:00Z"},
+        {"__typename": "ClosedEvent", "createdAt": "2026-11-05T00:00:00Z"},
+    ]})
+    transitions, _ = build_github_issue_lifecycle(row, "github/spec-kit")
+    assert transitions[-1] == (dt.datetime(2026, 10, 1), "Done")
+    now = dt.datetime(2026, 11, 12)
+    bins = [now - dt.timedelta(weeks=w) for w in range(12, -1, -1)]
+    metrics = compute_issue_metrics({"closed": [row]}, bins, now, repo="github/spec-kit")
+    assert metrics["lifecycle_cfd"]["points"][-1]["counts"]["Done"] == 1
+    assert metrics["weekly"][-1]["open_count"] == 0

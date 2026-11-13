@@ -195,19 +195,48 @@ def _first_timestamp(values):
     return min(parsed) if parsed else None
 
 
-def build_github_issue_lifecycle(issue, repo=None):
+def _issue_state_events(timeline, start, closed_at):
+    events = []
+    for node in timeline.get("nodes") or []:
+        if not node or node.get("__typename") not in ("ClosedEvent", "ReopenedEvent"):
+            continue
+        stamp = _parse(node.get("createdAt"))
+        if stamp and stamp >= start:
+            events.append((stamp, node["__typename"] == "ClosedEvent"))
+    if closed_at and closed_at >= start:
+        # The issue record establishes final state even when timeline timestamps tie.
+        events.append((closed_at, True))
+    events.sort(key=lambda event: event[0])
+    return events
+
+
+def build_github_issue_lifecycle(issue, repo=None, *, history_start=None):
     """Normalize GitHub labels, linked-PR activity, and close/reopen events."""
     label_stages = _workflow_label_stages(repo)
     created = _parse(issue.get("createdAt"))
     events = []
     if not created:
         return [], False
-    events.append((created, 0, "created", None))
-
     timeline = issue.get("timelineItems") or {}
+    closed_at = _parse(issue.get("closedAt"))
+    start = max(created, history_start) if history_start else created
+    state_events = _issue_state_events(timeline, start, closed_at)
+    issue_closed = False
+    if start > created:
+        if state_events:
+            first_time, first_closed = state_events[0]
+            issue_closed = not first_closed
+            if any(stamp == first_time and closed != first_closed for stamp, closed in state_events):
+                issue_closed = None  # Tied events cannot establish the state before them.
+        elif issue.get("state") in ("OPEN", "CLOSED"):
+            issue_closed = issue["state"] == "CLOSED"
+        else:
+            issue_closed = None
+    events.append((start, 0, "sample_start", None))
+    events.extend((stamp, 50, "issue_state", closed) for stamp, closed in state_events)
     for node in (n for n in timeline.get("nodes") or [] if n):
         event_at = _parse(node.get("createdAt"))
-        if not event_at or event_at < created:
+        if not event_at or event_at < start:
             continue
         typename = node.get("__typename")
         if typename in ("LabeledEvent", "UnlabeledEvent"):
@@ -215,10 +244,6 @@ def build_github_issue_lifecycle(issue, repo=None):
             if label in label_stages:
                 kind = "label_add" if typename == "LabeledEvent" else "label_remove"
                 events.append((event_at, 10, kind, label))
-        elif typename == "ClosedEvent":
-            events.append((event_at, 50, "closed", None))
-        elif typename == "ReopenedEvent":
-            events.append((event_at, 60, "reopened", None))
 
     linked_prs = (issue.get("closedByPullRequestsReferences") or {}).get("nodes") or []
     for pr in linked_prs:
@@ -257,13 +282,8 @@ def build_github_issue_lifecycle(issue, repo=None):
         if pr_ended:
             events.append((pr_ended, 40, "pr_end", pr_number))
 
-    closed_at = _parse(issue.get("closedAt"))
-    if closed_at and closed_at >= created:
-        events.append((closed_at, 50, "closed", None))
-
     active_labels = set()
     pr_phases = {}
-    issue_closed = False
     transitions = []
     events.sort(key=lambda event: (event[0], event[1]))
     for event_at, same_time in groupby(events, key=lambda event: event[0]):
@@ -278,12 +298,14 @@ def build_github_issue_lifecycle(issue, repo=None):
                 pr_phases[value] = "Review"
             elif kind == "pr_end":
                 pr_phases.pop(value, None)
-            elif kind == "closed":
-                issue_closed = True
-            elif kind == "reopened":
-                issue_closed = False
+            elif kind == "issue_state":
+                issue_closed = value
 
-        if issue_closed:
+        if event_at < start:
+            continue
+        if issue_closed is None:
+            stage = "Unobserved"
+        elif issue_closed:
             stage = "Done"
         elif "Review" in pr_phases.values():
             stage = "Review"
@@ -298,13 +320,13 @@ def build_github_issue_lifecycle(issue, repo=None):
     return transitions, bool((timeline.get("pageInfo") or {}).get("hasNextPage"))
 
 
-def _compute_lifecycle_cfd(issues, samples, repo, event_sample_truncated):
+def _compute_lifecycle_cfd(issues, samples, repo, history_start):
     if len(samples) < 2:
         return None
     intervals = {stage: [] for stage in FLOW_STAGES}
     observed, truncated = 0, 0
     for issue in issues:
-        transitions, timeline_truncated = build_github_issue_lifecycle(issue, repo)
+        transitions, timeline_truncated = build_github_issue_lifecycle(issue, repo, history_start=history_start)
         truncated += timeline_truncated
         if timeline_truncated:
             continue  # Missing events could leave an old label active incorrectly.
@@ -326,7 +348,7 @@ def _compute_lifecycle_cfd(issues, samples, repo, event_sample_truncated):
         "points": [{"date": sample.date().isoformat(), "counts": dict(zip(FLOW_STAGES, counts))}
                    for sample, counts in zip(samples, zip(*stage_counts))],
         "coverage": {"issues": len(issues), "with_workflow_signal": observed,
-                     "timeline_truncated": truncated, "event_sample_truncated": event_sample_truncated},
+                     "timeline_truncated": truncated, "event_sample_truncated": history_start is not None},
     }
 
 
@@ -346,22 +368,15 @@ def _issue_open_intervals(issue, created, closed, *, history_capped):
     timeline = issue.get("timelineItems") or {}
     if history_capped or (timeline.get("pageInfo") or {}).get("hasNextPage"):
         return [(created, closed)]
-    events = []
-    for event in timeline.get("nodes") or []:
-        kind = (event or {}).get("__typename")
-        if kind in ("ClosedEvent", "ReopenedEvent"):
-            stamp = _parse(event.get("createdAt"))
-            if stamp and stamp >= created:
-                events.append((stamp, kind))
-    if closed is not None:
-        events.append((closed, "ClosedEvent"))
     intervals = []
     start = created
-    for stamp, kind in sorted(events):
-        if kind == "ClosedEvent" and start is not None:
+    events = _issue_state_events(timeline, created, closed)
+    for stamp, at_same_time in groupby(events, key=lambda event: event[0]):
+        is_closed = list(at_same_time)[-1][1]
+        if is_closed and start is not None:
             intervals.append((start, stamp))
             start = None
-        elif kind == "ReopenedEvent" and start is None:
+        elif not is_closed and start is None:
             start = stamp
     if (start is None) != (closed is not None):
         return [(created, closed)]
@@ -455,7 +470,7 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]) if len(weekly) >= NET_WINDOW_WEEKS else None,
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
-        "lifecycle_cfd": (_compute_lifecycle_cfd(open_issues + modern_closed, lifecycle_samples, repo, bool(history_start))
+        "lifecycle_cfd": (_compute_lifecycle_cfd(open_issues + modern_closed, lifecycle_samples, repo, history_start)
                           if flow_available else None),
         "resolution": None if rest else _resolution_summary(modern_closed),
     }
