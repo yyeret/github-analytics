@@ -31,6 +31,9 @@ def client(monkeypatch):
     db.connection.executescript((Path(__file__).parents[2] / 'migrations/0003_mcp_oauth.sql').read_text())
     async def allowed(_):
         return {'success': True}
+
+    async def allow_analysis(entry):
+        return {'success': entry['key'] == 'mcp:github:12'}
     async def github(url, **kwargs):
         if url.endswith('/access_token'):
             return 200, {}, {'access_token': 'ghu_provider-secret', 'expires_in': 600}
@@ -55,7 +58,7 @@ def client(monkeypatch):
         async def get(self, key):
             return self.data.get(key)
 
-    env = SimpleNamespace(USERS_DB=db, ASSETS=Assets(), ANALYTICS_CACHE=Cache(), ANALYZE_LIMIT=SimpleNamespace(limit=allowed),
+    env = SimpleNamespace(USERS_DB=db, ASSETS=Assets(), ANALYTICS_CACHE=Cache(), ANALYZE_LIMIT=SimpleNamespace(limit=allow_analysis),
         CHAT_LIMIT=SimpleNamespace(limit=allowed), MCP_ORIGIN=ORIGIN,
         MCP_GITHUB_APP_CLIENT_ID='Iv23app', MCP_GITHUB_APP_CLIENT_SECRET='app-secret')
 

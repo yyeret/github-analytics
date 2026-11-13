@@ -84,17 +84,24 @@ async def collect_dashboard_data(repo, token, private, repository_id):
             cursors.add(cursor)
         return list(items.values()), True
 
+    searches = (
+        (PR_QUERY, 'is:pr is:merged sort:updated-desc', 600),
+        (PR_QUERY, 'is:pr is:open sort:updated-desc', 100),
+        (PR_QUERY, f'is:pr is:merged merged:{BASELINE_WINDOW} sort:created-asc', 30),
+        (HOSTED_ISSUE_QUERY, 'is:issue is:open sort:updated-desc', OPEN_CAP),
+        (HOSTED_ISSUE_QUERY, f'is:issue is:closed closed:>={since} sort:updated-desc', CLOSED_CAP),
+        (HOSTED_ISSUE_QUERY, f'is:issue is:closed closed:{BASELINE_WINDOW}', BASELINE_CAP),
+    )
+    tasks = [asyncio.create_task(search(query, terms, limit)) for query, terms, limit in searches]
     try:
-        recent, opened, baseline, open_issues, closed_issues, baseline_issues = await asyncio.wait_for(asyncio.gather(
-            search(PR_QUERY, 'is:pr is:merged sort:updated-desc', 600),
-            search(PR_QUERY, 'is:pr is:open sort:updated-desc', 100),
-            search(PR_QUERY, f'is:pr is:merged merged:{BASELINE_WINDOW} sort:created-asc', 30),
-            search(HOSTED_ISSUE_QUERY, 'is:issue is:open sort:updated-desc', OPEN_CAP),
-            search(HOSTED_ISSUE_QUERY, f'is:issue is:closed closed:>={since} sort:updated-desc', CLOSED_CAP),
-            search(HOSTED_ISSUE_QUERY, f'is:issue is:closed closed:{BASELINE_WINDOW}', BASELINE_CAP),
-        ), timeout=40)
+        recent, opened, baseline, open_issues, closed_issues, baseline_issues = await asyncio.wait_for(asyncio.gather(*tasks), timeout=40)
     except (KeyError, TypeError, AttributeError, TimeoutError) as exc:
         raise ValueError('GitHub search failed or returned an invalid response.') from exc
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     return {'repo': repo, 'recent_prs': recent[0], 'open_prs': opened[0], 'pre_ai_prs': baseline[0],
         'captured_at': now.isoformat(), 'issues': {'open': open_issues[0], 'closed': closed_issues[0],
         'pre_ai': baseline_issues[0], 'open_truncated': open_issues[1], 'closed_truncated': closed_issues[1]}}

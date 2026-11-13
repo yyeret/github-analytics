@@ -322,7 +322,7 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
 
 
 async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
-    await enforce_limit(request, "analyze", 10)
+    await enforce_limit(request, "analyze", 10, identity=identity if full_dashboard else None)
     repo = parse_repo(req.repo_url)
     env = request.scope.get("env")
     if full_dashboard:
