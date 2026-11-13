@@ -1,6 +1,7 @@
 """Collect the dashboard's PR and issue inputs through GitHub GraphQL."""
 import asyncio
 import datetime
+from pathlib import PurePosixPath
 
 from github_api import request_json
 from issue_candidates import issue_record, issue_selection, open_issue_query
@@ -171,11 +172,13 @@ async def public_value_sources(repo, token, repository_id):
       docs: object(expression: "HEAD:docs") { ... on Tree { entries { name type } } }
     """)
     readme = {}
+    text_suffixes = {'', '.md', '.markdown', '.mdown', '.mkd', '.rst', '.txt', '.text',
+                     '.adoc', '.asciidoc', '.org', '.rdoc', '.textile', '.creole', '.mediawiki', '.wiki'}
     for directory, prefix in (('community', '.github/'), ('root', ''), ('docs', 'docs/')):
         entries = (repository.get(directory) or {}).get('entries') or []
         path = next((entry['name'] for entry in entries if entry['type'] == 'blob'
-                     and entry['name'].lower().partition('.')[0] == 'readme'
-                     and entry['name'].count('.') <= 1), None)
+                     and PurePosixPath(entry['name']).stem.lower() == 'readme'
+                     and PurePosixPath(entry['name']).suffix.lower() in text_suffixes), None)
         if path:
             try:
                 source = await _public_value_repository(repo, token, repository_id, 'RepositoryReadme',

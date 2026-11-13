@@ -69,7 +69,8 @@ def test_public_readme_uses_github_priority_and_rechecks_the_blob(monkeypatch):
         body = kwargs['body']
         if 'RepositoryValueSources' in body['query']:
             return 200, {}, {'data': {'repository': {**identity,
-                'community': {'entries': [{'name': 'README.archive.md', 'type': 'blob'},
+                'community': {'entries': [{'name': 'README.png', 'type': 'blob'},
+                                          {'name': 'README.archive.md', 'type': 'blob'},
                                           {'name': 'ReadMe.rst', 'type': 'blob'}]},
                 'root': {'entries': [{'name': 'README.md', 'type': 'blob'}]}}}}
         assert body['variables']['path'] == 'HEAD:.github/ReadMe.rst'
