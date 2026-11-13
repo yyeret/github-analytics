@@ -24,7 +24,7 @@ from mcp_server import install_mcp
 app = FastAPI(title="GitHub Flow Analytics")
 app.include_router(github_auth.router)
 app.include_router(mcp_oauth_router)
-METRICS_CACHE_PREFIX = "metrics:v6:"
+METRICS_CACHE_PREFIX = "metrics:v7:"
 SESSION_COOKIE = "gha_session"
 NONCE_COOKIE = "gha_nonce"
 SESSION_SECONDS = 60 * 60 * 24 * 14
@@ -355,8 +355,6 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         metrics = compute_flow_metrics(raw)
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
-    if not full_dashboard and not metrics.get("recent_stats", {}).get("total"):
-        raise HTTPException(status_code=422, detail="No merged pull requests were found. Use /api/issues/value to analyze proposed issue work.")
     gemini_key = gemini_override or getattr(env, "GEMINI_API_KEY", None)
     jev_key = jev_override or getattr(env, "TYPESAFE_API_KEY", None)
     metrics['repository_visibility'] = 'private' if private else 'public'
@@ -367,7 +365,10 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         metrics['analysis_id'] = secrets.token_urlsafe(24)
         if not metrics.get('recent_stats', {}).get('total'):
             metrics['p50_sle'] = metrics['p85_sle'] = None
-    metrics["product_value"] = await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
+    metrics["product_value"] = (
+        await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
+        if metrics.get("recent_stats", {}).get("total") else None
+    )
     if private or (caller_keys and identity):
         if not full_dashboard:
             metrics['analysis_id'] = secrets.token_urlsafe(24)
@@ -380,9 +381,11 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
             if cache:
                 cache_key = session_analysis_key(repo, request, metrics["analysis_id"])
     if cache:
-        value = metrics["product_value"]
+        value = metrics["product_value"] or {}
         # Keep provider failures briefly so a later analysis can recover once the service does.
-        ttl = 600 if value.get("status") in ("failed", "unavailable") or value.get("failed") else 21600
+        partial = (("issues" in raw and raw["issues"] is None) or metrics.get("pr_collection_unavailable")
+                   or value.get("status") in ("failed", "unavailable") or value.get("failed"))
+        ttl = 600 if partial else 21600
         payload = json.dumps(metrics, separators=(",", ":"))
         if full_dashboard and not private:
             await cache.put(public_dashboard_snapshot_key(repo, metrics['analysis_id']), payload, expiration_ttl=ttl)
@@ -471,8 +474,12 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
         context["issues"] = {
             "open_count": issues.get("open_now"), "open_truncated": issues.get("open_truncated"),
             "closed_truncated": issues.get("closed_truncated"), "net_backlog_8_weeks": issues.get("net_8w"),
-            "stale": issues.get("stale"), "cycle_time": issues.get("cycle_time"),
+            "stale": {"count": (issues.get("stale") or {}).get("count"), "basis": issues.get("stale_basis")},
+            "cycle_time": issues.get("cycle_time"), "weekly": issues.get("weekly", [])[-12:],
         }
+    if not stats.get("total"):
+        for key in ("p50_cycle_hours", "p85_cycle_hours", "average_cycle_hours", "throughput_last_12_complete_weeks"):
+            context.pop(key, None)
     source = (
         "Contributor type and active PR stage are estimates based on sampled commits, reviews and events. "
         if metrics.get("dashboard_source") == "github_graphql" else

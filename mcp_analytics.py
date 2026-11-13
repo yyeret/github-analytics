@@ -34,8 +34,7 @@ query($searchQuery: String!, $first: Int!, $cursor: String) {
   }
 }
 """
-HOSTED_ISSUE_QUERY = ISSUE_QUERY.replace('... on Issue {', '... on Issue { repository { nameWithOwner isPrivate fullDatabaseId }').replace(
-    'pageInfo {', 'issueCount pageInfo {')
+HOSTED_ISSUE_QUERY = ISSUE_QUERY.replace('... on Issue {', '... on Issue { repository { nameWithOwner isPrivate fullDatabaseId }')
 
 
 async def collect_dashboard_data(repo, token, private, repository_id):
@@ -67,10 +66,13 @@ async def collect_dashboard_data(repo, token, private, repository_id):
                 if not visible(node):
                     raise ValueError('Repository access changed during analysis.')
                 node.pop('repository')
-                linked = node.get('closingIssuesReferences')
-                if linked:
-                    linked['nodes'] = [{k: v for k, v in issue.items() if k != 'repository'}
-                                       for issue in linked['nodes'] if visible(issue)]
+                for key in ('closingIssuesReferences', 'closedByPullRequestsReferences'):
+                    linked = node.get(key)
+                    if linked and 'nodes' in linked:
+                        linked['nodes'] = [{k: v for k, v in item.items() if k != 'repository'}
+                                           for item in linked['nodes'] if visible(item)]
+                        if key == 'closedByPullRequestsReferences':
+                            linked['totalCount'] = len(linked['nodes'])
                 number = node['number']
                 if type(number) is not int or number < 1:
                     raise ValueError('GitHub returned an invalid item number.')

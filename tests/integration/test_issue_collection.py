@@ -20,8 +20,8 @@ def node(n):
     }
 
 
-def page(nodes, has_next, cursor="c"):
-    body = {"data": {"search": {"issueCount": 9999, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}}}
+def page(nodes, has_next, cursor="c", count=None):
+    body = {"data": {"search": {"issueCount": len(nodes) if count is None else count, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}}}
     return SimpleNamespace(stdout=json.dumps(body))
 
 
@@ -39,7 +39,7 @@ def test_pages_are_concatenated_in_order_and_cursor_is_passed():
         q = arg(cmd, "searchQuery")
         calls.append((q, arg(cmd, "cursor")))
         if "is:open" in q:
-            return page([node(1), node(2)], True, "next") if arg(cmd, "cursor") is None else page([node(3)], False)
+            return page([node(1), node(2)], True, "next", count=3) if arg(cmd, "cursor") is None else page([node(3)], False, count=3)
         return page([], False)
 
     out = collect_issues("o/r", run=fake)

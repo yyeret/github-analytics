@@ -8,7 +8,7 @@ import concurrent.futures
 
 from flow_metrics_core import count_events_in_windows, count_intervals, elapsed, percentiles
 from value_classification import compute_value_classification, render_value_report
-from issues import collect_issues, compute_issue_metrics, issue_weekly_bins
+from issues import collect_issues, collect_rest_issues, compute_issue_metrics, issue_weekly_bins
 
 # File paths
 RAW_DATA_FILE = "raw_data.json"
@@ -323,18 +323,34 @@ def collect_data(repo="sveltejs/svelte"):
     return all_data
 
 async def collect_public_data(repo, token=None):
-    """Collect public-repository data through GitHub's REST API.
-
-    Cloudflare Workers cannot run the local `gh` subprocess. This async version
-    keeps the analytics pipeline intact while using the platform's fetch API.
-    """
-    from github_api import request_json
+    """Collect PRs and issues using Workers-compatible GitHub REST requests."""
     import asyncio
-    import urllib.parse
+
+    import httpx
 
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "github-flow-analytics/0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    pulls, issues = await asyncio.gather(
+        _collect_rest_pull_requests(repo, headers),
+        collect_rest_issues(repo, headers, now),
+        return_exceptions=True,
+    )
+    if isinstance(issues, BaseException):
+        raise issues
+    if isinstance(pulls, BaseException):
+        if not isinstance(pulls, (ValueError, httpx.HTTPError)) or not issues or not (issues["open"] or issues["closed"]):
+            raise pulls
+        pulls = {"pr_collection_unavailable": True}
+    return {"repo": repo, "captured_at": now.isoformat(), "issues": issues, **pulls}
+
+
+async def _collect_rest_pull_requests(repo, headers):
+    from github_api import request_json
+    import asyncio
+    import urllib.parse
+
     def normalized(pr):
         user = pr.get("user") or {}
         commits = pr.get("commits", 0)
@@ -383,9 +399,8 @@ async def collect_public_data(repo, token=None):
     historical = await asyncio.gather(*(
         get_json(f"{base}/pulls/{item['number']}") for item in historical_items
     ))
-    return {"repo": repo, "pre_ai_prs": [normalized(pr) for pr in historical],
-        "recent_prs": recent, "open_prs": [normalized(pr) for pr in open_data],
-        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    return {"pre_ai_prs": [normalized(pr) for pr in historical],
+            "recent_prs": recent, "open_prs": [normalized(pr) for pr in open_data]}
 
 def load_or_collect(repo="sveltejs/svelte", force=False):
     if not force and os.path.exists(RAW_DATA_FILE):
@@ -876,7 +891,8 @@ def compute_flow_metrics(data):
              "mergedAt": p["mergedAt"], "createdAt": p["createdAt"]}
             for p in recent_prs[:50]  # top 50 for chat context
         ],
-        "issues": compute_issue_metrics(data.get("issues"), issue_weekly_bins(now), now),
+        "issues": compute_issue_metrics(data.get("issues"), issue_weekly_bins(now), now, repo=data.get("repo")),
+        **({"pr_collection_unavailable": True} if data.get("pr_collection_unavailable") else {}),
     }
 
 
