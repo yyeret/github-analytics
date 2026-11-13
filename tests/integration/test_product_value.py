@@ -234,6 +234,17 @@ def test_context_generation_constrains_references_to_loaded_source_ids(services)
         assert set(references["enum"]) == allowed
 
 
+def test_overlong_optional_canvas_field_does_not_prevent_scoring(services):
+    context = json.loads(json.dumps(CONTEXT))
+    context['lean_canvas']['unique_value_proposition'] = 'overlong-canvas-sentinel' * 100
+    fake = services(context=context)
+    result = run()
+    assert result['status'] == 'ok' and result['assessed'] == 3
+    assert result['context']['lean_canvas'] == CONTEXT['lean_canvas']
+    assert len(fake.prompts) == 1
+    assert 'overlong-canvas-sentinel' not in json.dumps(result) + json.dumps(fake.jev_requests)
+
+
 def test_rejected_context_gets_one_fresh_attempt_before_any_classification(monkeypatch):
     fake = FakeServices()
     contexts = []
@@ -244,7 +255,7 @@ def test_rejected_context_gets_one_fresh_attempt_before_any_classification(monke
             contexts.append(kwargs["body"]["generationConfig"]["maxOutputTokens"])
             if len(contexts) == 1:
                 malformed = json.loads(json.dumps(CONTEXT))
-                malformed["lean_canvas"]["solution"] = "corrupt-output-sentinel" * 100
+                malformed["value_proposition"] = "corrupt-output-sentinel" * 100
                 return 200, {}, {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(malformed)}]}}]}
         return response
 

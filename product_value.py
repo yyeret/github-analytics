@@ -294,7 +294,7 @@ def select_prs(data, value_classification, max_prs=DEFAULT_MAX_PRS):
     return newest("merged", "mergedAt")[:max_prs - len(open_pairs)] + open_pairs
 
 
-def _clean_context(context, source_ids=None):
+def _clean_context(context, source_ids=None, *, generated=False):
     """Reject unusable model context instead of turning malformed text into evidence."""
     if not isinstance(context, dict):
         raise ValueError("Invalid product context")
@@ -308,10 +308,13 @@ def _clean_context(context, source_ids=None):
     canvas = context.get("lean_canvas", {})
     if not isinstance(canvas, dict):
         raise ValueError("Invalid lean canvas")
+    canvas = {key: value for key, value in canvas.items() if key in CANVAS_KEYS and value}
+    if generated:
+        canvas = {key: value for key, value in canvas.items() if isinstance(value, str) and value.strip() and len(value) <= 600}
     result = {"product_summary": text(context.get("product_summary")),
             "value_proposition": text(context.get("value_proposition"), 600),
             "strategic_goals": [text(goal, 400) for goal in goals],
-            "lean_canvas": {key: text(value, 600) for key, value in canvas.items() if key in CANVAS_KEYS and value},
+            "lean_canvas": {key: text(value, 600) for key, value in canvas.items()},
             "missing_context": text(context.get("missing_context") or "Unknown", 1000)}
     research = context.get("repository_research")
     if not isinstance(research, dict):
@@ -509,7 +512,7 @@ async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_priva
                 return await generate_context(key, CONTEXT_PROMPT.format(
                     repo=repo, evidence=json.dumps(research["sources"], ensure_ascii=False),
                     limitations=json.dumps(research["limitations"])), {**diagnostics, "stage": stage}, schema=schema,
-                    validate=lambda context: _clean_context(context, source_ids))
+                    validate=lambda context: _clean_context(context, source_ids, generated=True))
             context = await asyncio.wait_for(research_context(), min(CONTEXT_TIMEOUT, max(0, deadline - loop.time())))
     except Exception as exc:
         code = _error_code(exc, "source_unavailable" if stage == "product_sources" else "invalid_response")

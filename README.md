@@ -103,7 +103,8 @@ for primary users, critical workflows, value drivers and product risks. Source l
 establish provenance, not independently verified strategic truth; issue signals are a
 small comment-ranked sample. The LLM selects only supplied repository paths; external
 sites and arbitrary URLs are not fetched. Optional planning failure preserves other
-evidence and is disclosed.
+evidence and is disclosed. Malformed or overlong optional generated Lean Canvas fields
+are omitted. The required scoring context and source references still pass validation.
 
 Jev receives that compact researched profile plus only the first 1,500 characters
 of each PR description. Titles, code size and framing labels are not sent. A bundled
