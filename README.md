@@ -34,6 +34,17 @@ Tests never touch the network, the `gh`/`bws` CLIs, or Gemini; `subprocess.run` 
 
 The API and HTML report use the vendored [flow-metrics](https://github.com/yyeret/flow-metrics) Python core for cycle time, age, percentiles, occupancy, and throughput windows. To update it, run `python3 scripts/vendor.py github-analytics /path/to/github-analytics --revision COMMIT` from the upstream checkout. The vendor file records the pinned revision.
 
+## Issue flow and backlog health
+
+Each analysis also collects GitHub issues, including in repositories without merged pull requests.
+The dashboard uses issue creation, closure, and available reopening dates for arrivals, resolutions,
+and backlog, and uses creation and final closure for time to close. It
+uses open issues for age and stale work. On the hosted dashboard, staleness is based on the last
+issue update. Large repositories are sampled and the dashboard calls out incomplete coverage.
+The lifecycle chart appears only when observed workflow history supports stage counts. Hosted stage
+REST history uses recent label events for repositories with a known mapping. The MCP and local
+dashboards also use linked closing PRs from the analyzed repository. Issues without an observed stage are shown as **Unobserved**.
+
 ## Issue and PR content framing
 
 The API, web dashboard, AI coach context, and generated static report classify

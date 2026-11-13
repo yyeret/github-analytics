@@ -3,7 +3,7 @@ import asyncio
 import datetime
 
 from github_api import request_json
-from issues import BASELINE_CAP, BASELINE_WINDOW, CLOSED_CAP, ISSUE_QUERY, ISSUE_WINDOW_WEEKS, OPEN_CAP
+from issues import BASELINE_CAP, BASELINE_WINDOW, CLOSED_CAP, ISSUE_QUERY, ISSUE_WINDOW_WEEKS, OPEN_CAP, filter_closing_prs
 
 # Search results carry repository visibility so a public-to-private transition cannot expose private contents.
 PR_QUERY = """
@@ -34,8 +34,7 @@ query($searchQuery: String!, $first: Int!, $cursor: String) {
   }
 }
 """
-HOSTED_ISSUE_QUERY = ISSUE_QUERY.replace('... on Issue {', '... on Issue { repository { nameWithOwner isPrivate fullDatabaseId }').replace(
-    'pageInfo {', 'issueCount pageInfo {')
+HOSTED_ISSUE_QUERY = ISSUE_QUERY.replace('... on Issue {', '... on Issue { repository { nameWithOwner isPrivate fullDatabaseId }')
 
 
 async def collect_dashboard_data(repo, token, private, repository_id):
@@ -67,10 +66,13 @@ async def collect_dashboard_data(repo, token, private, repository_id):
                 if not visible(node):
                     raise ValueError('Repository access changed during analysis.')
                 node.pop('repository')
-                linked = node.get('closingIssuesReferences')
-                if linked:
-                    linked['nodes'] = [{k: v for k, v in issue.items() if k != 'repository'}
-                                       for issue in linked['nodes'] if visible(issue)]
+                linked_issues = node.get('closingIssuesReferences')
+                if linked_issues:
+                    linked_issues['nodes'] = [{k: v for k, v in item.items() if k != 'repository'}
+                                              for item in linked_issues['nodes'] if visible(item)]
+                linked_prs = node.get('closedByPullRequestsReferences')
+                if linked_prs and 'nodes' in linked_prs:
+                    filter_closing_prs(linked_prs, visible)
                 number = node['number']
                 if type(number) is not int or number < 1:
                     raise ValueError('GitHub returned an invalid item number.')

@@ -218,9 +218,15 @@ def _build_issue_block(issues: Optional[dict]) -> str:
         return ""
     ct = issues.get("cycle_time", {})
     modern, baseline = ct.get("modern", {}), ct.get("baseline", {})
-    net_8w = issues.get("net_8w", 0)
+    net_8w = issues.get("net_8w")
+    net_display = "unavailable" if net_8w is None else f"{net_8w:+d} issues"
     stale = issues.get("stale", {})
-    res = issues.get("resolution", {})
+    res = issues.get("resolution") or {}
+    known = res.get("closed_total", 0) - res.get("unknown", 0)
+    pct = res.get("pct_with_pr")
+    linkage = "unavailable" if pct is None else f"{pct:.0f}% ({res.get('with_pr', 0)} of {known} with known linkage)"
+    if res.get("unknown"):
+        linkage += f"; {res['unknown']} unknown"
     days = lambda hours: f"{hours / 24:.1f}d"
     oldest = stale.get("items", [])[:3]
     oldest_str = "\n".join(
@@ -231,11 +237,11 @@ def _build_issue_block(issues: Optional[dict]) -> str:
         truncated = "\n- Note: issue sample was capped, so early weeks or the open count may be incomplete"
     return f"""### Issue Backlog
 - **Open issues now**: {issues.get('open_now', 0)}
-- **Net backlog change (last 8 weeks)**: {net_8w:+d} issues (arrivals minus resolutions)
+- **Net backlog change (last 8 weeks)**: {net_display} (arrivals minus resolutions)
 - **Issue cycle time, modern era**: median {days(modern.get('median_hours', 0))}, 85th pct {days(modern.get('p85_hours', 0))} ({modern.get('n', 0)} closed)
 - **Issue cycle time, 2021 baseline**: median {days(baseline.get('median_hours', 0))}, 85th pct {days(baseline.get('p85_hours', 0))} ({baseline.get('n', 0)} closed)
 - **Stale issues** (no comment for {stale.get('threshold_days', 90)}+ days): {stale.get('count', 0)}
-- **Closed via a linked PR**: {res.get('pct_with_pr', 0):.0f}% ({res.get('with_pr', 0)} of {res.get('closed_total', 0)}){truncated}
+- **Closed via a linked PR in the same repository**: {linkage}{truncated}
 
 Oldest stale issues:
 {oldest_str}

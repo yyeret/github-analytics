@@ -20,8 +20,8 @@ def node(n):
     }
 
 
-def page(nodes, has_next, cursor="c"):
-    body = {"data": {"search": {"issueCount": 9999, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}}}
+def page(nodes, has_next, cursor="c", count=None):
+    body = {"data": {"search": {"issueCount": len(nodes) if count is None else count, "pageInfo": {"hasNextPage": has_next, "endCursor": cursor}, "nodes": nodes}}}
     return SimpleNamespace(stdout=json.dumps(body))
 
 
@@ -39,7 +39,7 @@ def test_pages_are_concatenated_in_order_and_cursor_is_passed():
         q = arg(cmd, "searchQuery")
         calls.append((q, arg(cmd, "cursor")))
         if "is:open" in q:
-            return page([node(1), node(2)], True, "next") if arg(cmd, "cursor") is None else page([node(3)], False)
+            return page([node(1), node(2)], True, "next", count=3) if arg(cmd, "cursor") is None else page([node(3)], False, count=3)
         return page([], False)
 
     out = collect_issues("o/r", run=fake)
@@ -106,3 +106,37 @@ def test_issue_weekly_bins_cover_52_weeks_ending_at_now():
     assert bins[-1] == now
     assert bins[0] == now - dt.timedelta(weeks=52)
     assert all(b2 - b1 == dt.timedelta(days=7) for b1, b2 in zip(bins, bins[1:]))
+
+
+def test_local_collection_does_not_keep_cross_repo_closing_pr_details():
+    row = node(7)
+    row['closedByPullRequestsReferences'] = {'totalCount': 3, 'nodes': [
+        {'number': 19, 'repository': {'nameWithOwner': 'O/R', 'isPrivate': False}},
+        {'number': 22, 'repository': {'nameWithOwner': 'o/private', 'isPrivate': True}},
+        {'number': 23, 'repository': {'nameWithOwner': 'o/other', 'isPrivate': False}},
+    ]}
+
+    def fake(cmd, **kwargs):
+        return page([row], False) if 'is:open' in arg(cmd, 'searchQuery') else page([], False)
+
+    linked = collect_issues('o/r', run=fake)['open'][0]['closedByPullRequestsReferences']
+    assert linked == {'totalCount': 1, 'nodes': [{'number': 19}]}
+
+
+def test_unsampled_closing_prs_leave_linkage_unknown():
+    row = node(7)
+    row['closedAt'] = '2026-09-02T00:00:00Z'
+    row['closedByPullRequestsReferences'] = {'totalCount': 4, 'nodes': [
+        {'number': number, 'repository': {'nameWithOwner': 'o/other', 'isPrivate': False}}
+        for number in (1, 2, 3)
+    ]}
+
+    def fake(cmd, **kwargs):
+        return page([row], False) if 'sort:updated-desc' in arg(cmd, 'searchQuery') else page([], False)
+
+    now = dt.datetime(2026, 9, 5)
+    collected = collect_issues('o/r', run=fake, now=now)
+    result = compute_issue_metrics(collected, [now - dt.timedelta(days=7), now], now)
+    assert result['resolution'] == {
+        'closed_total': 1, 'with_pr': 0, 'without_pr': 0, 'unknown': 1, 'pct_with_pr': None,
+    }
