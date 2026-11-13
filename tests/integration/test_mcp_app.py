@@ -227,6 +227,9 @@ def test_modern_mcp_checks_routing_headers(client):
             '_meta': {'io.modelcontextprotocol/protocolVersion': version}}}
     assert client.post('/mcp', headers={**headers, 'Mcp-Name': 'ui://other/chart'}, json=body).json()['error']['code'] == -32020
     result = client.post('/mcp', headers=headers, json=body).json()['result']
+    assert result['resultType'] == 'complete'
+    assert result['ttlMs'] == 0
+    assert result['cacheScope'] == 'private'
     assert result['contents'][0]['uri'] == uri
     assert result['_meta']['io.modelcontextprotocol/serverInfo']['name'] == 'github-flow-analytics'
 
