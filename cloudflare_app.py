@@ -17,9 +17,13 @@ from google_auth import verify_id_token
 from product_value import assess_product_value, assess_issue_value
 import github_auth
 from issue_candidates import collect_issue_candidates
+from mcp_oauth import delete_mcp_grants, router as mcp_oauth_router
+from mcp_analytics import collect_dashboard_data, check_private_dashboard_access
+from mcp_server import install_mcp
 
 app = FastAPI(title="GitHub Flow Analytics")
 app.include_router(github_auth.router)
+app.include_router(mcp_oauth_router)
 METRICS_CACHE_PREFIX = "metrics:v6:"
 SESSION_COOKIE = "gha_session"
 NONCE_COOKIE = "gha_nonce"
@@ -30,9 +34,9 @@ SESSION_SECONDS = 60 * 60 * 24 * 14
 async def response_security(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
-    if request.url.path.startswith("/api/"):
+    if request.url.path.startswith(("/api/", "/mcp", "/.well-known/oauth-")):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -85,13 +89,14 @@ def client_ip(request: Request) -> str:
     return request.headers.get("CF-Connecting-IP", "unknown")
 
 
-async def enforce_limit(request: Request, kind: str, limit: int) -> None:
+async def enforce_limit(request: Request, kind: str, limit: int, *, identity=None) -> None:
     env = request.scope.get("env")
     binding_name = "ANALYZE_LIMIT" if kind == "analyze" else "CHAT_LIMIT"
     binding = getattr(env, binding_name, None) if env else None
     if binding is None:
         raise HTTPException(status_code=503, detail="Request rate limiting is not configured.")
-    result = await binding.limit({"key": client_ip(request)})
+    key = f'mcp:github:{identity.github_id}' if identity else client_ip(request)
+    result = await binding.limit({"key": key})
     if not result.get("success", False):
         raise HTTPException(status_code=429, detail="Too many requests. Please try again shortly.")
 
@@ -232,7 +237,9 @@ async def delete_account(request: Request):
     if not identity and not user:
         raise HTTPException(401, 'Sign in to delete your account.')
     if identity:
-        await d1(request).prepare('DELETE FROM github_sessions WHERE github_id = ?').bind(identity.github_id).run()
+        db = d1(request)
+        await delete_mcp_grants(db, identity.github_id)
+        await db.prepare('DELETE FROM github_sessions WHERE github_id = ?').bind(identity.github_id).run()
     if user:
         await d1(request).prepare("DELETE FROM users WHERE google_sub = ?").bind(user["google_sub"]).run()
     response = Response(content="{}", media_type="application/json")
@@ -251,7 +258,7 @@ async def public_repo_exists(repo: str, token: str | None, *, allow_private=Fals
     except (TimeoutError, httpx.HTTPError) as exc:
         raise HTTPException(502, 'GitHub could not be reached. Please try again.') from exc
     if status == 404:
-        raise HTTPException(status_code=404, detail="Repository not found or not public. Only public repositories are supported.")
+        raise HTTPException(status_code=404, detail="Repository not found or unavailable to the connected GitHub identity.")
     if status == 403:
         raise HTTPException(status_code=429,
             detail="GitHub is currently refusing analysis requests from this service. Please try again later.")
@@ -290,9 +297,10 @@ async def repository_access(repo, request, identity, allow_private):
     return token if metadata['private'] else None, metadata['private']
 
 
-def private_analysis_key(repo, identity, analysis_id):
+def private_analysis_key(repo, identity, analysis_id, full_dashboard=False):
     digest = hashlib.sha256(repo.lower().encode()).hexdigest()
-    return f'{METRICS_CACHE_PREFIX}private:{identity.github_id}:{digest}:{analysis_id}'
+    namespace = 'dashboard:v1:' if full_dashboard else ''
+    return f'{METRICS_CACHE_PREFIX}{namespace}private:{identity.github_id}:{digest}:{analysis_id}'
 
 
 def session_analysis_key(repo, request, analysis_id):
@@ -310,34 +318,61 @@ async def health():
 
 @app.post("/api/analyze")
 async def analyze_repo(req: AnalyzeRequest, request: Request):
-    identity = await authorize_analysis(request)
-    await enforce_limit(request, "analyze", 10)
+    return await analyze_for_identity(req, request, await authorize_analysis(request))
+
+
+async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
+    await enforce_limit(request, "analyze", 10, identity=identity if full_dashboard else None)
     repo = parse_repo(req.repo_url)
     env = request.scope.get("env")
-    token, private = await repository_access(repo, request, identity, req.allow_private)
-    caller_keys = request.headers.get("X-Gemini-Api-Key") or request.headers.get("X-TypeSafe-Api-Key")
+    if full_dashboard:
+        metadata = await public_repo_exists(repo, identity.token, allow_private=req.allow_private)
+        private = metadata['private']
+        token = identity.token if private else None
+        repository_id = metadata.get('id')
+        if type(repository_id) is not int or repository_id < 1:
+            raise HTTPException(502, 'GitHub returned unreadable repository access information.')
+    else:
+        token, private = await repository_access(repo, request, identity, req.allow_private)
+    gemini_override = None if full_dashboard else request.headers.get("X-Gemini-Api-Key")
+    jev_override = None if full_dashboard else request.headers.get("X-TypeSafe-Api-Key")
+    caller_keys = gemini_override or jev_override
     cache = getattr(env, "ANALYTICS_CACHE", None) if env and not caller_keys and not private else None
-    cache_key = f"{METRICS_CACHE_PREFIX}{repo.lower()}"
+    cache_key = public_analysis_key(repo, full_dashboard)
     if cache and not req.force_refresh:
         saved = await cache.get(cache_key)
         if saved:
-            return json.loads(saved)
+            cached = json.loads(saved)
+            if not full_dashboard:
+                return cached
+            if cached.get('repository_id') == repository_id and cached.get('analysis_id'):
+                snapshot = await cache.get(public_dashboard_snapshot_key(repo, cached['analysis_id']))
+                if snapshot:
+                    return json.loads(snapshot)
     try:
-        raw = await collect_public_data(repo, token)
+        raw = (await collect_dashboard_data(repo, identity.token, private, repository_id)
+               if full_dashboard else await collect_public_data(repo, token))
         metrics = compute_flow_metrics(raw)
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
-    if not metrics.get("recent_stats", {}).get("total"):
+    if not full_dashboard and not metrics.get("recent_stats", {}).get("total"):
         raise HTTPException(status_code=422, detail="No merged pull requests were found. Use /api/issues/value to analyze proposed issue work.")
-    gemini_key = request.headers.get("X-Gemini-Api-Key") or (getattr(env, "GEMINI_API_KEY", None) if env else None)
-    jev_key = request.headers.get("X-TypeSafe-Api-Key") or (getattr(env, "TYPESAFE_API_KEY", None) if env else None)
+    gemini_key = gemini_override or getattr(env, "GEMINI_API_KEY", None)
+    jev_key = jev_override or getattr(env, "TYPESAFE_API_KEY", None)
     metrics['repository_visibility'] = 'private' if private else 'public'
     options = {'allow_private': True} if private else {}
+    if full_dashboard:
+        metrics['dashboard_source'] = 'github_graphql'
+        metrics['repository_id'] = repository_id
+        metrics['analysis_id'] = secrets.token_urlsafe(24)
+        if not metrics.get('recent_stats', {}).get('total'):
+            metrics['p50_sle'] = metrics['p85_sle'] = None
     metrics["product_value"] = await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
     if private or (caller_keys and identity):
-        metrics['analysis_id'] = secrets.token_urlsafe(24)
-        cache = getattr(env, 'ANALYTICS_CACHE', None) if env else None
-        cache_key = private_analysis_key(repo, identity, metrics['analysis_id'])
+        if not full_dashboard:
+            metrics['analysis_id'] = secrets.token_urlsafe(24)
+        cache = getattr(env, 'ANALYTICS_CACHE', None)
+        cache_key = private_analysis_key(repo, identity, metrics['analysis_id'], full_dashboard)
     elif caller_keys:
         metrics["analysis_id"] = secrets.token_urlsafe(24)
         if env and request.cookies.get(SESSION_COOKIE):
@@ -348,14 +383,32 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
         value = metrics["product_value"]
         # Keep provider failures briefly so a later analysis can recover once the service does.
         ttl = 600 if value.get("status") in ("failed", "unavailable") or value.get("failed") else 21600
-        await cache.put(cache_key, json.dumps(metrics, separators=(",", ":")), expiration_ttl=ttl)
+        payload = json.dumps(metrics, separators=(",", ":"))
+        if full_dashboard and not private:
+            await cache.put(public_dashboard_snapshot_key(repo, metrics['analysis_id']), payload, expiration_ttl=ttl)
+            await cache.put(cache_key, json.dumps({'repository_id': repository_id, 'analysis_id': metrics['analysis_id']}),
+                            expiration_ttl=ttl)
+        else:
+            await cache.put(cache_key, payload, expiration_ttl=ttl)
     return metrics
+
+
+def public_dashboard_snapshot_key(repo, analysis_id):
+    return f'{public_analysis_key(repo, True)}:{analysis_id}'
+
+
+def public_analysis_key(repo, full_dashboard):
+    namespace = 'dashboard:v1:' if full_dashboard else ''
+    return f'{METRICS_CACHE_PREFIX}{namespace}{repo.lower()}'
 
 
 @app.post('/api/issues/value')
 async def issue_value(req: IssueValueRequest, request: Request):
-    identity = await authorize_analysis(request)
-    await enforce_limit(request, 'analyze', 10)
+    return await issue_value_for_identity(req, request, await authorize_analysis(request))
+
+
+async def issue_value_for_identity(req, request, identity, *, mcp=False):
+    await enforce_limit(request, 'analyze', 10, identity=identity if mcp else None)
     repo = parse_repo(req.repo_url)
     token, private = await repository_access(repo, request, identity, req.allow_private)
     numbers = req.issue_numbers
@@ -368,8 +421,8 @@ async def issue_value(req: IssueValueRequest, request: Request):
     except (ValueError, httpx.HTTPError, TimeoutError) as exc:
         raise HTTPException(502, 'Issue selection failed or selected issues are unavailable. Refresh the selection.') from exc
     env = environment(request)
-    gemini_key = request.headers.get('X-Gemini-Api-Key') or getattr(env, 'GEMINI_API_KEY', None)
-    jev_key = request.headers.get('X-TypeSafe-Api-Key') or getattr(env, 'TYPESAFE_API_KEY', None)
+    gemini_key = (None if mcp else request.headers.get('X-Gemini-Api-Key')) or getattr(env, 'GEMINI_API_KEY', None)
+    jev_key = (None if mcp else request.headers.get('X-TypeSafe-Api-Key')) or getattr(env, 'TYPESAFE_API_KEY', None)
     value = await assess_issue_value(repo, selection['items'], gemini_key, token, jev_key=jev_key,
         max_issues=req.max_issues, allow_private=private, owner_context=[source.model_dump(exclude_none=True) for source in req.owner_context],
         **({'owner_profile': req.owner_profile} if req.owner_profile is not None else {}))
@@ -413,10 +466,22 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
             for item in metrics.get("recent_prs_summary", [])[:12]
         ],
     }
+    issues = metrics.get("issues")
+    if issues:
+        context["issues"] = {
+            "open_count": issues.get("open_now"), "open_truncated": issues.get("open_truncated"),
+            "closed_truncated": issues.get("closed_truncated"), "net_backlog_8_weeks": issues.get("net_8w"),
+            "stale": issues.get("stale"), "cycle_time": issues.get("cycle_time"),
+        }
+    source = (
+        "Contributor type and active PR stage are estimates based on sampled commits, reviews and events. "
+        if metrics.get("dashboard_source") == "github_graphql" else
+        "The hosted collector does not fetch change counts, review timelines, or commit details. "
+    )
     return ("You are Flowy AI Coach. Answer concisely using only the supplied "
             "repository metrics. Cite specific dates, values, and PR numbers where useful. "
             "Throughput is merged PRs per complete week; the first and current partial weeks are excluded. "
-            "The hosted collector does not fetch change counts, review timelines, or commit details. "
+            + source +
             "Do not treat missing batch size, review wait, flow efficiency, or AI-assistance values "
             "as zero or measured facts. Active PR stages are rough estimates, so distinguish a "
             "possible bottleneck from a confirmed one. If the data cannot identify the primary "
@@ -426,8 +491,11 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, request: Request):
-    identity = await authorize_analysis(request)
-    await enforce_limit(request, "chat", 20)
+    return await chat_for_identity(req, request, await authorize_analysis(request))
+
+
+async def chat_for_identity(req, request, identity, *, full_dashboard=False):
+    await enforce_limit(request, "chat", 20, identity=identity if full_dashboard else None)
     env = request.scope.get("env")
     key = getattr(env, "GEMINI_API_KEY", None) if env else None
     if not key:
@@ -436,23 +504,42 @@ async def chat(req: ChatRequest, request: Request):
     cache = getattr(env, "ANALYTICS_CACHE", None) if env else None
     if cache is None:
         raise HTTPException(status_code=503, detail="Analysis cache is not configured yet.")
-    cache_key = (private_analysis_key(repo, identity, req.analysis_id) if identity and req.analysis_id
-        else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id else f"{METRICS_CACHE_PREFIX}{repo.lower()}")
-    saved = await cache.get(cache_key)
-    if not saved and identity and req.analysis_id and request.cookies.get(SESSION_COOKIE):
-        try:
-            await signed_in_user(request)
-        except HTTPException as exc:
-            if exc.status_code != 401:
-                raise
-        else:
-            candidate = await cache.get(session_analysis_key(repo, request, req.analysis_id))
-            if candidate and json.loads(candidate).get('repository_visibility', 'public') == 'public':
-                saved = candidate
+    if full_dashboard:
+        if not req.analysis_id:
+            raise HTTPException(409, 'Open the repository dashboard before asking the coach.')
+        saved = await cache.get(public_dashboard_snapshot_key(repo, req.analysis_id))
+        if not saved and req.allow_private:
+            saved = await cache.get(private_analysis_key(repo, identity, req.analysis_id, True))
+    else:
+        cache_key = (private_analysis_key(repo, identity, req.analysis_id) if identity and req.analysis_id
+            else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id else public_analysis_key(repo, False))
+        saved = await cache.get(cache_key)
+        if not saved and identity and req.analysis_id and request.cookies.get(SESSION_COOKIE):
+            try:
+                await signed_in_user(request)
+            except HTTPException as exc:
+                if exc.status_code != 401:
+                    raise
+            else:
+                candidate = await cache.get(session_analysis_key(repo, request, req.analysis_id))
+                if candidate and json.loads(candidate).get('repository_visibility', 'public') == 'public':
+                    saved = candidate
     if not saved:
         raise HTTPException(status_code=409, detail="This analysis expired. Click Analyze again to refresh the coach.")
     metrics = json.loads(saved)
-    if metrics.get('repository_visibility') == 'private':
+    private = metrics.get('repository_visibility') == 'private'
+    if full_dashboard:
+        if private and not req.allow_private:
+            raise HTTPException(403, 'Allow private analysis to coach against this snapshot.')
+        metadata = await public_repo_exists(repo, identity.token, allow_private=private)
+        if metadata['private'] != private or metadata.get('id') != metrics.get('repository_id'):
+            raise HTTPException(403, 'Repository access changed. Analyze it again.')
+        if private:
+            try:
+                await check_private_dashboard_access(repo, identity.token, metadata['id'])
+            except (httpx.HTTPError, ValueError, TimeoutError):
+                raise HTTPException(403, 'GitHub repository access could not be verified.') from None
+    elif private:
         if not identity or not req.analysis_id:
             raise HTTPException(401, 'Connect the GitHub identity that owns this private analysis.')
         await repository_access(repo, request, identity, True)
@@ -472,10 +559,16 @@ async def chat(req: ChatRequest, request: Request):
         if not response.is_success:
             raise HTTPException(status_code=502, detail="AI response failed. Please try again.")
         candidates = response.json().get("candidates", [])
-        answer = "".join(part.get("text", "") for part in candidates[0]["content"]["parts"])
+        parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+        answer = "".join(part.get("text", "") for part in parts if isinstance(part.get("text"), str))
+        if not answer:
+            raise HTTPException(502, "The coach returned no answer. Please try again.")
         return {"reply": answer}
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="AI service is temporarily unavailable.") from exc
+
+
+install_mcp(app, analyze_for_identity, issue_value_for_identity, chat_for_identity)
 
 
 @app.api_route("/{path:path}", methods=["GET", "HEAD"])

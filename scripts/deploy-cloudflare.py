@@ -75,6 +75,17 @@ def main() -> int:
     if gemini_key:
         secrets["GEMINI_API_KEY"] = gemini_key
 
+    for name in ('MCP_ORIGIN', 'MCP_GITHUB_APP_CLIENT_ID', 'MCP_GITHUB_APP_CLIENT_SECRET',
+                 'MCP_GITHUB_APP_SLUG', 'MCP_OAUTH_REDIRECT_URIS', 'MCP_OAUTH_ALLOW_LOOPBACK', 'TYPESAFE_API_KEY'):
+        value = os.environ.get(name) or keys.get(name)
+        if value:
+            secrets[name] = value
+    mcp_required = ('MCP_ORIGIN', 'MCP_GITHUB_APP_CLIENT_ID', 'MCP_GITHUB_APP_CLIENT_SECRET')
+    if any(name in secrets for name in mcp_required) and not all(name in secrets for name in mcp_required):
+        print("MCP deployment requires MCP_ORIGIN, MCP_GITHUB_APP_CLIENT_ID, and MCP_GITHUB_APP_CLIENT_SECRET.",
+              file=sys.stderr)
+        return 1
+
     env = os.environ.copy()
     env["CLOUDFLARE_API_TOKEN"] = cloudflare_token
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID") or keys.get("CLOUDFLARE_ACCOUNT_ID")

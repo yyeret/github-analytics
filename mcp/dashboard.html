@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub Flow Analytics</title>
+  <!-- chart libraries -->
+  <style>
+    <!-- dashboard styles -->
+    :root {
+      color-scheme: dark;
+      --text-muted: #94a3b8;
+    }
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg:#f8faff; --surface:#fff; --card:#fff; --border:#d4ddea;
+      --text:#162138; --text-dim:#334665; --text-muted:#51617d;
+    }
+    body {font-family:system-ui,sans-serif;min-height:0;background:var(--bg)}
+    body::before {display:none}
+    main {padding:clamp(.75rem,3vw,1.5rem);margin:auto;max-width:1200px}
+    header {margin-bottom:1rem;padding-bottom:1rem;gap:.8rem}
+    h1 {font-size:1.35rem}
+    h2 {font-size:1.05rem;margin:.6rem 0}
+    .action-form {display:grid;gap:.55rem}
+    label {font-size:.88rem}
+    .controls {display:flex;gap:.55rem;flex-wrap:wrap}
+    .controls > input {flex:1 1 12rem;min-width:0}
+    input, button {font:inherit;color:inherit;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.45rem .65rem}
+    input[type="checkbox"] {accent-color:var(--violet)}
+    button {cursor:pointer}
+    button:disabled {opacity:.55;cursor:default}
+    .primary, [aria-current="true"] {background:#5230ac;color:#fff;border-color:#5230ac}
+    #views {display:flex;flex-wrap:wrap;gap:.35rem;margin:.75rem 0}
+    #app-status {font-size:.88rem;color:var(--text-dim);overflow-wrap:anywhere}
+    #app-status:empty {display:none}
+    #dashboard [hidden], [hidden] {display:none!important}
+    .section-header {margin-top:.5rem}
+    .kpi-grid {grid-template-columns:repeat(auto-fit,minmax(min(135px,100%),1fr));gap:.55rem;margin-bottom:1rem}
+    .kpi {padding:.8rem}
+    .kpi-value {font-size:1.55rem}
+    html[data-theme="light"] .kpi-value {background:none!important;-webkit-text-fill-color:#432591!important}
+    html[data-theme="light"] .kpi-badge {color:var(--text)}
+    .charts-2col {grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem;margin-bottom:.75rem}
+    .charts-2col > * {min-width:0}
+    .chart-card {min-width:0;padding:.85rem}
+    .chart-canvas-wrap.tall {height:270px}
+    .chart-canvas-wrap.xtra-tall {height:330px}
+    .scroll-table {overflow:auto;max-height:420px}
+    .issue-table {overflow-wrap:anywhere}
+    .issue-note {margin:.4rem 0;line-height:1.5}
+    #placeholder {min-height:0}
+    #coach-thread {white-space:pre-wrap;overflow-wrap:anywhere;max-height:290px;overflow:auto}
+    #coach-thread p {margin:.45rem 0}
+    @media (max-width:700px) { .charts-2col {grid-template-columns:minmax(0,1fr)} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>GitHub Flow Analytics</h1>
+  </header>
+  <div id="analyze-form" class="action-form">
+    <label for="repo-input">GitHub repository</label>
+    <div class="controls">
+      <input id="repo-input" maxlength="200" required placeholder="owner/repo" autocomplete="off" spellcheck="false">
+      <button id="analyze" class="primary" type="button">Analyze</button>
+      <button type="button" id="refresh" hidden>Refresh</button>
+    </div>
+    <label id="private-option" hidden><input id="allow-private" type="checkbox">
+      Allow private analysis and share results with this chat client. Sends bounded repository context to Gemini and Jev.
+    </label>
+    <p class="issue-note" id="private-help" hidden>To use private repositories, enable private analysis when connecting this app and install the GitHub App on the repository.</p>
+  </div>
+  <p id="app-status" role="status" aria-live="polite"></p>
+  <nav id="views" aria-label="Analytics views" hidden>
+    <button type="button" data-view="overview">Overview</button>
+    <button type="button" data-view="flow">Cycle &amp; flow</button>
+    <button type="button" data-view="work">Throughput &amp; WIP</button>
+    <button type="button" data-view="batch">Batch &amp; timeline</button>
+    <button type="button" data-view="issues">Backlog</button>
+    <button type="button" data-view="value">Framing &amp; value</button>
+    <button type="button" data-view="issue-value">Issue cost of delay</button>
+    <button type="button" data-view="coach">Coach</button>
+  </nav>
+  <p id="dashboard-basis" class="issue-note" hidden></p>
+  <div id="placeholder" hidden></div>
+  <!-- dashboard markup -->
+  <section id="issue-value-panel" hidden>
+    <h2>Expected cost of delay (issues)</h2>
+    <div id="issue-form" class="action-form">
+      <label for="issue-numbers">Issue numbers (optional, separated by commas)</label>
+      <div class="controls">
+        <input id="issue-numbers" maxlength="550" placeholder="12, 24, 36">
+        <button id="assess" type="button">Assess issues</button>
+      </div>
+    </div>
+    <p id="issue-value-note" class="issue-note"></p>
+    <div class="scroll-table"><table id="issue-value-table" class="issue-table"></table></div>
+  </section>
+  <section id="coach-panel" hidden>
+    <h2>Flow coach</h2>
+    <div id="coach-thread" role="log" aria-live="polite"></div>
+    <div id="coach-form" class="action-form">
+      <label for="coach-message">Question about this analysis</label>
+      <div class="controls">
+        <input id="coach-message" maxlength="2000" required placeholder="Where is work aging?">
+        <button id="ask" type="button">Ask</button>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+  let charts = {};
+  /* dashboard renderer */
+  /* app bridge */
+</script>
+</body>
+</html>

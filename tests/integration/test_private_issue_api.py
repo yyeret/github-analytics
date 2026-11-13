@@ -157,6 +157,7 @@ def test_delete_account_removes_both_connected_identities(monkeypatch):
         def __init__(self, sql): self.sql = sql
         def bind(self, *args): return self
         async def run(self): deleted.append(self.sql)
+        async def first(self): return None
     env.USERS_DB = SimpleNamespace(prepare=Statement)
     async def google(_): return {'google_sub': 'google-user'}
     monkeypatch.setattr(hosted, 'signed_in_user', google)
