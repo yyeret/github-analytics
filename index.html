@@ -739,30 +739,36 @@
   let charts         = {};
   let authConfig     = {required:false, client_id:''};
   let repositoryPreferenceKey;
+  let restoredPrivateRepository;
 
   async function configureAuthentication() {
     try {
-      const response = await fetch('/api/auth/config');
-      authConfig = await response.json();
+      const signal = AbortSignal.timeout(12000);
+      const response = await fetch('/api/auth/config', {signal});
+      if (response.status === 404) {
+        document.getElementById('analyze-btn').disabled = false;
+        return;
+      }
+      authConfig = await readApiResponse(response);
       document.getElementById('github-signin').hidden = !authConfig.github_enabled;
       document.getElementById('github-connect').hidden = !authConfig.github_enabled;
       document.getElementById('chat-github-help').hidden = !authConfig.github_enabled;
       document.getElementById('chat-github-unavailable').hidden = authConfig.github_enabled !== false;
-      if (!authConfig.required) {
-        document.getElementById('analyze-btn').disabled = false;
-        return;
-      }
-      document.getElementById('login-gate').classList.add('visible');
-      const session = await fetch('/api/auth/session', {credentials:'same-origin'}).then(r => r.json());
+      if (authConfig.required) document.getElementById('login-gate').classList.add('visible');
+      const session = await fetch('/api/auth/session', {credentials:'same-origin', signal}).then(readApiResponse);
       if (session.signed_in) {
         completeSignIn(session);
+        return;
+      }
+      if (!authConfig.required) {
+        document.getElementById('analyze-btn').disabled = false;
         return;
       }
       if (!authConfig.client_id) {
         document.getElementById('login-error').textContent = authConfig.github_enabled ? '' : 'Sign-in is being configured.';
         return;
       }
-      const nonceResponse = await fetch('/api/auth/nonce', {credentials:'same-origin'});
+      const nonceResponse = await fetch('/api/auth/nonce', {credentials:'same-origin', signal});
       const {nonce} = await nonceResponse.json();
       const script = document.createElement('script');
       script.src = 'https://accounts.google.com/gsi/client';
@@ -774,8 +780,13 @@
       script.onerror = () => document.getElementById('login-error').textContent = 'Could not load Google sign-in. Please try again.';
       document.head.appendChild(script);
     } catch (_) {
-      document.getElementById('login-gate').classList.add('visible');
-      document.getElementById('login-error').textContent = 'Could not check your sign-in status. Refresh the page to try again.';
+      const message = 'Could not check your sign-in status. Refresh the page to try again.';
+      if (authConfig.required) {
+        document.getElementById('login-error').textContent = message;
+      } else {
+        document.getElementById('analyze-btn').disabled = false;
+        showStatus(message, 'error');
+      }
     }
   }
 
@@ -883,7 +894,9 @@
           if (key) headers[header] = key;
         }
       }
-      const allowPrivate = savedRepository?.private ?? document.getElementById('allow-private').checked;
+      const consentChecked = document.getElementById('allow-private').checked;
+      const allowPrivate = savedRepository?.private
+        ?? (consentChecked && (!restoredPrivateRepository || input === restoredPrivateRepository));
       response = await fetch('/api/analyze', {
         method: 'POST',
         headers,
@@ -894,7 +907,12 @@
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
-      if (savedRepository) repoInput.value = data.repo;
+      if (savedRepository) {
+        repoInput.value = data.repo;
+        const isPrivate = data.repository_visibility === 'private';
+        restoredPrivateRepository = isPrivate ? data.repo : undefined;
+        document.getElementById('allow-private').checked = isPrivate;
+      }
       rememberRepository(preferenceKey, data);
 
       const settings = document.getElementById('settings-dialog');
@@ -1707,6 +1725,11 @@
       document.getElementById('repo-input').value = r;
     }
   })();
+  document.getElementById('repo-input').addEventListener('input', () => {
+    if (!restoredPrivateRepository) return;
+    document.getElementById('allow-private').checked = false;
+    restoredPrivateRepository = undefined;
+  });
   configureAuthentication();
 </script>
 </body>
