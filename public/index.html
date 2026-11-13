@@ -1043,8 +1043,12 @@
         kpis.push({label:'Net Backlog (8w)', value:`${net8 >= 0 ? '+' : ''}${net8}`, sub:'arrivals minus resolutions', badge:net8 > 0 ? 'Growing' : net8 < 0 ? 'Shrinking' : null, badgeClass:net8 > 0 ? 'badge-rose' : 'badge-green'});
       }
       if (iss.resolution?.closed_total) {
-        const {pct_with_pr, with_pr, closed_total} = iss.resolution;
-        kpis.push({label:'Closed via same-repo PR', value:`${pct_with_pr.toFixed(0)}%`, sub:`${with_pr} of ${closed_total} closed issues`, badge:'linked PR', badgeClass:'badge-blue'});
+        const {pct_with_pr, with_pr, closed_total, unknown = 0} = iss.resolution;
+        const known = closed_total - unknown;
+        const coverage = unknown ? ` · ${unknown} unknown` : '';
+        kpis.push({label:'Closed via same-repo PR',
+          value:pct_with_pr == null ? '—' : `${pct_with_pr.toFixed(0)}%`,
+          sub:`${with_pr} of ${known} with known linkage${coverage}`});
       }
     }
 

@@ -121,3 +121,22 @@ def test_local_collection_does_not_keep_cross_repo_closing_pr_details():
 
     linked = collect_issues('o/r', run=fake)['open'][0]['closedByPullRequestsReferences']
     assert linked == {'totalCount': 1, 'nodes': [{'number': 19}]}
+
+
+def test_unsampled_closing_prs_leave_linkage_unknown():
+    row = node(7)
+    row['closedAt'] = '2026-09-02T00:00:00Z'
+    row['closedByPullRequestsReferences'] = {'totalCount': 4, 'nodes': [
+        {'number': number, 'repository': {'nameWithOwner': 'o/other', 'isPrivate': False}}
+        for number in (1, 2, 3)
+    ]}
+
+    def fake(cmd, **kwargs):
+        return page([row], False) if 'sort:updated-desc' in arg(cmd, 'searchQuery') else page([], False)
+
+    now = dt.datetime(2026, 9, 5)
+    collected = collect_issues('o/r', run=fake, now=now)
+    result = compute_issue_metrics(collected, [now - dt.timedelta(days=7), now], now)
+    assert result['resolution'] == {
+        'closed_total': 1, 'with_pr': 0, 'without_pr': 0, 'unknown': 1, 'pct_with_pr': None,
+    }

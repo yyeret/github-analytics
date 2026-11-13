@@ -463,9 +463,32 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
 
 def _resolution_summary(closed):
     total = len(closed)
-    with_pr = sum(bool((issue.get("closedByPullRequestsReferences") or {}).get("totalCount")) for issue in closed)
-    return {"closed_total": total, "with_pr": with_pr, "without_pr": total - with_pr,
-            "pct_with_pr": with_pr * 100.0 / total if total else 0.0}
+    with_pr = unknown = 0
+    for issue in closed:
+        links = issue.get("closedByPullRequestsReferences") or {}
+        if links.get("totalCount"):
+            with_pr += 1
+        elif links.get("sample_incomplete"):
+            unknown += 1
+    known = total - unknown
+    summary = {"closed_total": total, "with_pr": with_pr, "without_pr": known - with_pr,
+               "pct_with_pr": with_pr * 100.0 / known if known else None if unknown else 0.0}
+    if unknown:
+        summary["unknown"] = unknown
+    return summary
+
+
+def filter_closing_prs(connection, visible):
+    """Retain safe links and record when the sample cannot rule out other links."""
+    nodes = connection.get("nodes") or []
+    total = connection.get("totalCount")
+    present = sum(node is not None for node in nodes)
+    if type(total) is not int or total > present:
+        connection["sample_incomplete"] = True
+    filtered = [{key: value for key, value in node.items() if key != "repository"}
+                for node in nodes if node and visible(node)]
+    connection["nodes"] = filtered
+    connection["totalCount"] = len(filtered)
 
 
 def _same_public_repo(item, repo):
@@ -492,11 +515,7 @@ def _search_issues(repo, search_query, cap, run):
                 continue
             linked = node.get("closedByPullRequestsReferences")
             if linked and "nodes" in linked:
-                linked["nodes"] = [
-                    {key: value for key, value in pr.items() if key != "repository"}
-                    for pr in linked["nodes"] if pr and _same_public_repo(pr, repo)
-                ]
-                linked["totalCount"] = len(linked["nodes"])
+                filter_closing_prs(linked, lambda pr: _same_public_repo(pr, repo))
             nodes.append(node)
         total_count = max(total_count, search.get("issueCount") or 0)
         info = search["pageInfo"]
@@ -553,7 +572,7 @@ async def _search_rest_issues(query, headers, sort):
         except (ValueError, TimeoutError, httpx.HTTPError):
             if not items:
                 raise
-            return list(items.values()), True
+            return list(items.values()), True, True
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
             raise ValueError("GitHub returned an invalid issue page")
         rows = payload["items"]
@@ -571,7 +590,7 @@ async def _search_rest_issues(query, headers, sort):
             }
         if len(rows) < PAGE_SIZE or len(items) >= total:
             break
-    return list(items.values()), incomplete or len(items) < total
+    return list(items.values()), incomplete or len(items) < total, incomplete
 
 
 async def _enrich_rest_issue_history(repo, headers, issues):
@@ -629,18 +648,20 @@ async def collect_rest_issues(repo, headers, now):
     open_result, closed_result = map(available, results)
     if open_result is None and closed_result is None:
         return None
-    opened, open_truncated = open_result or ([], False)
-    closed, closed_truncated = closed_result or ([], False)
+    opened, open_truncated, open_retry = open_result or ([], False, True)
+    closed, closed_truncated, closed_retry = closed_result or ([], False, True)
     # A reopened issue can move between the concurrent searches. Prefer the open observation.
     open_numbers = {item["number"] for item in opened}
     closed = [item for item in closed if item["number"] not in open_numbers]
     history_start = None
+    history_retry = False
     if open_result is not None and closed_result is not None and (opened or closed) and _workflow_label_stages(repo):
         try:
             history_start = await _enrich_rest_issue_history(repo, headers, opened + closed)
         except (ValueError, TimeoutError, httpx.HTTPError):
-            pass
+            history_retry = True
     return {"open": opened, "closed": closed, "pre_ai": [],
             "open_truncated": open_truncated, "closed_truncated": closed_truncated,
             "source": "rest", "history_start": history_start,
+            "retry_collection": open_retry or closed_retry or history_retry,
             "open_available": open_result is not None, "closed_available": closed_result is not None}

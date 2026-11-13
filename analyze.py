@@ -322,6 +322,9 @@ def collect_data(repo="sveltejs/svelte"):
     print(f"Successfully cached data to {RAW_DATA_FILE}.")
     return all_data
 
+REST_PR_COLLECTION_TIMEOUT = 45
+
+
 async def collect_public_data(repo, token=None):
     """Collect PRs and issues using Workers-compatible GitHub REST requests."""
     import asyncio
@@ -333,14 +336,16 @@ async def collect_public_data(repo, token=None):
         headers["Authorization"] = f"Bearer {token}"
     now = datetime.datetime.now(datetime.timezone.utc)
     pulls, issues = await asyncio.gather(
-        _collect_rest_pull_requests(repo, headers),
+        asyncio.wait_for(_collect_rest_pull_requests(repo, headers), REST_PR_COLLECTION_TIMEOUT),
         collect_rest_issues(repo, headers, now),
         return_exceptions=True,
     )
     if isinstance(issues, BaseException):
         raise issues
     if isinstance(pulls, BaseException):
-        if not isinstance(pulls, (ValueError, httpx.HTTPError)) or not issues or not (issues["open"] or issues["closed"]):
+        if not isinstance(pulls, (ValueError, TimeoutError, httpx.HTTPError)) or not issues or not (issues["open"] or issues["closed"]):
+            if isinstance(pulls, TimeoutError):
+                raise ValueError("GitHub PR collection timed out") from pulls
             raise pulls
         pulls = {"pr_collection_unavailable": True}
     return {"repo": repo, "captured_at": now.isoformat(), "issues": issues, **pulls}
@@ -366,7 +371,7 @@ async def _collect_rest_pull_requests(repo, headers):
         }
 
     async def get_json(url, expected_type=dict):
-        status, _, payload = await request_json(url, headers=headers, timeout=20)
+        status, _, payload = await asyncio.wait_for(request_json(url, headers=headers, timeout=20), 20)
         if status in (401, 403):
             raise ValueError("GitHub rejected the request. Check the token or API rate limit.")
         if status < 200 or status >= 300:

@@ -382,10 +382,10 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
                 cache_key = session_analysis_key(repo, request, metrics["analysis_id"])
     if cache:
         value = metrics["product_value"] or {}
-        # Keep provider failures briefly so a later analysis can recover once the service does.
-        issue_metrics = metrics.get("issues") or {}
+        # Retry transient collection and assessment failures sooner than intentional sampling.
+        raw_issues = raw.get("issues") or {}
         partial = (("issues" in raw and raw["issues"] is None) or metrics.get("pr_collection_unavailable")
-                   or not issue_metrics.get("open_available", True) or not issue_metrics.get("closed_available", True)
+                   or raw_issues.get("retry_collection")
                    or value.get("status") in ("failed", "unavailable") or value.get("failed"))
         ttl = 600 if partial else 21600
         payload = json.dumps(metrics, separators=(",", ":"))

@@ -1,10 +1,12 @@
 """Exercise the hosted issue dashboard from GitHub responses through the API."""
+import asyncio
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from freezegun import freeze_time
 
+import analyze
 import github_api
 from tests.integration.test_security_boundaries import hosted, hosted_client
 
@@ -16,8 +18,8 @@ def issue(number, state, created, closed=None):
     }
 
 
-@pytest.mark.parametrize('scenario', ['history', 'sparse', 'unavailable', 'empty', 'open-only', 'closed-only', 'pr-unavailable', 'capped'])
-@freeze_time("2026-11-12T00:00:00Z")
+@pytest.mark.parametrize('scenario', ['history', 'sparse', 'unavailable', 'empty', 'open-only', 'closed-only', 'pr-unavailable', 'pr-timeout', 'capped', 'history-error', 'fixed-cap'])
+@freeze_time("2026-11-12T00:00:00Z", real_asyncio=True)
 def test_hosted_analysis_includes_issues_without_any_pull_requests(monkeypatch, scenario):
     opened = issue(7, 'open', '2026-11-01T00:00:00Z')
     closed = issue(8, 'closed', '2026-10-20T00:00:00Z', '2026-11-06T00:00:00Z')
@@ -25,8 +27,12 @@ def test_hosted_analysis_includes_issues_without_any_pull_requests(monkeypatch, 
         assert 'Authorization' not in headers  # Public content must remain anonymous.
         path = urlsplit(url)
         if path.path.endswith('/pulls'):
+            if scenario == 'pr-timeout':
+                await asyncio.Event().wait()
             return (503, {}, {}) if scenario == 'pr-unavailable' else (200, {}, [])
         if path.path.endswith('/issues/events'):
+            if scenario == 'history-error':
+                return 503, {}, {}
             events = [{'event': 'labeled', 'created_at': '2026-11-02T00:00:00Z',
                        'issue': {'number': 7}, 'label': {'name': 'feature-go'}}] if scenario == 'history' else []
             return 200, {}, events
@@ -36,10 +42,12 @@ def test_hosted_analysis_includes_issues_without_any_pull_requests(monkeypatch, 
         if (scenario == 'unavailable' or (scenario == 'open-only' and 'is:closed' in query)
                 or (scenario == 'closed-only' and 'is:open' in query)):
             return 503, {}, {}
-        if scenario == 'capped' and 'is:open' in query:
-            if parse_qs(path.query)['page'] == ['2']:
+        if scenario in ('capped', 'fixed-cap') and 'is:open' in query:
+            page = int(parse_qs(path.query)['page'][0])
+            if scenario == 'capped' and page == 2:
                 return 429, {}, {}
-            return 200, {}, {'total_count': 125, 'items': [{**opened, 'number': n} for n in range(101, 201)]}
+            return 200, {}, {'total_count': 500, 'items': [{**opened, 'number': n}
+                             for n in range(100 * page + 1, 100 * (page + 1) + 1)]}
         items = [] if scenario == 'empty' else ([opened] if 'is:open' in query else [closed])
         return 200, {}, {'total_count': len(items), 'incomplete_results': False, 'items': items}
 
@@ -52,13 +60,22 @@ def test_hosted_analysis_includes_issues_without_any_pull_requests(monkeypatch, 
     monkeypatch.setattr(github_api, 'request_json', upstream)
     monkeypatch.setattr(hosted, 'request_json', metadata)
     monkeypatch.setattr(hosted, 'assess_product_value', lambda *_a, **_kw: pytest.fail('No PRs to score'))
-    env = SimpleNamespace(AUTH_REQUIRED='false', GITHUB_TOKEN='service-token', ANALYZE_LIMIT=SimpleNamespace(limit=allowed))
+    ttls = []
+    async def cached(_):
+        return None
+    async def save(_key, _value, *, expiration_ttl):
+        ttls.append(expiration_ttl)
+    monkeypatch.setattr(analyze, 'REST_PR_COLLECTION_TIMEOUT', 0.05)
+    env = SimpleNamespace(AUTH_REQUIRED='false', GITHUB_TOKEN='service-token', ANALYZE_LIMIT=SimpleNamespace(limit=allowed),
+                          ANALYTICS_CACHE=SimpleNamespace(get=cached, put=save))
     response = hosted_client(env).post('/api/analyze', json={'repo_url': 'github/spec-kit'})
     assert response.status_code == 200, response.text
     result = response.json()
     assert result['recent_stats']['total'] == 0
-    if scenario == 'pr-unavailable':
+    if scenario in ('pr-unavailable', 'pr-timeout'):
         assert result['pr_collection_unavailable'] is True
+    expected_ttl = 21600 if scenario in ('history', 'sparse', 'empty', 'fixed-cap') else 600
+    assert ttls == [expected_ttl]
     if scenario == 'unavailable':
         assert result['issues'] is None
     else:
@@ -66,6 +83,8 @@ def test_hosted_analysis_includes_issues_without_any_pull_requests(monkeypatch, 
         if scenario == 'capped':
             assert metrics['open_now'] == 100 and metrics['open_truncated']
             assert result['value_classification']['issues']['total'] == 101
+        elif scenario == 'fixed-cap':
+            assert metrics['open_now'] == 300 and metrics['open_truncated']
         elif scenario == 'open-only':
             assert metrics['open_now'] == 1 and not metrics['closed_available']
             assert metrics['weekly'] == [] and metrics['net_8w'] is None
