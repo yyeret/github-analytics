@@ -3,6 +3,8 @@ import asyncio
 import datetime
 
 from github_api import request_json
+from issue_candidates import issue_record, issue_selection, open_issue_query
+from repo_research import README_CHARS
 from issues import BASELINE_CAP, BASELINE_WINDOW, CLOSED_CAP, ISSUE_QUERY, ISSUE_WINDOW_WEEKS, OPEN_CAP, filter_closing_prs
 
 # Search results carry repository visibility so a public-to-private transition cannot expose private contents.
@@ -37,6 +39,12 @@ query($searchQuery: String!, $first: Int!, $cursor: String) {
 HOSTED_ISSUE_QUERY = ISSUE_QUERY.replace('... on Issue {', '... on Issue { repository { nameWithOwner isPrivate fullDatabaseId }')
 
 
+def matches_repository(metadata, repo, private, repository_id):
+    return (isinstance(metadata, dict) and metadata.get('isPrivate') is private
+            and str(metadata.get('fullDatabaseId')) == str(repository_id)
+            and str(metadata.get('nameWithOwner', '')).lower() == repo.lower())
+
+
 async def collect_dashboard_data(repo, token, private, repository_id):
     headers = {'Authorization': f'Bearer {token}', 'User-Agent': 'github-flow-analytics'}
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -44,9 +52,7 @@ async def collect_dashboard_data(repo, token, private, repository_id):
 
     def visible(node):
         metadata = node.get('repository') if isinstance(node, dict) else None
-        return (isinstance(metadata, dict) and metadata.get('isPrivate') is private
-                and str(metadata.get('fullDatabaseId')) == str(repository_id)
-                and str(metadata.get('nameWithOwner', '')).lower() == repo.lower())
+        return matches_repository(metadata, repo, private, repository_id)
 
     async def search(query, terms, limit):
         items, cursors, cursor = {}, set(), None
@@ -124,3 +130,98 @@ async def check_private_dashboard_access(repo, token, repository_id):
     if (not isinstance(data, dict) or payload.get('errors') or str(data.get('fullDatabaseId')) != str(repository_id)
             or data.get('isPrivate') is not True or not data.get('pullRequests') or not data.get('issues')):
         raise ValueError('Repository access changed.')
+
+
+class ValueSourceUnavailable(ValueError):
+    """GitHub refused the GraphQL request without returning usable source data."""
+
+
+async def _value_graphql(token, query, variables):
+    status, _, payload = await asyncio.wait_for(request_json('https://api.github.com/graphql', method='POST',
+        headers={'Authorization': f'Bearer {token}', 'User-Agent': 'github-flow-analytics'},
+        body={'query': query, 'variables': variables}, timeout=10), timeout=10)
+    data = payload.get('data') if isinstance(payload, dict) else None
+    if status != 200:
+        raise ValueSourceUnavailable('GitHub could not load the assessment sources.')
+    if not isinstance(data, dict) or payload.get('errors'):
+        raise ValueError('GitHub returned unreadable assessment sources.')
+    return data
+
+
+async def _public_value_repository(repo, token, repository_id, operation, fields, **variables):
+    owner, name = repo.split('/')
+    declarations = '$owner: String!, $name: String!'
+    if 'path' in variables:
+        declarations += ', $path: String!'
+    query = f'''query {operation}({declarations}) {{
+      repository(owner: $owner, name: $name) {{ nameWithOwner isPrivate fullDatabaseId {fields} }}
+    }}'''
+    data = await _value_graphql(token, query, {'owner': owner, 'name': name, **variables})
+    repository = data.get('repository')
+    if not matches_repository(repository, repo, False, repository_id):
+        raise ValueError('Repository access changed during assessment.')
+    return repository
+
+
+async def public_value_sources(repo, token, repository_id):
+    repository = await _public_value_repository(repo, token, repository_id, 'RepositoryValueSources', """
+      description homepageUrl repositoryTopics(first: 20) { nodes { topic { name } } }
+      community: object(expression: "HEAD:.github") { ... on Tree { entries { name type } } }
+      root: object(expression: "HEAD:") { ... on Tree { entries { name type } } }
+      docs: object(expression: "HEAD:docs") { ... on Tree { entries { name type } } }
+    """)
+    readme = {}
+    for directory, prefix in (('community', '.github/'), ('root', ''), ('docs', 'docs/')):
+        entries = (repository.get(directory) or {}).get('entries') or []
+        path = next((entry['name'] for entry in entries if entry['type'] == 'blob'
+                     and entry['name'].lower().partition('.')[0] == 'readme'
+                     and entry['name'].count('.') <= 1), None)
+        if path:
+            try:
+                source = await _public_value_repository(repo, token, repository_id, 'RepositoryReadme',
+                    'readme: object(expression: $path) { ... on Blob { text isTruncated } }', path=f'HEAD:{prefix}{path}')
+                readme = source.get('readme') or {}
+            except ValueSourceUnavailable:
+                pass  # Retain the verified metadata if the optional README request was refused.
+            break
+    text = readme.get('text') or ''
+    topics = (repository.get('repositoryTopics') or {}).get('nodes') or []
+    return {'description': repository.get('description') or '', 'homepage': repository.get('homepageUrl') or '',
+            'topics': [node['topic']['name'] for node in topics if node], 'private': False,
+            'readme': text[:README_CHARS], 'readme_truncated': len(text) > README_CHARS or bool(readme.get('isTruncated'))}
+
+
+async def collect_public_value_issues(repo, token, repository_id, *, max_issues, issue_numbers):
+    fields = 'number title body url updatedAt state milestone { number title }'
+    if issue_numbers:
+        selected = ' '.join(f'issue{i}: issue(number: {number}) {{ {fields} }}' for i, number in enumerate(issue_numbers))
+        repository = await _public_value_repository(repo, token, repository_id, 'ValueIssues', selected)
+        nodes = [repository.get(f'issue{i}') for i in range(len(issue_numbers))]
+        if any(not isinstance(node, dict) or node.get('number') != number for node, number in zip(nodes, issue_numbers)):
+            raise ValueError('A selected issue could not be retrieved.')
+        query, total, incomplete = None, len(nodes), False
+    else:
+        query = open_issue_query(repo)
+        owner, name = repo.split('/')
+        data = await _value_graphql(token, f'''query ValueIssueSearch($owner: String!, $name: String!, $query: String!, $first: Int!) {{
+          repository(owner: $owner, name: $name) {{ nameWithOwner isPrivate fullDatabaseId }}
+          search(query: $query, type: ISSUE, first: $first) {{
+            issueCount nodes {{ ... on Issue {{ {fields} repository {{ nameWithOwner isPrivate fullDatabaseId }} }} }}
+          }}
+        }}''', {'owner': owner, 'name': name, 'query': f'{query} sort:updated-desc', 'first': max_issues})
+        if not matches_repository(data.get('repository'), repo, False, repository_id):
+            raise ValueError('Repository access changed during issue selection.')
+        search = data.get('search') or {}
+        nodes, total = search.get('nodes'), search.get('issueCount')
+        if not isinstance(nodes, list) or type(total) is not int or total < len(nodes):
+            raise ValueError('GitHub returned an invalid issue selection.')
+        if any(not isinstance(node, dict) or not matches_repository(node.get('repository'), repo, False, repository_id)
+               or node.get('state') != 'OPEN' for node in nodes):
+            raise ValueError('Repository access changed during issue selection.')
+        incomplete = len(nodes) < min(total, max_issues)
+    if any(type(node.get('number')) is not int or node['number'] < 1 or node.get('state') not in ('OPEN', 'CLOSED')
+           for node in nodes):
+        raise ValueError('GitHub returned an invalid issue.')
+    items = [issue_record({**node, 'state': node['state'].lower(), 'html_url': node.get('url'),
+                           'updated_at': node.get('updatedAt')}) for node in nodes]
+    return issue_selection(items, total, incomplete, query)

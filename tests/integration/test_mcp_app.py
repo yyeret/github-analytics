@@ -287,3 +287,80 @@ def test_public_coach_keeps_the_displayed_snapshot_after_refresh(client, monkeyp
     result = tool(client, 'ask_flow_coach', {'repo': 'o/r', 'message': 'Summarize',
                                            'analysis_id': analysis_id}, token)
     assert result['structuredContent']['reply'] == 'The displayed snapshot.'
+
+
+@pytest.mark.parametrize('tool_name', ['show_github_dashboard', 'show_issue_value'])
+@pytest.mark.parametrize('became_private', [False, True])
+def test_public_mcp_value_uses_visibility_checked_github_reads(client, monkeypatch, tool_name, became_private):
+    from tests.factories import make_pr
+    from tests.integration.test_product_value import FakeServices, jev_reply
+    import issue_candidates
+    import product_value
+
+    identity = {'nameWithOwner': 'o/r', 'isPrivate': False, 'fullDatabaseId': '12'}
+    changed = {**identity, 'isPrivate': became_private}
+    issue = {'number': 16, 'state': 'OPEN', 'title': 'Improve reporting', 'body': 'Add CSV export.',
+             'url': 'https://github.com/o/r/issues/16', 'repository': changed}
+
+    async def metadata(url, **kwargs):
+        assert kwargs['headers']['Authorization'] == 'Bearer ghu_provider-secret'
+        return 200, {}, {'private': False, 'id': 12, 'full_name': 'o/r'}
+
+    async def graph(url, **kwargs):
+        assert url == 'https://api.github.com/graphql'
+        assert kwargs['headers']['Authorization'] == 'Bearer ghu_provider-secret'
+        body = kwargs['body']
+        if 'RepositoryValueSources' in body['query']:
+            assert body['variables']['owner'] == 'o'
+            return 200, {}, {'data': {'repository': {**changed, 'root': {'entries': [{'name': 'README.md', 'type': 'blob'}]}}}}
+        if 'RepositoryReadme' in body['query']:
+            assert body['variables']['path'] == 'HEAD:README.md'
+            return 200, {}, {'data': {'repository': {**changed, 'readme': {'text': 'A flow dashboard.'}}}}
+        if 'ValueIssues' in body['query']:
+            return 200, {}, {'data': {'repository': {**changed, 'issue0': issue}}}
+        terms = body['variables']['searchQuery']
+        node = {**make_pr(title='Add export'), 'body': 'Add a CSV export.', 'repository': identity}
+        return 200, {}, {'data': {'search': {'nodes': [node] if 'is:pr is:merged' in terms and 'merged:' not in terms else [],
+                                           'pageInfo': {'hasNextPage': False}}}}
+
+    class Providers(FakeServices):
+        async def __call__(self, url, **kwargs):
+            if url.startswith('https://api.github.com/repos/'):
+                assert 'Authorization' not in kwargs['headers']
+                return 403, {}, {}
+            assert not became_private, 'A repository that changed visibility reached an AI provider'
+            if 'typesafe.ai' in url:
+                self.jev_requests.append(kwargs['body'])
+                return 200, {}, jev_reply()
+            return await super().__call__(url, **kwargs)
+
+    async def configure(request, kind, limit, **_):
+        request.scope['env'].GEMINI_API_KEY = 'gemini-fixture'
+        request.scope['env'].TYPESAFE_API_KEY = 'jev-fixture'
+
+    async def anonymous_issue(*args, **kwargs):
+        return 403, {}, {}
+
+    provider = Providers()
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(hosted, 'enforce_limit', configure)
+    monkeypatch.setattr(mcp_analytics, 'request_json', graph)
+    monkeypatch.setattr(issue_candidates, 'request_json', anonymous_issue)
+    monkeypatch.setattr(product_value, 'request_json', provider)
+    args = {'repo': 'previous/r', **({'issue_numbers': [16]} if tool_name == 'show_issue_value' else {'view': 'value'})}
+    result = tool(client, tool_name, args, connect(client))
+    if became_private and tool_name == 'show_issue_value':
+        assert result['isError']
+        assert 'Improve reporting' not in str(result)
+        return
+    assert result['structuredContent']['repo'] == 'o/r'
+    record = result['_meta']['issueValue' if tool_name == 'show_issue_value' else 'metrics']['product_value']
+    if became_private:
+        assert record['status'] == 'failed'
+        assert not record['items']
+        assert not provider.prompts and not provider.jev_requests
+    else:
+        assert record['status'] == 'ok'
+        assert record['assessed'] == 1
+        assert record['items'][0]['cost_of_delay'] == 29
+        assert record['sources']['readme']

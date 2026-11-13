@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import time
+from functools import partial
 from typing import Any, Literal
 
 import httpx
@@ -19,7 +20,8 @@ import github_auth
 from issue_candidates import collect_issue_candidates
 from mcp_oauth import delete_mcp_grants, router as mcp_oauth_router
 from github_projects import collect_project_history
-from mcp_analytics import collect_dashboard_data, check_private_dashboard_access
+from mcp_analytics import (check_private_dashboard_access, collect_dashboard_data,
+                           collect_public_value_issues, public_value_sources)
 from mcp_server import install_mcp
 
 app = FastAPI(title="GitHub Flow Analytics")
@@ -312,6 +314,15 @@ async def repository_access(repo, request, identity, allow_private):
     return token if metadata['private'] else None, metadata['private']
 
 
+async def mcp_repository_access(repo, token, allow_private):
+    metadata = await public_repo_exists(repo, token, allow_private=allow_private)
+    repository_id = metadata.get('id')
+    if type(repository_id) is not int or repository_id < 1:
+        raise HTTPException(502, 'GitHub returned unreadable repository access information.')
+    canonical_repo = parse_repo(metadata.get('full_name') or repo)
+    return canonical_repo, metadata['private'], repository_id
+
+
 def private_analysis_key(repo, identity, analysis_id, full_dashboard=False):
     digest = hashlib.sha256(repo.lower().encode()).hexdigest()
     namespace = 'dashboard:v1:' if full_dashboard else ''
@@ -342,12 +353,8 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     repo = parse_repo(req.repo_url)
     env = request.scope.get("env")
     if full_dashboard:
-        metadata = await public_repo_exists(repo, identity.token, allow_private=req.allow_private)
-        private = metadata['private']
+        repo, private, repository_id = await mcp_repository_access(repo, identity.token, req.allow_private)
         token = identity.token if private else None
-        repository_id = metadata.get('id')
-        if type(repository_id) is not int or repository_id < 1:
-            raise HTTPException(502, 'GitHub returned unreadable repository access information.')
     else:
         token, private = await repository_access(repo, request, identity, req.allow_private)
     gemini_override = None if full_dashboard else request.headers.get("X-Gemini-Api-Key")
@@ -381,6 +388,8 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     metrics['repository_visibility'] = 'private' if private else 'public'
     options = {'allow_private': True} if private else {}
     if full_dashboard:
+        if not private:
+            options['load_sources'] = partial(public_value_sources, repo, identity.token, repository_id)
         metrics['dashboard_source'] = 'github_graphql'
         metrics['repository_id'] = repository_id
         metrics['analysis_id'] = secrets.token_urlsafe(24)
@@ -405,10 +414,10 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         value = metrics["product_value"] or {}
         # Retry transient collection and assessment failures sooner than intentional sampling.
         raw_issues = raw.get("issues") or {}
-        partial = (("issues" in raw and raw["issues"] is None) or metrics.get("pr_collection_unavailable")
-                   or raw_issues.get("retry_collection")
-                   or value.get("status") in ("failed", "unavailable") or value.get("failed"))
-        ttl = 600 if partial else 21600
+        partial_result = (("issues" in raw and raw["issues"] is None) or metrics.get("pr_collection_unavailable")
+                          or raw_issues.get("retry_collection")
+                          or value.get("status") in ("failed", "unavailable") or value.get("failed"))
+        ttl = 600 if partial_result else 21600
         payload = json.dumps(metrics, separators=(",", ":"))
         if full_dashboard and not private:
             await cache.put(public_dashboard_snapshot_key(repo, metrics['analysis_id']), payload, expiration_ttl=ttl)
@@ -436,14 +445,24 @@ async def issue_value(req: IssueValueRequest, request: Request):
 async def issue_value_for_identity(req, request, identity, *, mcp=False):
     await enforce_limit(request, 'analyze', 10, identity=identity if mcp else None)
     repo = parse_repo(req.repo_url)
-    token, private = await repository_access(repo, request, identity, req.allow_private)
+    if mcp:
+        repo, private, repository_id = await mcp_repository_access(repo, identity.token, req.allow_private)
+        token = identity.token if private else None
+    else:
+        token, private = await repository_access(repo, request, identity, req.allow_private)
     numbers = req.issue_numbers
     if numbers and (len(set(numbers)) != len(numbers) or min(numbers) < 1 or len(numbers) > req.max_issues):
         raise HTTPException(422, 'Choose distinct positive issue numbers within max_issues.')
     if sum(len(source.text) for source in req.owner_context) > 12000:
         raise HTTPException(422, 'Owner context exceeds the 12,000-character evidence budget.')
+    options = {'owner_profile': req.owner_profile} if req.owner_profile is not None else {}
     try:
-        selection = await collect_issue_candidates(repo, token, max_issues=req.max_issues, issue_numbers=numbers)
+        if mcp and not private:
+            selection = await collect_public_value_issues(repo, identity.token, repository_id,
+                max_issues=req.max_issues, issue_numbers=numbers)
+            options['load_sources'] = partial(public_value_sources, repo, identity.token, repository_id)
+        else:
+            selection = await collect_issue_candidates(repo, token, max_issues=req.max_issues, issue_numbers=numbers)
     except (ValueError, httpx.HTTPError, TimeoutError) as exc:
         raise HTTPException(502, 'Issue selection failed or selected issues are unavailable. Refresh the selection.') from exc
     env = environment(request)
@@ -451,7 +470,7 @@ async def issue_value_for_identity(req, request, identity, *, mcp=False):
     jev_key = (None if mcp else request.headers.get('X-TypeSafe-Api-Key')) or getattr(env, 'TYPESAFE_API_KEY', None)
     value = await assess_issue_value(repo, selection['items'], gemini_key, token, jev_key=jev_key,
         max_issues=req.max_issues, allow_private=private, owner_context=[source.model_dump(exclude_none=True) for source in req.owner_context],
-        **({'owner_profile': req.owner_profile} if req.owner_profile is not None else {}))
+        **options)
     return {'repo': repo, 'repository_visibility': 'private' if private else 'public',
             'captured_at': int(time.time()), 'selection': {key: val for key, val in selection.items() if key != 'items'},
             'selected_issues': [{key: item.get(key) for key in ('number', 'state', 'item_type', 'url', 'updated_at', 'milestone')}

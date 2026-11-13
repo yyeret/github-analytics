@@ -32,9 +32,8 @@ async def collect_issue_candidates(repo, token, *, max_issues=20, issue_numbers=
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-        return {'items': items, 'total_count': len(items), 'truncated': False, 'search_incomplete': False,
-                'query': None, 'selection_policy': 'Explicit issues in any lifecycle state, independent of PR linkage; value does not grant execution permission.'}
-    query = f'repo:{repo} is:issue is:open -linked:pr'
+        return issue_selection(items, len(items), False, None)
+    query = open_issue_query(repo)
     found, total, incomplete = {}, 0, False
     for page in range(1, 2):
         url = 'https://api.github.com/search/issues?' + urlencode({
@@ -51,9 +50,18 @@ async def collect_issue_candidates(repo, token, *, max_issues=20, issue_numbers=
                 raise ValueError('GitHub returned an invalid open issue.')
             found[item['number']] = issue_record(item)
     items = list(found.values())[:max_issues]
+    return issue_selection(items, total, incomplete, query)
+
+
+def open_issue_query(repo):
+    return f'repo:{repo} is:issue is:open -linked:pr'
+
+
+def issue_selection(items, total, incomplete, query):
+    policy = ('Explicit issues in any lifecycle state, independent of PR linkage; value does not grant execution permission.'
+              if query is None else 'Open issues without a linked PR closing reference; this does not rule out mentions or work already in progress.')
     return {'items': items, 'total_count': total, 'truncated': incomplete or len(items) < total,
-            'search_incomplete': incomplete, 'query': query,
-            'selection_policy': 'Open issues without a linked PR closing reference; this does not rule out mentions or work already in progress.'}
+            'search_incomplete': incomplete, 'query': query, 'selection_policy': policy}
 
 
 def issue_record(item):
