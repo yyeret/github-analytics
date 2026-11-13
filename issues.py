@@ -340,6 +340,36 @@ def _window_start(issues_raw, weekly_bins):
     return start
 
 
+def _issue_open_intervals(issue, created, closed, *, history_capped):
+    if created is None:
+        return []
+    timeline = issue.get("timelineItems") or {}
+    if history_capped or (timeline.get("pageInfo") or {}).get("hasNextPage"):
+        return [(created, closed)]
+    events = []
+    for event in timeline.get("nodes") or []:
+        kind = (event or {}).get("__typename")
+        if kind in ("ClosedEvent", "ReopenedEvent"):
+            stamp = _parse(event.get("createdAt"))
+            if stamp and stamp >= created:
+                events.append((stamp, kind))
+    if closed is not None:
+        events.append((closed, "ClosedEvent"))
+    intervals = []
+    start = created
+    for stamp, kind in sorted(events):
+        if kind == "ClosedEvent" and start is not None:
+            intervals.append((start, stamp))
+            start = None
+        elif kind == "ReopenedEvent" and start is None:
+            start = stamp
+    if (start is None) != (closed is not None):
+        return [(created, closed)]
+    if start is not None:
+        intervals.append((start, None))
+    return intervals
+
+
 def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *, repo=None):
     """Turn raw issue records into the `issues` payload, or None when absent."""
     if issues_raw is None:
@@ -348,15 +378,20 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
     open_issues = issues_raw.get("open") or []
     closed_issues = issues_raw.get("closed") or []
     rest = issues_raw.get("source") == "rest"
+    open_available = issues_raw.get("open_available", True)
+    closed_available = issues_raw.get("closed_available", True)
+    flow_available = open_available and closed_available
     window_start = _window_start(issues_raw, weekly_bins)
     # (issue, created, closed) rows, parsed once
     open_rows = [(i, _parse(i.get("createdAt")), None) for i in open_issues]
     closed_rows = [(i, _parse(i.get("createdAt")), _parse(i.get("closedAt"))) for i in closed_issues]
     sampled = open_rows + closed_rows
 
-    arrivals = [made for _, made, _ in sampled if made]
-    resolutions = [done for _, _, done in closed_rows if done]
-    intervals = [(made, done) for _, made, done in sampled if made]
+    history_start = _parse(issues_raw.get("history_start"))
+    intervals = [interval for issue, made, done in sampled
+                 for interval in _issue_open_intervals(issue, made, done, history_capped=history_start is not None)]
+    arrivals = [made for made, _ in intervals]
+    resolutions = [done for _, done in intervals if done] + [done for _, made, done in closed_rows if made is None and done]
     weekly = []
     for start, end, arrived, resolved, open_count in zip(
         weekly_bins,
@@ -365,7 +400,7 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         count_events_in_windows(resolutions, weekly_bins),
         count_intervals(intervals, weekly_bins[1:]),
     ):
-        if start < window_start:
+        if not flow_available or start < window_start:
             continue
         weekly.append({
             "week": end.strftime("%Y-%m-%d"),
@@ -398,10 +433,6 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
             })
     stale_items.sort(key=lambda s: s["days_since_activity"], reverse=True)
 
-    with_pr = sum(1 for i in modern_closed if ((i.get("closedByPullRequestsReferences") or {}).get("totalCount") or 0) > 0)
-    total_closed = len(modern_closed)
-
-    history_start = _parse(issues_raw.get("history_start"))
     lifecycle_samples = [t for t in weekly_bins[1:] if t >= window_start and (history_start is None or t >= history_start)]
     if rest and history_start and len(lifecycle_samples) < 2:
         start = max(window_start, history_start)
@@ -409,30 +440,40 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         lifecycle_samples = [now - datetime.timedelta(days=i) for i in range(days, -1, -1)]
     return {
         "sample_size": len(sampled),
+        "open_available": open_available,
+        "closed_available": closed_available,
         "stale_basis": "updated" if rest else "comment",
         "window_start": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "closed_truncated": bool(issues_raw.get("closed_truncated")),
         "open_truncated": bool(issues_raw.get("open_truncated")),
-        "open_now": len(open_issues),
+        "open_now": len(open_issues) if open_available else None,
         "cycle_time": {
             "baseline": _cycle_stats(issues_raw.get("pre_ai") or []),
             "modern": _cycle_stats(modern_closed),
         },
         "weekly": weekly,
-        "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]),
+        "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]) if len(weekly) >= NET_WINDOW_WEEKS else None,
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
-        "lifecycle_cfd": _compute_lifecycle_cfd(open_issues + modern_closed, lifecycle_samples, repo, bool(history_start)),
-        "resolution": None if rest else {
-            "closed_total": total_closed,
-            "with_pr": with_pr,
-            "without_pr": total_closed - with_pr,
-            "pct_with_pr": (with_pr / total_closed * 100.0) if total_closed else 0.0,
-        },
+        "lifecycle_cfd": (_compute_lifecycle_cfd(open_issues + modern_closed, lifecycle_samples, repo, bool(history_start))
+                          if flow_available else None),
+        "resolution": None if rest else _resolution_summary(modern_closed),
     }
 
 
-def _search_issues(search_query, cap, run):
+def _resolution_summary(closed):
+    total = len(closed)
+    with_pr = sum(bool((issue.get("closedByPullRequestsReferences") or {}).get("totalCount")) for issue in closed)
+    return {"closed_total": total, "with_pr": with_pr, "without_pr": total - with_pr,
+            "pct_with_pr": with_pr * 100.0 / total if total else 0.0}
+
+
+def _same_public_repo(item, repo):
+    source = item.get("repository") or {}
+    return source.get("isPrivate") is False and (source.get("nameWithOwner") or "").lower() == repo.lower()
+
+
+def _search_issues(repo, search_query, cap, run):
     """Page through an issue search; returns (nodes, truncated). Raises on failure."""
     nodes, cursor, total_count = [], None, 0
     while len(nodes) < cap:
@@ -446,7 +487,17 @@ def _search_issues(search_query, cap, run):
             cmd.extend(["-f", f"cursor={cursor}"])
         res = run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
         search = json.loads(res.stdout)["data"]["search"]
-        nodes.extend(n for n in search["nodes"] if n)
+        for node in search["nodes"]:
+            if not node:
+                continue
+            linked = node.get("closedByPullRequestsReferences")
+            if linked and "nodes" in linked:
+                linked["nodes"] = [
+                    {key: value for key, value in pr.items() if key != "repository"}
+                    for pr in linked["nodes"] if pr and _same_public_repo(pr, repo)
+                ]
+                linked["totalCount"] = len(linked["nodes"])
+            nodes.append(node)
         total_count = max(total_count, search.get("issueCount") or 0)
         info = search["pageInfo"]
         if not info["hasNextPage"]:
@@ -467,7 +518,7 @@ def collect_issues(repo, run=subprocess.run, now=None):
     try:
         # The searches are independent, and each pages sequentially, so run them side by side
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(searches)) as pool:
-            futures = {name: pool.submit(_search_issues, q, cap, run) for name, (q, cap) in searches.items()}
+            futures = {name: pool.submit(_search_issues, repo, q, cap, run) for name, (q, cap) in searches.items()}
             results = {name: f.result() for name, f in futures.items()}
         open_nodes, open_truncated = results["open"]
         closed_nodes, closed_truncated = results["closed"]
@@ -491,9 +542,9 @@ async def _rest_json(url, headers):
     return payload
 
 
-async def _search_rest_issues(query, headers, cap, *, sort="created"):
+async def _search_rest_issues(query, headers, sort):
     items, total, incomplete = {}, 0, False
-    for page in range(1, cap // PAGE_SIZE + 1):
+    for page in range(1, REST_ISSUE_PAGE_CAP + 1):
         url = "https://api.github.com/search/issues?" + urlencode(
             {"q": query, "sort": sort, "order": "desc", "per_page": PAGE_SIZE, "page": page}
         )
@@ -528,60 +579,68 @@ async def _enrich_rest_issue_history(repo, headers, issues):
     by_number = {issue["number"]: issue for issue in issues}
     events_by_type = {"labeled": "LabeledEvent", "unlabeled": "UnlabeledEvent",
                       "closed": "ClosedEvent", "reopened": "ReopenedEvent"}
-    events = []
-    history_start = None
+    relevant = []
+    oldest = None
+    capped = True
     for page in range(1, REST_EVENT_PAGE_CAP + 1):
         payload = await _rest_json(
             f"https://api.github.com/repos/{repo}/issues/events?per_page=100&page={page}", headers
         )
         if not isinstance(payload, list) or any(not isinstance(event, dict) for event in payload):
             raise ValueError("GitHub returned invalid issue history")
-        events.extend(payload)
+        for event in payload:
+            stamp = _parse(event.get("created_at"))
+            if stamp is None:
+                continue
+            oldest = stamp if oldest is None else min(oldest, stamp)
+            subject = event.get("issue")
+            kind = events_by_type.get(event.get("event"))
+            if kind and isinstance(subject, dict) and "pull_request" not in subject:
+                number = subject.get("number")
+                if number in by_number:
+                    relevant.append((number, {"__typename": kind, "createdAt": event["created_at"],
+                                             "label": event.get("label")}))
         if len(payload) < PAGE_SIZE:
+            capped = False
             break
-    else:
-        dates = [event["created_at"] for event in events if _parse(event.get("created_at"))]
-        if not dates:
-            raise ValueError("GitHub did not timestamp the issue history")
-        history_start = min(dates)
-    for event in reversed(events):  # GitHub returns the latest event first.
-        subject = event.get("issue")
-        if not isinstance(subject, dict) or "pull_request" in subject:
-            continue
-        item = by_number.get(subject.get("number"))
-        kind = events_by_type.get(event.get("event"))
-        if item is not None and kind:
-            item.setdefault("timelineItems", {"nodes": []})["nodes"].append(
-                {"__typename": kind, "createdAt": event.get("created_at"), "label": event.get("label")}
-            )
-    return history_start
+    if capped and oldest is None:
+        raise ValueError("GitHub did not timestamp the issue history")
+    for number, event in reversed(relevant):
+        by_number[number].setdefault("timelineItems", {"nodes": []})["nodes"].append(event)
+    return oldest.isoformat() if capped else None
 
 
 async def collect_rest_issues(repo, headers, now):
     """Collect bounded issue details independently of PRs or model providers."""
     since = (now - datetime.timedelta(weeks=ISSUE_WINDOW_WEEKS)).date().isoformat()
-    cap = REST_ISSUE_PAGE_CAP * PAGE_SIZE
     queries = ((f"repo:{repo} is:issue is:open", "created"),
                (f"repo:{repo} is:issue is:closed closed:>={since}", "updated"))
     results = await asyncio.gather(
-        *(_search_rest_issues(query, headers, cap, sort=sort) for query, sort in queries),
+        *(_search_rest_issues(query, headers, sort) for query, sort in queries),
         return_exceptions=True,
     )
-    for result in results:
+    def available(result):
         if isinstance(result, (ValueError, TimeoutError, httpx.HTTPError)):
             return None
         if isinstance(result, BaseException):
             raise result
-    (opened, open_truncated), (closed, closed_truncated) = results
+        return result
+
+    open_result, closed_result = map(available, results)
+    if open_result is None and closed_result is None:
+        return None
+    opened, open_truncated = open_result or ([], False)
+    closed, closed_truncated = closed_result or ([], False)
     # A reopened issue can move between the concurrent searches. Prefer the open observation.
     open_numbers = {item["number"] for item in opened}
     closed = [item for item in closed if item["number"] not in open_numbers]
     history_start = None
-    if (opened or closed) and _workflow_label_stages(repo):
+    if open_result is not None and closed_result is not None and (opened or closed) and _workflow_label_stages(repo):
         try:
             history_start = await _enrich_rest_issue_history(repo, headers, opened + closed)
         except (ValueError, TimeoutError, httpx.HTTPError):
-            pass  # Basic backlog data remains useful without stage history.
+            pass
     return {"open": opened, "closed": closed, "pre_ai": [],
             "open_truncated": open_truncated, "closed_truncated": closed_truncated,
-            "source": "rest", "history_start": history_start}
+            "source": "rest", "history_start": history_start,
+            "open_available": open_result is not None, "closed_available": closed_result is not None}

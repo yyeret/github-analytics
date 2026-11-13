@@ -149,3 +149,25 @@ def test_baseline_era_issues_only_affect_baseline_stats():
     assert out["cycle_time"]["baseline"]["median_hours"] == 240
     assert out["cycle_time"]["modern"]["n"] == 0
     assert all(w["arrived"] == 0 and w["open_count"] == 0 for w in out["weekly"])
+
+
+def test_weekly_backlog_counts_observed_close_and_reopen():
+    from datetime import datetime, timedelta
+    from issues import compute_issue_metrics
+
+    now = datetime(2026, 11, 12)
+    issue = {
+        'number': 4, 'createdAt': '2026-09-01T00:00:00Z', 'closedAt': None,
+        'timelineItems': {'nodes': [
+            {'__typename': 'LabeledEvent', 'createdAt': '2026-09-02T00:00:00Z', 'label': {'name': 'feature-go'}},
+            {'__typename': 'ClosedEvent', 'createdAt': '2026-10-01T00:00:00Z'},
+            {'__typename': 'ReopenedEvent', 'createdAt': '2026-11-01T00:00:00Z'},
+        ]},
+    }
+    bins = [now - timedelta(weeks=week) for week in range(12, -1, -1)]
+    metrics = compute_issue_metrics({'open': [issue]}, bins, now, repo='github/spec-kit')
+    weekly = {row['week']: row for row in metrics['weekly']}
+    lifecycle = {row['date']: row['counts'] for row in metrics['lifecycle_cfd']['points']}
+    assert weekly['2026-10-22']['open_count'] == 0 and lifecycle['2026-10-22']['Done'] == 1
+    assert weekly['2026-10-01']['resolved'] == 1
+    assert weekly['2026-11-05']['arrived'] == 1 and weekly['2026-11-05']['open_count'] == 1

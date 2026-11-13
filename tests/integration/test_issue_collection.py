@@ -106,3 +106,18 @@ def test_issue_weekly_bins_cover_52_weeks_ending_at_now():
     assert bins[-1] == now
     assert bins[0] == now - dt.timedelta(weeks=52)
     assert all(b2 - b1 == dt.timedelta(days=7) for b1, b2 in zip(bins, bins[1:]))
+
+
+def test_local_collection_does_not_keep_cross_repo_closing_pr_details():
+    row = node(7)
+    row['closedByPullRequestsReferences'] = {'totalCount': 3, 'nodes': [
+        {'number': 19, 'repository': {'nameWithOwner': 'O/R', 'isPrivate': False}},
+        {'number': 22, 'repository': {'nameWithOwner': 'o/private', 'isPrivate': True}},
+        {'number': 23, 'repository': {'nameWithOwner': 'o/other', 'isPrivate': False}},
+    ]}
+
+    def fake(cmd, **kwargs):
+        return page([row], False) if 'is:open' in arg(cmd, 'searchQuery') else page([], False)
+
+    linked = collect_issues('o/r', run=fake)['open'][0]['closedByPullRequestsReferences']
+    assert linked == {'totalCount': 1, 'nodes': [{'number': 19}]}

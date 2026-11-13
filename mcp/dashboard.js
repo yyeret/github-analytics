@@ -7,7 +7,7 @@
   const panels = new Map([['overview', byId('kpi-grid')], ['issues', byId('issues-section')],
     ['value', byId('value-section')], ['issue-value', byId('issue-value-panel')], ['coach', byId('coach-panel')]]);
   const canvases = ['flow', 'work', 'batch'];
-  [...dashboard.querySelectorAll(':scope > .charts-2col')].forEach((row, index) => {
+  [...dashboard.querySelectorAll('#pr-analysis > .charts-2col')].forEach((row, index) => {
     const heading = row.previousElementSibling;
     heading.after(Object.assign(document.createElement('section'), {id: 'view-' + canvases[index]}));
     const section = heading.nextElementSibling;

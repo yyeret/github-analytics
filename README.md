@@ -37,12 +37,13 @@ The API and HTML report use the vendored [flow-metrics](https://github.com/yyere
 ## Issue flow and backlog health
 
 Each analysis also collects GitHub issues, including in repositories without merged pull requests.
-The dashboard uses issue creation and closure dates for arrivals, resolutions, backlog and time to close,
-and uses open issues for age and stale work. On the hosted dashboard, staleness is based on the last
+The dashboard uses issue creation, closure, and available reopening dates for arrivals, resolutions,
+and backlog, and uses creation and final closure for time to close. It
+uses open issues for age and stale work. On the hosted dashboard, staleness is based on the last
 issue update. Large repositories are sampled and the dashboard calls out incomplete coverage.
 The lifecycle chart appears only when observed workflow history supports stage counts. Hosted stage
-history uses recent label events for repositories with a known mapping. Local collection also uses
-linked closing PRs. Issues without an observed stage are shown as **Unobserved**.
+REST history uses recent label events for repositories with a known mapping. The MCP and local
+dashboards also use linked closing PRs from the analyzed repository. Issues without an observed stage are shown as **Unobserved**.
 
 ## Issue and PR content framing
 

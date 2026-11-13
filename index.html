@@ -525,9 +525,9 @@
     </div>
 
     <p class="issue-note" id="pr-note" hidden></p>
-    <div id="pr-analysis">
-    <!-- KPI Cards -->
     <div class="kpi-grid" id="kpi-grid"></div>
+
+    <div id="pr-analysis">
 
     <!-- CFD & Control Chart -->
     <div class="section-header">
@@ -803,8 +803,10 @@
       currentRepo = data.repo;
       chatHistory = [];
 
-      const sample = data.issues ? ` · ${data.issues.sample_size} issues sampled` : '';
-      showStatus(`✓ Analysis complete for ${data.repo} — ${data.recent_stats?.total || 0} merged PRs analyzed${sample}`, 'success');
+      const count = data.issues?.sample_size;
+      const sample = count == null ? '' : ` · ${count} ${count === 1 ? 'issue' : 'issues'} sampled`;
+      const merged = data.recent_stats?.total || 0;
+      showStatus(`✓ Analysis complete for ${data.repo} — ${merged} merged ${merged === 1 ? 'PR' : 'PRs'} analyzed${sample}`, 'success');
       document.getElementById('chat-repo-label').textContent = data.repo;
       if (!chatOpen) document.getElementById('chat-toggle').classList.add('has-response');
       const setup = document.getElementById('chat-setup');
@@ -832,21 +834,29 @@
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
     document.getElementById('repo-name-display').textContent = d.repo;
+    for (const chart of Object.values(charts)) chart.destroy();
+    charts = {};
 
     const hasPRs = (d.recent_stats?.total || 0) > 0;
-    document.getElementById('pr-analysis').hidden = !hasPRs;
+    const hasOpenPRs = Boolean(d.active_wip_points?.length);
+    document.getElementById('pr-analysis').hidden = !hasPRs && !hasOpenPRs && d.dashboard_source !== 'github_graphql';
     const prNote = document.getElementById('pr-note');
     prNote.hidden = hasPRs;
     prNote.textContent = d.pr_collection_unavailable ? 'Pull request data is temporarily unavailable.' : 'No merged pull requests were found in the analysis window.';
+    renderKPIs(d);
+    const mergedOnly = ['chart-control', 'chart-throughput', 'chart-correlation', 'chart-comet'];
+    if (d.dashboard_source !== 'github_graphql') {
+      for (const id of mergedOnly) document.getElementById(id).closest('.chart-card').hidden = !hasPRs;
+      document.getElementById('chart-cfd').closest('.chart-card').hidden = !hasPRs && !hasOpenPRs;
+    }
+    if (hasPRs || hasOpenPRs) renderCFD(d.cfd_data);
     if (hasPRs) {
-      renderKPIs(d);
-      renderCFD(d.cfd_data);
       renderControlChart(d.recent_scatter_points, d.p50_sle, d.p85_sle);
       renderThroughput(d.throughput_data);
-      renderWIP(d.active_wip_points, d.stage_percentiles);
       renderCorrelation(d.pr_size_scatter_points, d.spearman_corr);
       renderComet(d.comet_points);
     }
+    if (hasPRs || hasOpenPRs) renderWIP(d.active_wip_points, d.stage_percentiles);
     renderIssues(d.issues);
     renderValueClassification(d.value_classification);
     renderProductValue(d.product_value);
@@ -1004,10 +1014,11 @@
       { label:'Active WIP', value: wip, sub:'open PRs in system', badge: wip > 10 ? 'High WIP' : 'In control', badgeClass: wip > 10 ? 'badge-rose' : 'badge-green' },
       { label:'AI Mix', value: rs.total ? `${Math.round((rs.assisted_ratio||0)*100+( rs.agentic_ratio||0)*100)}%` : '—', sub:rs.total ? `${Math.round((rs.assisted_ratio||0)*100)}% assisted · ${Math.round((rs.agentic_ratio||0)*100)}% agentic` : 'No merged PRs', badge:rs.total ? 'AI-authored' : null, badgeClass:'badge-violet' },
     ];
+    if (!rs.total) kpis.length = 0;
 
-    if (d.value_classification) {
+    if (d.value_classification?.prs?.total || d.value_classification?.issues?.total) {
       const summary = outcomeFramingSummary(d.value_classification);
-      const source = d.value_classification.issues ? 'Issues + PRs' : 'PRs';
+      const source = [d.value_classification.issues?.total && 'Issues', d.value_classification.prs?.total && 'PRs'].filter(Boolean).join(' + ');
       kpis.unshift({
         label:'Outcome-oriented', value:summary.percent === null ? '—' : `${summary.percent.toFixed(1)}%`,
         sub:`${summary.oriented} of ${summary.classified} classified · ${source}`,
@@ -1022,14 +1033,18 @@
       const iDelta = im.n && ib.median_hours > 0 ? ((im.median_hours - ib.median_hours) / ib.median_hours * 100) : 0;
       const net8 = iss.net_8w;
       kpis.push(
-        { label:'Open Issues', value: iss.open_now, sub:'in the backlog now', badge: iss.open_truncated ? 'Capped' : null, badgeClass:'badge-amber' },
         { label:'Issue Cycle Time', value: fmt_days(im.n ? im.median_hours : null), sub:`85th pct: ${fmt_days(im.n ? im.p85_hours : null)}`, badge: iDelta !== 0 && ib.n > 0 ? `${iDelta < 0 ? '↓' : '↑'} ${Math.abs(iDelta).toFixed(0)}% vs 2021` : null, badgeClass: iDelta < 0 ? 'badge-green' : 'badge-rose' },
-        { label:'Net Backlog (8w)', value: `${net8 >= 0 ? '+' : ''}${net8}`, sub:'arrivals minus resolutions', badge: net8 > 0 ? 'Growing' : net8 < 0 ? 'Shrinking' : null, badgeClass: net8 > 0 ? 'badge-rose' : 'badge-green' },
-        { label:'Stale Issues', value: iss.stale.count, sub:`no ${iss.stale_basis === 'updated' ? 'update' : 'comment'} for ${iss.stale.threshold_days}+ days`, badge: iss.stale.count > 0 ? 'Needs triage' : 'Clean', badgeClass: iss.stale.count > 0 ? 'badge-amber' : 'badge-green' },
       );
+      if (iss.open_available) {
+        kpis.push({label:'Open Issues', value:iss.open_now, sub:'in the backlog now', badge:iss.open_truncated ? 'Sample' : null, badgeClass:'badge-amber'},
+          {label:'Stale Issues', value:iss.stale.count, sub:`no ${iss.stale_basis === 'updated' ? 'update' : 'comment'} for ${iss.stale.threshold_days}+ days`});
+      }
+      if (iss.weekly.length >= 8) {
+        kpis.push({label:'Net Backlog (8w)', value:`${net8 >= 0 ? '+' : ''}${net8}`, sub:'arrivals minus resolutions', badge:net8 > 0 ? 'Growing' : net8 < 0 ? 'Shrinking' : null, badgeClass:net8 > 0 ? 'badge-rose' : 'badge-green'});
+      }
       if (iss.resolution?.closed_total) {
         const {pct_with_pr, with_pr, closed_total} = iss.resolution;
-        kpis.push({label:'Closed via PR', value:`${pct_with_pr.toFixed(0)}%`, sub:`${with_pr} of ${closed_total} closed issues`, badge:'linked PR', badgeClass:'badge-blue'});
+        kpis.push({label:'Closed via same-repo PR', value:`${pct_with_pr.toFixed(0)}%`, sub:`${with_pr} of ${closed_total} closed issues`, badge:'linked PR', badgeClass:'badge-blue'});
       }
     }
 
@@ -1167,12 +1182,12 @@
         datasets: [...stages].reverse().map((stage, index) => ({
           label: stage, data: points.map(point => point.counts[stage]),
           borderColor: colors[index], backgroundColor: colors[index] + '99',
-          fill: true, pointRadius: 0, borderWidth: 1
+          fill: true, stepped: 'after', pointRadius: 0, borderWidth: 1
         }))
       },
       options: {
         responsive: true, interaction: {mode: 'index', intersect: false},
-        scales: {x: {ticks: {maxTicksLimit: 8}}, y: {stacked: true, beginAtZero: true, title: {display: true, text: 'Issues'}}}
+        scales: {x: {ticks: {maxTicksLimit: 8}}, y: {stacked: true, beginAtZero: true, ticks: {precision: 0}, title: {display: true, text: 'Issues'}}}
       }
     });
   }
@@ -1186,16 +1201,19 @@
       note.textContent = 'GitHub issue data is temporarily unavailable. Run the analysis again to retry.';
       return;
     }
+    const notes = [];
+    if (!iss.open_available) notes.push('Open issue data is temporarily unavailable.');
+    if (!iss.closed_available) notes.push('Closed issue data is temporarily unavailable.');
     if (!iss.sample_size) {
-      note.textContent = 'No open or recently closed issues were found in the analysis window.';
+      note.textContent = notes.join(' ') || 'No open or recently closed issues were found in the analysis window.';
       return;
     }
-
-    const notes = [`${iss.open_now} open issues in the sample.`];
+    if (iss.open_available) notes.push(`${iss.open_now} open issues in the sample.`);
     const cycle = iss.cycle_time.modern;
     if (cycle.n) notes.push(`Median time to close: ${fmt_days(cycle.median_hours)} across ${cycle.n} issues.`);
     if (iss.closed_truncated) notes.push('Closed issue history is incomplete; trends show the available sample.');
     if (iss.open_truncated) notes.push('The open issue sample is incomplete; the open count is understated.');
+    if (iss.weekly.length >= 2) notes.push('Weekly trends count observed reopenings as arrivals. Without complete history, they use creation and final closure dates.');
     if (!iss.lifecycle_cfd) notes.push('There is not enough observed workflow history to chart issue stages.');
     note.textContent = notes.join(' ');
     renderIssueLifecycle(iss.lifecycle_cfd);
@@ -1207,7 +1225,7 @@
       data: {
         labels: pts.map(w => w.week),
         datasets: [
-          { type:'bar', label:'Arrived', data: pts.map(w => w.arrived), backgroundColor:'rgba(244,63,94,.7)', yAxisID:'y' },
+          { type:'bar', label:'Opened or reopened', data: pts.map(w => w.arrived), backgroundColor:'rgba(244,63,94,.7)', yAxisID:'y' },
           { type:'bar', label:'Resolved', data: pts.map(w => w.resolved), backgroundColor:'rgba(16,185,129,.7)', yAxisID:'y' },
           { type:'line', label:'Open backlog', data: pts.map(w => w.open_count), borderColor:'#8b5cf6', tension:.3, pointRadius:0, yAxisID:'y2' },
         ]

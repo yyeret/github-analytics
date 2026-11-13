@@ -367,7 +367,7 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
             metrics['p50_sle'] = metrics['p85_sle'] = None
     metrics["product_value"] = (
         await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
-        if metrics.get("recent_stats", {}).get("total") else None
+        if metrics.get("recent_stats", {}).get("total") or raw.get("open_prs") else None
     )
     if private or (caller_keys and identity):
         if not full_dashboard:
@@ -383,7 +383,9 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     if cache:
         value = metrics["product_value"] or {}
         # Keep provider failures briefly so a later analysis can recover once the service does.
+        issue_metrics = metrics.get("issues") or {}
         partial = (("issues" in raw and raw["issues"] is None) or metrics.get("pr_collection_unavailable")
+                   or not issue_metrics.get("open_available", True) or not issue_metrics.get("closed_available", True)
                    or value.get("status") in ("failed", "unavailable") or value.get("failed"))
         ttl = 600 if partial else 21600
         payload = json.dumps(metrics, separators=(",", ":"))
@@ -472,9 +474,10 @@ def chat_prompt(metrics: dict[str, Any]) -> str:
     issues = metrics.get("issues")
     if issues:
         context["issues"] = {
-            "open_count": issues.get("open_now"), "open_truncated": issues.get("open_truncated"),
+            "open_count": issues.get("open_now") if issues.get("open_available", True) else None,
+            "closed_available": issues.get("closed_available", True), "open_truncated": issues.get("open_truncated"),
             "closed_truncated": issues.get("closed_truncated"), "net_backlog_8_weeks": issues.get("net_8w"),
-            "stale": {"count": (issues.get("stale") or {}).get("count"), "basis": issues.get("stale_basis")},
+            "stale": {"count": (issues.get("stale") or {}).get("count") if issues.get("open_available", True) else None, "basis": issues.get("stale_basis")},
             "cycle_time": issues.get("cycle_time"), "weekly": issues.get("weekly", [])[-12:],
         }
     if not stats.get("total"):
