@@ -67,10 +67,9 @@
     /* ── Top Header ─────────────────────────────────────────────── */
     header{
       display:flex;align-items:center;justify-content:space-between;
-      gap:1.5rem;margin-bottom:2.5rem;
+      gap:.75rem;margin-bottom:1.5rem;
       padding-bottom:1.5rem;
       border-bottom:1px solid var(--border);
-      flex-wrap:wrap;
     }
     .logo-area h1{
       font-size:1.8rem;font-weight:800;
@@ -79,14 +78,15 @@
       line-height:1.1;
     }
     .logo-area .tagline{font-size:.85rem;color:var(--text-muted);margin-top:.3rem;}
+    #settings-toggle{padding:0;justify-content:center;width:44px;height:44px;flex:none;font-size:1.25rem;}
 
     /* ── Repo Input Bar ─────────────────────────────────────────── */
+    #repo-setup{display:grid;gap:.85rem;margin-bottom:1.5rem;}
     .repo-bar{
-      display:flex;align-items:center;gap:.75rem;flex:1;
-      max-width:600px;min-width:280px;
+      display:flex;align-items:center;gap:.75rem;max-width:600px;
     }
     .repo-bar input{
-      flex:1;
+      flex:1;min-width:0;
       padding:.7rem 1rem;
       background:var(--surface);
       border:1px solid var(--border);
@@ -119,6 +119,30 @@
       color:var(--text-dim);
     }
     .btn-ghost:hover{border-color:var(--violet);color:var(--text);}
+    #repo-setup a{color:#c4b5fd;}
+    #repo-setup details{color:var(--text-dim);font-size:.875rem;}
+    #repo-setup summary{cursor:pointer;}
+    .provider-keys{display:grid;gap:.5rem;margin-top:.75rem;}
+    .provider-keys input{max-width:100%;padding:.5rem;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px;}
+
+    /* ── Settings ───────────────────────────────────────────────── */
+    #settings-dialog{
+      margin:auto;width:min(30rem,calc(100% - 2rem));max-height:calc(100% - 2rem);
+      padding:1.25rem;background:var(--card);color:var(--text);
+      border:1px solid var(--border);border-radius:var(--radius);
+    }
+    #settings-dialog::backdrop{background:rgba(8,13,24,.75);}
+    .settings-header{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1rem;}
+    .settings-header h2{font-size:1.2rem;}
+    .settings-header .btn{padding:.45rem .75rem;}
+    #settings-dialog #repo-setup{margin-bottom:1rem;}
+    .settings-consent{font-size:.875rem;color:var(--text-dim);}
+    #account-actions:not([hidden]){display:grid;justify-items:start;gap:.75rem;}
+    #settings-repository:not(:empty) + #account-actions{border-top:1px solid var(--border);padding-top:1rem;}
+    #account-email{color:var(--text-dim);overflow-wrap:anywhere;max-width:100%;}
+    .account-buttons{display:flex;flex-wrap:wrap;gap:.5rem;}
+    .account-buttons button{padding:.45rem .65rem;}
+    .account-buttons .delete-account{color:#fda4af;}
 
     /* Spinner */
     .spinner{
@@ -132,7 +156,7 @@
     @keyframes spin{to{transform:rotate(360deg);}}
 
     /* ── Status Banner ──────────────────────────────────────────── */
-    #status-bar{
+    .status-bar{
       display:none;
       padding:.75rem 1.2rem;
       border-radius:var(--radius);
@@ -140,9 +164,9 @@
       font-size:.9rem;font-weight:500;
       border:1px solid transparent;
     }
-    #status-bar.info{background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#93c5fd;}
-    #status-bar.error{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.3);color:#fda4af;}
-    #status-bar.success{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#6ee7b7;}
+    .status-bar.info{background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:#93c5fd;}
+    .status-bar.error{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.3);color:#fda4af;}
+    .status-bar.success{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#6ee7b7;}
 
     /* ── Placeholder State ──────────────────────────────────────── */
     #placeholder{
@@ -434,8 +458,8 @@
     /* ── Responsive ─────────────────────────────────────────────── */
     @media(max-width:640px){
       #app{padding:1rem;}
-      header{flex-direction:column;align-items:flex-start;}
-      .repo-bar{max-width:100%;}
+      .logo-area h1{font-size:1.4rem;}
+      .repo-bar .btn{padding-inline:.75rem;}
       .kpi-grid{grid-template-columns:1fr 1fr;}
       #chat-drawer{width:100vw;}
       #chat-toggle.open{right:1rem;}
@@ -449,8 +473,6 @@
     .login-card a{color:#c4b5fd;}
     #google-signin{display:flex;justify-content:center;margin:1.25rem 0 .5rem;min-height:44px;}
     #login-error{color:#fda4af;min-height:1.3em;font-size:.85rem;}
-    #account-actions{display:none;align-items:center;gap:.6rem;color:var(--text-dim);font-size:.8rem;}
-    #account-actions button{background:transparent;color:#c4b5fd;border:1px solid var(--border);border-radius:8px;padding:.45rem .65rem;cursor:pointer;}
   </style>
 </head>
 <body>
@@ -480,6 +502,12 @@
       <h1>⚡ GitHub Flow Analytics</h1>
       <div class="tagline">Flow metrics and insights from Flowy AI Coach</div>
     </div>
+    <button id="settings-toggle" class="btn btn-ghost" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settings-dialog" onclick="document.getElementById('settings-dialog').showModal()"><span aria-hidden="true">☰</span></button>
+  </header>
+
+  <div id="status-bar" class="status-bar" role="status"></div>
+
+  <form id="repo-setup" onsubmit="event.preventDefault(); analyzeRepo()">
     <div class="repo-bar">
       <input
         id="repo-input"
@@ -489,28 +517,40 @@
         autocomplete="off"
         spellcheck="false"
       />
-      <button id="analyze-btn" class="btn btn-primary" onclick="analyzeRepo()">
-        <span class="spinner" id="btn-spinner"></span>
+      <button id="analyze-btn" class="btn btn-primary" type="submit" aria-label="Analyze">
+        <span class="spinner" aria-hidden="true"></span>
         <span class="btn-label">Analyze</span>
       </button>
     </div>
-    <div id="account-actions"><span id="account-email"></span><button onclick="signOut()">Sign out</button><button onclick="deleteAccount()">Delete account</button></div>
-  </header>
+    <a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a>
+    <label class="settings-consent"><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev.</label>
+    <details>
+      <summary>AI assessment API keys (optional)</summary>
+      <div class="provider-keys">
+        <p>Use your own keys for this analysis, or leave blank to use configured server keys. Keys are sent securely to this app and kept out of browser storage and saved results.</p>
+        <label for="typesafe-key">TypeSafe / Jev key</label>
+        <input id="typesafe-key" type="password" autocomplete="off" placeholder="TypeSafe API key">
+        <label for="gemini-key">Gemini key</label>
+        <input id="gemini-key" type="password" autocomplete="off" placeholder="Gemini API key">
+      </div>
+    </details>
+  </form>
 
-  <!-- Status -->
-  <div id="status-bar"></div>
-
-  <!-- Placeholder -->
-  <details style="margin-bottom:1rem">
-    <summary>AI assessment API keys (optional)</summary>
-    <p>Use your own keys for this analysis, or leave blank to use configured server keys. Keys are sent securely to this app and kept out of browser storage and saved results.</p>
-    <label for="typesafe-key">TypeSafe / Jev key</label>
-    <input id="typesafe-key" type="password" autocomplete="off" placeholder="TypeSafe API key">
-    <label for="gemini-key">Gemini key</label>
-    <input id="gemini-key" type="password" autocomplete="off" placeholder="Gemini API key">
-  </details>
-  <p><a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a></p>
-  <label><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev.</label>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="settings-header">
+      <h2 id="settings-title">Settings</h2>
+      <button class="btn btn-ghost" type="button" onclick="this.closest('dialog').close()">Close</button>
+    </div>
+    <div id="settings-status" class="status-bar" role="status"></div>
+    <div id="settings-repository"></div>
+    <section id="account-actions" aria-label="Account" hidden>
+      <span id="account-email"></span>
+      <div class="account-buttons">
+        <button class="btn btn-ghost" type="button" onclick="signOut()">Sign out</button>
+        <button class="btn btn-ghost delete-account" type="button" onclick="deleteAccount()">Delete account</button>
+      </div>
+    </section>
+  </dialog>
 
   <div id="placeholder">
     <div class="placeholder-icon">📊</div>
@@ -747,7 +787,7 @@
 
   function completeSignIn(email) {
     document.getElementById('login-gate').classList.remove('visible');
-    document.getElementById('account-actions').style.display = 'flex';
+    document.getElementById('account-actions').hidden = false;
     document.getElementById('account-email').textContent = email;
   }
 
@@ -781,10 +821,15 @@
     if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
 
     const btn = document.getElementById('analyze-btn');
+    if (btn.disabled) return;
     btn.disabled = true;
     btn.classList.add('loading');
-    showLoading('Fetching repository data… this may take 30–60 seconds');
     clearStatus();
+    if (document.getElementById('settings-dialog').open) {
+      showStatus('Fetching repository data… this may take 30–60 seconds');
+    } else {
+      showLoading('Fetching repository data… this may take 30–60 seconds');
+    }
 
     try {
       const headers = {'Content-Type':'application/json'};
@@ -803,6 +848,14 @@
       currentRepo = data.repo;
       chatHistory = [];
 
+      const settings = document.getElementById('settings-dialog');
+      const repoSetup = document.getElementById('repo-setup');
+      const settingsRepository = document.getElementById('settings-repository');
+      if (repoSetup.parentElement !== settingsRepository) {
+        settingsRepository.appendChild(repoSetup);
+        document.getElementById('settings-toggle').focus();
+      }
+      if (settings.open) settings.close();
       const count = data.issues?.sample_size;
       const sample = count == null ? '' : ` · ${count} ${count === 1 ? 'issue' : 'issues'} sampled`;
       const merged = data.recent_stats?.total || 0;
@@ -1563,16 +1616,28 @@
   }
 
   // ── UI Helpers ─────────────────────────────────────────────────────
+  let statusTimeout;
+
   function showStatus(msg, type='info') {
-    const bar = document.getElementById('status-bar');
-    bar.textContent = msg;
-    bar.className = type;
-    bar.style.display = 'block';
-    if (type === 'success') setTimeout(() => { bar.style.display='none'; }, 5000);
+    clearStatus();
+    const inSettings = document.getElementById('settings-dialog').open;
+    const statusIds = inSettings && type === 'info'
+      ? ['status-bar', 'settings-status']
+      : [inSettings ? 'settings-status' : 'status-bar'];
+    for (const id of statusIds) {
+      const bar = document.getElementById(id);
+      bar.textContent = msg;
+      bar.className = `status-bar ${type}`;
+      bar.style.display = 'block';
+    }
+    if (type === 'success') statusTimeout = setTimeout(clearStatus, 5000);
   }
   function clearStatus() {
-    const bar = document.getElementById('status-bar');
-    bar.style.display='none'; bar.textContent='';
+    clearTimeout(statusTimeout);
+    for (const id of ['status-bar', 'settings-status']) {
+      const bar = document.getElementById(id);
+      bar.style.display='none'; bar.textContent='';
+    }
   }
   function showLoading(msg='Loading…') {
     document.getElementById('loading-overlay').classList.add('visible');
@@ -1581,11 +1646,6 @@
   function hideLoading() {
     document.getElementById('loading-overlay').classList.remove('visible');
   }
-
-  // Allow pressing Enter in the repo input
-  document.getElementById('repo-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') analyzeRepo();
-  });
 
   // Pre-fill from URL param ?repo=
   (function() {
