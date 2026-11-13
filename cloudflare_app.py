@@ -18,6 +18,7 @@ from product_value import assess_product_value, assess_issue_value
 import github_auth
 from issue_candidates import collect_issue_candidates
 from mcp_oauth import delete_mcp_grants, router as mcp_oauth_router
+from github_projects import collect_project_history
 from mcp_analytics import collect_dashboard_data, check_private_dashboard_access
 from mcp_server import install_mcp
 
@@ -367,6 +368,11 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     try:
         raw = (await collect_dashboard_data(repo, identity.token, private, repository_id)
                if full_dashboard else await collect_public_data(repo, token))
+        issues = raw.get("issues") or {}
+        if private and issues.get("open_available", True) and issues.get("closed_available", True):
+            issue_sample = (issues.get("open") or []) + (issues.get("closed") or [])
+            if issue_sample:
+                issues["project_history"] = await collect_project_history(repo, token, issue_sample)
         metrics = compute_flow_metrics(raw)
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
