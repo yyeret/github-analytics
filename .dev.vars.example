@@ -4,3 +4,13 @@ GEMINI_API_KEY=
 
 # Jev classifies cost-of-delay dimensions; Gemini infers product context.
 TYPESAFE_API_KEY=
+
+# Optional MCP OAuth configuration. Use the canonical HTTPS Worker origin.
+MCP_ORIGIN=
+MCP_GITHUB_APP_CLIENT_ID=
+MCP_GITHUB_APP_CLIENT_SECRET=
+MCP_GITHUB_APP_SLUG=
+# Space-separated exact HTTPS callbacks for additional OAuth clients.
+MCP_OAUTH_REDIRECT_URIS=
+# Opt in only for native clients with a loopback callback.
+MCP_OAUTH_ALLOW_LOOPBACK=false

@@ -439,8 +439,8 @@ def classify_pr(pr):
             
         authors = commit.get("authors", {}).get("nodes", [])
         for auth in authors:
-            email = auth.get("email", "").lower()
-            name = auth.get("name", "").lower()
+            email = (auth.get("email") or "").lower()
+            name = (auth.get("name") or "").lower()
             user = auth.get("user")
             login = user.get("login", "").lower() if user else ""
             
@@ -571,6 +571,7 @@ def process_pr_metrics(pr):
         "commit_count": commit_count,
         "coding_time_hours": coding_time_hours,
         "is_sdd_workflow": is_sdd_workflow,
+        "is_draft": pr.get("isDraft"),
         "ready_for_review_dt": ready_for_review_dt.isoformat() if ready_for_review_dt else None,
         "has_upstream": len(closing_issues) > 0,
         "upstream_issue_number": closing_issues[0].get("number") if closing_issues else None,
@@ -806,10 +807,14 @@ def compute_flow_metrics(data):
         if not created_dt: continue
         age_days = max(0.02, elapsed(created_dt, now, 86400.0))
         ready_dt = p.get("ready_for_review_dt")
-        is_draft = p.get("title", "").lower().startswith("[draft]")
+        is_draft = p.get("is_draft")
+        if is_draft is None:
+            is_draft = (p.get("title") or "").lower().startswith("[draft]")
         has_reviews = p.get("review_count", 0) > 0
         has_approval = p.get("approvals", 0) > 0
-        if has_approval:
+        if p.get("is_draft") is True:
+            stage_name = "1. Active Coding"
+        elif has_approval:
             stage_name = "3. Merge Delay"
         elif ready_dt or has_reviews or not is_draft:
             stage_name = "2. Review Queue"

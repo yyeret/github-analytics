@@ -42,8 +42,8 @@ class Statement:
 
 
 class Database:
-    def __init__(self):
-        self.connection = sqlite3.connect(':memory:')
+    def __init__(self, *, check_same_thread=True):
+        self.connection = sqlite3.connect(':memory:', check_same_thread=check_same_thread)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript((Path(__file__).resolve().parents[2] / 'migrations/0002_github_auth.sql').read_text())
 
@@ -255,10 +255,11 @@ async def test_worker_scheduled_handler_awaits_cleanup_and_preserves_asgi(env, m
         calls.append(database)
 
     monkeypatch.setitem(module['Default'].scheduled.__globals__, 'cleanup_expired_credentials', cleanup)
+    monkeypatch.setitem(module['Default'].scheduled.__globals__, 'cleanup_mcp_oauth', cleanup)
     worker = module['Default']()
     worker.env = env
     await worker.scheduled(SimpleNamespace(), env, SimpleNamespace())
-    assert calls == [env.USERS_DB]
+    assert calls == [env.USERS_DB, env.USERS_DB]
     assert await worker.fetch('request') == 'request'
 
 

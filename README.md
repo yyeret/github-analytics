@@ -207,6 +207,55 @@ The offline/opt-in live evaluator is `scripts/evaluate_value_intent.py`. Its fro
 40-PR/two-repository fixture has a held-out partition and focused controls. Reference
 labels are agent-provisional, not human ground truth; agreement is not validated
 accuracy. See [benchmark protocol](docs/experiments/2026-10-26-value-intent-benchmark.md).
+## GitHub Analytics in AI chats
+
+The Worker serves an OAuth-protected Streamable HTTP MCP endpoint at `/mcp`.
+In an MCP Apps host, ask it to **show the flow dashboard for owner/repo** or
+**assess cost of delay for issues 12 and 24 in owner/repo**. The inline app
+shares the web dashboard renderers and lets you switch views, inspect charts,
+filter PR and issue framing, review cost-of-delay dimensions and uncertainty,
+refresh the analysis, and ask the flow coach. The chat-facing tools return a
+compact summary even in hosts that display only text.
+
+The MCP dashboard uses the connected GitHub identity to collect bounded PR and
+issue samples through GraphQL. It shows cycle time and SLEs, cumulative flow,
+throughput, WIP age, size correlation, the PR timeline, and issue flow and
+backlog health. Contributor type and active PR stage are inferred from sampled
+activity. The same assessment code powers PR and issue value views, which use
+`GEMINI_API_KEY` and `TYPESAFE_API_KEY` configured on the Worker. Gemini also
+powers the coach. Repositories without merged PRs can still show issue flow
+and issue assessments.
+
+### Configure the connection
+
+1. Register a [GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app)
+   with expiring user access tokens and the callback
+   `https://your-worker-host/mcp/oauth/github/callback`. Grant **Read-only**
+   access to repository **Contents**, **Issues**, and **Pull requests**. GitHub
+   includes Metadata access. For private repositories, install the app on the
+   selected repositories. The signed-in GitHub user must also have access.
+2. Set `MCP_ORIGIN` to the canonical HTTPS origin without a trailing slash,
+   `MCP_GITHUB_APP_CLIENT_ID`, and `MCP_GITHUB_APP_CLIENT_SECRET` in Bitwarden
+   or the Worker configuration. Optionally set `MCP_GITHUB_APP_SLUG` to add
+   the GitHub installation link to the consent screen. The existing
+   deployment script reads these settings and applies the D1 migrations.
+   For a Cloudflare Builds deployment, apply the D1 migrations separately
+   before enabling these settings. Use production or a staging Worker with
+   the scheduled cleanup enabled.
+3. Add `https://your-worker-host/mcp` as a
+   [custom MCP server](https://developers.openai.com/api/docs/guides/custom-mcp-server)
+   with OAuth and dynamic client registration. The stable ChatGPT callback is
+   supported by default. Set `MCP_OAUTH_REDIRECT_URIS` to a space-separated list
+   of exact HTTPS callbacks for other clients. Set
+   `MCP_OAUTH_ALLOW_LOOPBACK=true` for native clients that need a loopback
+   callback. Sign in to GitHub during the connection.
+4. To use private repositories, enable private analysis on the OAuth consent
+   screen, then explicitly allow it for the analysis in chat or in the
+   dashboard. This shares results with the chat client and allows Gemini and
+   Jev to process bounded repository context. See the [privacy policy](privacy.html).
+   The connection uses separate MCP credentials and can be reauthorized when
+   the GitHub grant expires, within eight hours.
+
 ## Cloudflare deployment
 
 This project uses Cloudflare Python Workers (FastAPI), Workers Static Assets, KV for cached public results, and native Worker rate-limit bindings.
@@ -248,7 +297,7 @@ sign-in can work there. This setup leaves Google OAuth settings unchanged.
 Preview service secrets are configured separately in Cloudflare's Previews Base;
 Cost-of-delay assessment requires Preview `GEMINI_API_KEY` and `TYPESAFE_API_KEY` secrets, or caller-supplied headers.
 
-The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. The deployed API only accepts public repositories.
+The `public/` assets are synced from the root HTML files during deployment. Do not add credentials to `.dev.vars`, source files, or commits. Private analysis uses the caller’s verified GitHub authorization.
 
 Check current Cloudflare plan limits and pricing before deployment; repository analysis and AI requests incur provider usage.
 

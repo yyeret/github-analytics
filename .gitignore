@@ -179,3 +179,6 @@ pylock.toml
 release_lag.json
 telemetry_findings.json
 traceability.json
+
+# Generated MCP App asset
+/public/mcp-dashboard.html
