@@ -13,6 +13,7 @@ function dashboard(response) {
   const button = {classList: {add() {}, remove() {}}};
   const providerInputs = {'typesafe-key': {value: ''}, 'gemini-key': {value: ''}};
   const context = vm.createContext({
+    repositoryPreferenceKey: undefined,
     document: {getElementById(id) {
       return providerInputs[id] || (id === 'repo-input' ? {value: 'https://github.com/github/spec-kit'} : button);
     }},

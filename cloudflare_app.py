@@ -137,6 +137,11 @@ def check_same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Request origin could not be verified.")
 
 
+def repository_preference_key(provider: str, account_id: str | int) -> str:
+    digest = hashlib.sha256(str(account_id).encode()).hexdigest()
+    return f'{provider}:{digest}'
+
+
 @app.get("/api/auth/config")
 async def auth_config(request: Request):
     env = environment(request)
@@ -161,10 +166,12 @@ async def issue_nonce(request: Request):
 async def auth_session(request: Request):
     identity = await caller_github(request)
     if identity:
-        return {'signed_in': True, 'provider': 'github', 'login': identity.login}
+        return {'signed_in': True, 'provider': 'github', 'login': identity.login,
+                'account_key': repository_preference_key('github', identity.github_id)}
     try:
         user = await signed_in_user(request)
-        return {"signed_in": True, "email": user["email"]}
+        return {"signed_in": True, "email": user["email"],
+                "account_key": repository_preference_key('google', user['google_sub'])}
     except HTTPException as exc:
         if exc.status_code == 401:
             return {"signed_in": False}
@@ -197,7 +204,8 @@ async def google_login(req: GoogleLoginRequest, request: Request):
     await db.prepare("INSERT INTO sessions (token_hash, google_sub, expires_at) VALUES (?, ?, ?)")\
         .bind(digest, identity["sub"], expires_at).run()
 
-    response = Response(content=json.dumps({"signed_in": True, "email": identity["email"]}),
+    response = Response(content=json.dumps({"signed_in": True, "email": identity["email"],
+                                             "account_key": repository_preference_key('google', identity['sub'])}),
                         media_type="application/json")
     response.set_cookie(SESSION_COOKIE, session, max_age=SESSION_SECONDS, httponly=True,
                         secure=request.url.scheme == "https", samesite="lax", path="/")
@@ -281,10 +289,16 @@ async def caller_github(request):
     return None
 
 
-async def authorize_analysis(request):
+async def authorize_analysis(request, *, expected_account=None):
     identity = await caller_github(request)
-    if not identity and auth_required(request):
-        await signed_in_user(request)
+    user = None
+    if not identity and (auth_required(request) or expected_account is not None):
+        user = await signed_in_user(request)
+    if expected_account is not None:
+        account = (repository_preference_key('github', identity.github_id) if identity
+                   else repository_preference_key('google', user['google_sub']))
+        if expected_account != account:
+            raise HTTPException(409, 'Your signed-in account changed. Reload the page to continue.')
     return identity
 
 
@@ -318,7 +332,8 @@ async def health():
 
 @app.post("/api/analyze")
 async def analyze_repo(req: AnalyzeRequest, request: Request):
-    return await analyze_for_identity(req, request, await authorize_analysis(request))
+    identity = await authorize_analysis(request, expected_account=request.headers.get('X-Analysis-Account'))
+    return await analyze_for_identity(req, request, identity)
 
 
 async def analyze_for_identity(req, request, identity, *, full_dashboard=False):

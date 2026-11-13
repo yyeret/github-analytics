@@ -517,13 +517,13 @@
         autocomplete="off"
         spellcheck="false"
       />
-      <button id="analyze-btn" class="btn btn-primary" type="submit" aria-label="Analyze">
+      <button id="analyze-btn" class="btn btn-primary" type="submit" aria-label="Analyze" disabled>
         <span class="spinner" aria-hidden="true"></span>
         <span class="btn-label">Analyze</span>
       </button>
     </div>
     <a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a>
-    <label class="settings-consent"><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev.</label>
+    <label class="settings-consent"><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev, including when this browser reopens the repository.</label>
     <details>
       <summary>AI assessment API keys (optional)</summary>
       <div class="provider-keys">
@@ -738,27 +738,37 @@
   let chatOpen       = false;
   let charts         = {};
   let authConfig     = {required:false, client_id:''};
+  let repositoryPreferenceKey;
+  let restoredPrivateRepository;
 
   async function configureAuthentication() {
     try {
-      const response = await fetch('/api/auth/config');
-      authConfig = await response.json();
+      const signal = AbortSignal.timeout(12000);
+      const response = await fetch('/api/auth/config', {signal});
+      if (response.status === 404) {
+        document.getElementById('analyze-btn').disabled = false;
+        return;
+      }
+      authConfig = await readApiResponse(response);
       document.getElementById('github-signin').hidden = !authConfig.github_enabled;
       document.getElementById('github-connect').hidden = !authConfig.github_enabled;
       document.getElementById('chat-github-help').hidden = !authConfig.github_enabled;
       document.getElementById('chat-github-unavailable').hidden = authConfig.github_enabled !== false;
-      if (!authConfig.required) return;
-      document.getElementById('login-gate').classList.add('visible');
-      const session = await fetch('/api/auth/session', {credentials:'same-origin'}).then(r => r.json());
+      if (authConfig.required) document.getElementById('login-gate').classList.add('visible');
+      const session = await fetch('/api/auth/session', {credentials:'same-origin', signal}).then(readApiResponse);
       if (session.signed_in) {
-        completeSignIn(session.login || session.email);
+        completeSignIn(session);
+        return;
+      }
+      if (!authConfig.required) {
+        document.getElementById('analyze-btn').disabled = false;
         return;
       }
       if (!authConfig.client_id) {
         document.getElementById('login-error').textContent = authConfig.github_enabled ? '' : 'Sign-in is being configured.';
         return;
       }
-      const nonceResponse = await fetch('/api/auth/nonce', {credentials:'same-origin'});
+      const nonceResponse = await fetch('/api/auth/nonce', {credentials:'same-origin', signal});
       const {nonce} = await nonceResponse.json();
       const script = document.createElement('script');
       script.src = 'https://accounts.google.com/gsi/client';
@@ -770,8 +780,13 @@
       script.onerror = () => document.getElementById('login-error').textContent = 'Could not load Google sign-in. Please try again.';
       document.head.appendChild(script);
     } catch (_) {
-      document.getElementById('login-gate').classList.add('visible');
-      document.getElementById('login-error').textContent = 'Could not check your sign-in status. Refresh the page to try again.';
+      const message = 'Could not check your sign-in status. Refresh the page to try again.';
+      if (authConfig.required) {
+        document.getElementById('login-error').textContent = message;
+      } else {
+        document.getElementById('analyze-btn').disabled = false;
+        showStatus(message, 'error');
+      }
     }
   }
 
@@ -782,13 +797,16 @@
       document.getElementById('login-error').textContent = data.detail || 'Sign-in failed. Please try again.';
       return;
     }
-    completeSignIn(data.email);
+    completeSignIn(data);
   }
 
-  function completeSignIn(email) {
+  function completeSignIn(session) {
     document.getElementById('login-gate').classList.remove('visible');
     document.getElementById('account-actions').hidden = false;
-    document.getElementById('account-email').textContent = email;
+    document.getElementById('account-email').textContent = session.login || session.email;
+    repositoryPreferenceKey = session.account_key;
+    document.getElementById('analyze-btn').disabled = false;
+    if (repositoryPreferenceKey) restoreLastRepository();
   }
 
   async function signOut() {
@@ -799,7 +817,40 @@
   async function deleteAccount() {
     if (!confirm('Delete the saved account and sign out?')) return;
     const response = await fetch('/api/auth/account', {method:'DELETE',credentials:'same-origin'});
-    if (response.ok) window.location.reload();
+    if (response.ok) {
+      try {
+        if (repositoryPreferenceKey) localStorage.removeItem(lastRepositoryStorageKey(repositoryPreferenceKey));
+      } catch {
+        // Storage may be disabled for this browser.
+      }
+      window.location.reload();
+    }
+  }
+
+  function lastRepositoryStorageKey(accountKey) {
+    return `github-flow-analytics:last-repository:${accountKey}`;
+  }
+
+  function restoreLastRepository() {
+    const input = document.getElementById('repo-input');
+    if (input.value || document.getElementById('analyze-btn').disabled) return;
+    let saved;
+    try {
+      saved = JSON.parse(localStorage.getItem(lastRepositoryStorageKey(repositoryPreferenceKey)));
+    } catch {
+      return;
+    }
+    if (typeof saved?.repo !== 'string' || !saved.repo || typeof saved.private !== 'boolean') return;
+    analyzeRepo(saved);
+  }
+
+  function rememberRepository(key, data) {
+    if (!key) return;
+    try {
+      localStorage.setItem(lastRepositoryStorageKey(key), JSON.stringify({repo: data.repo, private: data.repository_visibility === 'private'}));
+    } catch {
+      // Analysis still works when browser storage is unavailable.
+    }
   }
 
   // ── Analyze Repo ───────────────────────────────────────────────────
@@ -816,37 +867,53 @@
     return data;
   }
 
-  async function analyzeRepo() {
-    const input = document.getElementById('repo-input').value.trim();
-    if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
-
+  async function analyzeRepo(savedRepository) {
+    const repoInput = document.getElementById('repo-input');
+    const input = savedRepository?.repo ?? repoInput.value.trim();
     const btn = document.getElementById('analyze-btn');
     if (btn.disabled) return;
+    if (!input) { showStatus('Please enter a repository URL.', 'error'); return; }
+    const preferenceKey = repositoryPreferenceKey;
     btn.disabled = true;
     btn.classList.add('loading');
     clearStatus();
+    const loadingMessage = savedRepository ? 'Reopening your last repository…' : 'Fetching repository data… this may take 30–60 seconds';
     if (document.getElementById('settings-dialog').open) {
-      showStatus('Fetching repository data… this may take 30–60 seconds');
+      showStatus(loadingMessage);
     } else {
-      showLoading('Fetching repository data… this may take 30–60 seconds');
+      showLoading(loadingMessage);
     }
 
+    let response;
     try {
       const headers = {'Content-Type':'application/json'};
-      for (const [id, header] of [['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
-        const key = document.getElementById(id).value.trim();
-        if (key) headers[header] = key;
+      if (preferenceKey) headers['X-Analysis-Account'] = preferenceKey;
+      if (!savedRepository) {
+        for (const [id, header] of [['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
+          const key = document.getElementById(id).value.trim();
+          if (key) headers[header] = key;
+        }
       }
-      const res = await fetch('/api/analyze', {
+      const consentChecked = document.getElementById('allow-private').checked;
+      const allowPrivate = savedRepository?.private
+        ?? (consentChecked && (!restoredPrivateRepository || input === restoredPrivateRepository));
+      response = await fetch('/api/analyze', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ repo_url: input, force_refresh: false, allow_private: document.getElementById('allow-private').checked })
+        body: JSON.stringify({ repo_url: input, force_refresh: false, allow_private: allowPrivate })
       });
-      const data = await readApiResponse(res);
+      const data = await readApiResponse(response);
       renderDashboard(data);
       currentMetrics = data;
       currentRepo = data.repo;
       chatHistory = [];
+      if (savedRepository) {
+        repoInput.value = data.repo;
+        const isPrivate = data.repository_visibility === 'private';
+        restoredPrivateRepository = isPrivate ? data.repo : undefined;
+        document.getElementById('allow-private').checked = isPrivate;
+      }
+      rememberRepository(preferenceKey, data);
 
       const settings = document.getElementById('settings-dialog');
       const repoSetup = document.getElementById('repo-setup');
@@ -873,7 +940,10 @@
       addChatMessage('assistant', `🎉 **Repository loaded: \`${data.repo}\`**\n\nAsk me about cycle time, aging work, or throughput. Review timing and batch size are not yet available from this hosted data source.`);
 
     } catch(e) {
-      showStatus(`Error: ${e.message}`, 'error');
+      if (savedRepository && response && ![401, 403, 409].includes(response.status) && !repoInput.value) {
+        repoInput.value = input;
+      }
+      showStatus(savedRepository ? `Could not reopen your last repository. ${e.message}` : `Error: ${e.message}`, 'error');
     } finally {
       btn.disabled = false;
       btn.classList.remove('loading');
@@ -1655,6 +1725,11 @@
       document.getElementById('repo-input').value = r;
     }
   })();
+  document.getElementById('repo-input').addEventListener('input', () => {
+    if (!restoredPrivateRepository) return;
+    document.getElementById('allow-private').checked = false;
+    restoredPrivateRepository = undefined;
+  });
   configureAuthentication();
 </script>
 </body>

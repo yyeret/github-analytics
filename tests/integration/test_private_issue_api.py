@@ -66,6 +66,32 @@ def test_private_chat_prompt_preserves_visibility():
     assert 'public repository metrics' not in prompt
 
 
+def test_repository_preference_key_follows_the_github_account(monkeypatch):
+    client, _, _, _ = setup(monkeypatch)
+    first = client.get('/api/auth/session', headers={'Authorization': 'Bearer caller-a'}).json()
+    second = client.get('/api/auth/session', headers={'Authorization': 'Bearer caller-b'}).json()
+    assert first['login'] == second['login']
+    assert first['account_key'] != second['account_key']
+
+    async def renamed(*args, **kwargs):
+        return github_auth.GitHubIdentity(1, 'renamed', 'new-token')
+
+    monkeypatch.setattr(github_auth, 'authenticate', renamed)
+    updated = client.get('/api/auth/session', headers={'Authorization': 'Bearer new-token'}).json()
+    assert updated['account_key'] == first['account_key']
+    assert 'account_key' not in client.get('/api/auth/session').json()
+
+
+def test_automatic_restore_rejects_a_changed_account_before_reading_the_repo(monkeypatch):
+    client, _, _, seen = setup(monkeypatch)
+    saved_account = client.get('/api/auth/session', headers={'Authorization': 'Bearer caller-a'}).json()['account_key']
+    monkeypatch.setattr(hosted, 'collect_public_data', lambda *_: pytest.fail('repository data collected'))
+    response = client.post('/api/analyze', headers={'Authorization': 'Bearer caller-b',
+        'X-Analysis-Account': saved_account}, json={'repo_url': 'o/r', 'allow_private': True})
+    assert response.status_code == 409
+    assert not seen
+
+
 def test_private_pr_cache_is_identity_scoped_and_chat_rechecks_access(monkeypatch):
     client, env, cache, _ = setup(monkeypatch)
     async def collect(repo, token):
@@ -77,7 +103,9 @@ def test_private_pr_cache_is_identity_scoped_and_chat_rechecks_access(monkeypatc
     monkeypatch.setattr(hosted, 'collect_public_data', collect)
     monkeypatch.setattr(hosted, 'compute_flow_metrics', lambda raw: {'repo': 'o/r', 'recent_stats': {'total': 1}})
     monkeypatch.setattr(hosted, 'assess_product_value', assess)
-    response = client.post('/api/analyze', headers={'Authorization': 'Bearer caller-a'}, json={'repo_url': 'o/r', 'allow_private': True})
+    account = client.get('/api/auth/session', headers={'Authorization': 'Bearer caller-a'}).json()['account_key']
+    response = client.post('/api/analyze', headers={'Authorization': 'Bearer caller-a', 'X-Analysis-Account': account},
+        json={'repo_url': 'o/r', 'allow_private': True})
     assert response.status_code == 200
     result = response.json()
     assert result['analysis_id'] and result['repository_visibility'] == 'private'
