@@ -355,20 +355,13 @@ def _compute_lifecycle_cfd(issues, samples, repo, history_start):
 _PROJECT_PLANNING_HORIZONS = {"Backlog", "Next", "Next+1"}
 
 
-def _project_stage(status, collapse_horizons):
-    if collapse_horizons and status in _PROJECT_PLANNING_HORIZONS:
-        return "Unstarted"
-    return status or None
-
-
 def _project_lifecycle_cfd(issues, history, window_start):
     if history.get("status") != "available":
         return None
 
     now = _parse(history["captured_at"])
     project_id = history["id"]
-    collapse_horizons = _PROJECT_PLANNING_HORIZONS.issubset(history["options"])
-    intervals = {_project_stage(name, collapse_horizons): [] for name in history["options"]}
+    intervals = {name: [] for name in history["options"]}
     sampled = {issue["number"] for issue in issues if "number" in issue}
     timeline_truncated = 0
     issue_spans = []
@@ -385,8 +378,7 @@ def _project_lifecycle_cfd(issues, history, window_start):
             at = _parse(event.get("createdAt"))
             if at is None or at > now:
                 continue
-            stage = _project_stage(event.get("status"), collapse_horizons)
-            changes.append((at, stage))
+            changes.append((at, event.get("status")))
         changes.sort(key=lambda change: change[0])
         spans = []
         for i, (start, stage) in enumerate(changes):
@@ -406,9 +398,18 @@ def _project_lifecycle_cfd(issues, history, window_start):
     midnight = datetime.datetime.combine(now.date(), datetime.time.min)
     samples = [midnight - datetime.timedelta(days=offset - 1, seconds=1)
                for offset in range(days - days % step, 0, -step)] + [now]
+    collapse_horizons = ("Unstarted" not in intervals
+                         and _PROJECT_PLANNING_HORIZONS.issubset(history["options"]))
+    if collapse_horizons:
+        grouped = {}
+        for stage, spans in intervals.items():
+            name = "Unstarted" if stage in _PROJECT_PLANNING_HORIZONS else stage
+            grouped.setdefault(name, []).extend(spans)
+        intervals = grouped
+
     series = {stage: count_intervals(spans, samples) for stage, spans in intervals.items() if spans}
     series = {stage: counts for stage, counts in series.items() if any(counts)}
-    if not any(stage != "Unstarted" for stage in series) or sum(any(counts) for counts in zip(*series.values())) < 2:
+    if (collapse_horizons and set(series) == {"Unstarted"}) or sum(any(counts) for counts in zip(*series.values())) < 2:
         return None
     observed = sum(any(count_intervals(spans, samples)) for spans in issue_spans)
     return {

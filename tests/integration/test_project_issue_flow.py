@@ -12,7 +12,8 @@ def event(kind, date, status=None, board_id='board'):
 
 
 @freeze_time('2026-11-12T12:00:00Z')
-@pytest.mark.parametrize('scenario', ['history', 'unavailable', 'transport-error', 'visibility-change', 'ambiguous', 'planning-only'])
+@pytest.mark.parametrize('scenario', ['history', 'unavailable', 'transport-error', 'visibility-change', 'ambiguous', 'planning-only',
+                                      'custom-unstarted', 'custom-unstarted-with-horizons'])
 def test_private_analysis_uses_only_the_linked_boards_observed_history(monkeypatch, scenario):
     client, _, cache, _ = setup(monkeypatch)
 
@@ -36,6 +37,10 @@ def test_private_analysis_uses_only_the_linked_boards_observed_history(monkeypat
         histories = {n: [e for e in events if e['status'] not in ('Verify', 'Build')]
                      for n, events in histories.items()}
 
+    custom_unstarted = scenario.startswith('custom-unstarted')
+    if custom_unstarted:
+        histories = {1: [event(change, 5, 'Unstarted')], 2: [], 3: [], 4: []}
+
     async def upstream(url, *, headers, body, **kwargs):
         assert url == 'https://api.github.com/graphql'
         assert headers['Authorization'] == 'Bearer caller-a'
@@ -46,7 +51,12 @@ def test_private_analysis_uses_only_the_linked_boards_observed_history(monkeypat
         if 'projectsV2' in body['query']:
             if scenario == 'unavailable':
                 return 200, {}, {'errors': [{'message': 'GitHub project scope required'}]}
-            options = [{'name': s} for s in ('Backlog', 'Next+1', 'Next', 'Build', 'Verify')]
+            statuses = ['Backlog', 'Next+1', 'Next', 'Build', 'Verify']
+            if scenario == 'custom-unstarted':
+                statuses = ['Unstarted', 'Doing']
+            elif custom_unstarted:
+                statuses.append('Unstarted')
+            options = [{'name': status} for status in statuses]
             board = {'id': 'board', 'title': 'Development', 'closed': False, 'field': {'options': options}}
             repo['projectsV2'] = {'totalCount': 2 if scenario == 'ambiguous' else 1, 'nodes': [board]}
         else:
@@ -70,6 +80,13 @@ def test_private_analysis_uses_only_the_linked_boards_observed_history(monkeypat
     assert all(':private:1:' in key for key in cache.stored)
     issues = response.json()['issues']
     assert issues['open_now'] == 4 and len(issues['weekly']) == 52
+    if custom_unstarted:
+        cfd = issues['lifecycle_cfd']
+        assert cfd is not None
+        assert cfd['stages'] == ['Unstarted']
+        assert not cfd['coverage']['planning_horizons_grouped']
+        assert cfd['points'][-1]['counts'] == {'Unstarted': 1}
+        return
     if scenario != 'history':
         assert issues['lifecycle_cfd'] is None
         expected = {'planning-only': 'insufficient', 'transport-error': 'unavailable', 'visibility-change': 'unavailable'}
