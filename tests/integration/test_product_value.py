@@ -483,6 +483,23 @@ def test_non_truncation_errors_are_specific_safe_and_not_retried(monkeypatch, se
     assert event["error_code"] == code and event["stage"] == "product_context"
 
 
+def test_context_retries_gemini_503_once_at_the_same_budget(monkeypatch, services):
+    fake = services()
+    budgets = []
+
+    async def upstream(url, **kwargs):
+        if 'generativelanguage' in url:
+            budgets.append(kwargs['body']['generationConfig']['maxOutputTokens'])
+            if len(budgets) == 1:
+                return 503, {}, {'error': 'temporary capacity'}
+        return await fake(url, **kwargs)
+
+    monkeypatch.setattr(product_value, 'request_json', upstream)
+    result = run()
+    assert result['status'] == 'ok' and result['assessed'] == 3
+    assert budgets == [4096, 4096]
+
+
 def test_context_retry_shares_one_deadline(monkeypatch, services, caplog):
     fake = services()
     calls = []

@@ -174,8 +174,9 @@ async def fetch_product_sources(repo, token=None, *, allow_private=False):
 
 
 class GenerationError(ValueError):
-    def __init__(self, code):
+    def __init__(self, code, http_status=None):
         self.code = code
+        self.http_status = http_status
         super().__init__(code)
 
 
@@ -219,7 +220,7 @@ async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None,
                                             headers={"x-goog-api-key": key}, body=body)
         info["http_status"] = status
         if status < 200 or status >= 300:
-            raise GenerationError("provider_http_error")
+            raise GenerationError("provider_http_error", http_status=status)
         fallback = "invalid_response"
         usage = payload.get("usageMetadata", {})
         if isinstance(usage, dict):
@@ -243,6 +244,8 @@ async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None,
         raise
     except Exception as exc:
         code = _error_code(exc, fallback)
+        if isinstance(exc, GenerationError):
+            raise
         raise GenerationError(code) from None
     finally:
         _log_generation("gemini_generation", info, started, code)
@@ -250,12 +253,19 @@ async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None,
 
 async def generate_context(key, prompt, diagnostics, *, schema=None, validate=None):
     async def attempts():
-        for attempt, budget in enumerate(CONTEXT_TOKEN_BUDGETS, 1):
+        budget, retry_budget = CONTEXT_TOKEN_BUDGETS
+        for attempt in (1, 2):
             try:
                 context = await gemini_json(key, prompt, schema or CONTEXT_SCHEMA, budget,
                                             diagnostics=diagnostics, attempt=attempt)
             except GenerationError as exc:
-                if exc.code != "output_truncated" or attempt == len(CONTEXT_TOKEN_BUDGETS):
+                if attempt == 2:
+                    raise
+                if exc.http_status == 503:
+                    await asyncio.sleep(1)
+                elif exc.code == "output_truncated":
+                    budget = retry_budget
+                else:
                     raise
                 continue
             if validate is None:
@@ -265,8 +275,9 @@ async def generate_context(key, prompt, diagnostics, *, schema=None, validate=No
             except ValueError:
                 log_event(logging.WARNING, "product_context_rejected", **diagnostics, attempt=attempt,
                           error_code="invalid_response", elapsed_ms=0)
-                if attempt == len(CONTEXT_TOKEN_BUDGETS):
+                if attempt == 2:
                     raise GenerationError("invalid_response") from None
+                budget = retry_budget
     return await asyncio.wait_for(attempts(), CONTEXT_TIMEOUT)
 
 def select_prs(data, value_classification, max_prs=DEFAULT_MAX_PRS):
@@ -422,22 +433,23 @@ async def _assess_item(key, context, item, pr, *, diagnostics=None, issue=False)
         _log_generation("jev_classification", info, started, code)
 
 async def assess_product_value(repo, data, key, token=None, max_prs=DEFAULT_MAX_PRS, *, jev_key=None,
-                               allow_private=False, owner_context=None):
+                               allow_private=False, owner_context=None, load_sources=None):
     return await _assess_value(repo, data, key, token, max_prs, jev_key=jev_key,
-                               allow_private=allow_private, owner_context=owner_context)
+                               allow_private=allow_private, owner_context=owner_context, load_sources=load_sources)
 
 
 async def assess_issue_value(repo, issues, key, token=None, *, jev_key=None, max_issues=20,
-                             allow_private=False, owner_context=None, owner_profile=None):
+                             allow_private=False, owner_context=None, owner_profile=None, load_sources=None):
     """Rank proposed contribution independently of merged PRs, effort or execution permission."""
     if type(max_issues) is not int or not 1 <= max_issues <= 50:
         raise ValueError("max_issues must be between 1 and 50")
     return await _assess_value(repo, issues, key, token, max_issues, jev_key=jev_key,
-                               allow_private=allow_private, owner_context=owner_context, owner_profile=owner_profile, issue=True)
+                               allow_private=allow_private, owner_context=owner_context, owner_profile=owner_profile,
+                               load_sources=load_sources, issue=True)
 
 
 async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_private=False,
-                        owner_context=None, owner_profile=None, issue=False):
+                        owner_context=None, owner_profile=None, load_sources=None, issue=False):
     """Research repository value drivers once, then judge each PR's intended contribution."""
     started = time.monotonic()
     diagnostics = {"analysis_id": uuid.uuid4().hex, **({} if allow_private else {"repo": repo})}
@@ -468,8 +480,11 @@ async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_priva
                 "research": [{key: source[key] for key in ("id", "kind", "path", "url", "truncated")} for source in owner_sources],
                 "limitations": limitations + ["Owner-supplied profile; repository strategy was not regenerated or independently verified in this request."]}
         else:
-            sources = (await fetch_product_sources(repo, token, allow_private=allow_private)
-                       if allow_private else await fetch_product_sources(repo, token))
+            if load_sources is not None:
+                sources = await load_sources()
+            else:
+                sources = (await fetch_product_sources(repo, token, allow_private=allow_private)
+                           if allow_private else await fetch_product_sources(repo, token))
             result["sources"] = {"description": bool(sources["description"]), "readme": bool(sources["readme"]),
                                  "readme_truncated": sources["readme_truncated"]}
             log_event(logging.INFO, "product_sources_loaded", **diagnostics, stage=stage,

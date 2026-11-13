@@ -152,9 +152,11 @@ hosted results cache for six hours, shortened to ten minutes after assessment
 failures or unavailable provider configuration. Force-refresh after changing deployment keys.
 Each caller-key analysis starts fresh provider requests; avoid concurrent retries.
 
-Public README and research content are fetched
-without a GitHub token so a visibility transition cannot expose private content.
-Explicit private requests instead use the caller's verified GitHub credential for source reads.
+Public web and CLI research fetch repository content anonymously. The MCP app uses
+its read-only GitHub connection for public issue selection and initial repository
+sources, and checks repository identity and visibility in each GraphQL response
+before using its contents. Additional public research reads remain anonymous.
+Explicit private requests use the caller's verified GitHub credential for source reads.
 A refused or rate-limited source is omitted with a collection limitation. Review inferred context and scores
 before using them to prioritize work. Assessments have a 90-second overall budget;
 completed PR scores are retained and unfinished items are marked failed on expiry.
@@ -200,7 +202,9 @@ Private PR snapshots use GitHub user ID plus hashed repository identity and rand
 Planning uses a 768-token output budget. Synthesis starts with 4,096 tokens and
 asks for under 700 words. A `MAX_TOKENS` synthesis finish or a parsed profile rejected
 by context validation triggers one fresh attempt with 8,192 tokens (at most two
-synthesis attempts total). Planning, optional source collection and synthesis share a
+synthesis attempts total). A Gemini HTTP 503 during synthesis gets one retry at the
+same budget after one second, within the same two-attempt limit. Planning, optional
+source collection and synthesis share a
 45-second deadline. Optional research has a 15-second total allowance, preserving
 the remaining time for synthesis and returning already collected sources when
 optional calls expire; each GitHub research request is limited to 8 seconds and
