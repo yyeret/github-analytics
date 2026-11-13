@@ -1529,11 +1529,16 @@
   function showStatus(msg, type='info') {
     clearStatus();
     const inSettings = document.getElementById('settings-dialog').open;
-    const bar = document.getElementById(inSettings ? 'settings-status' : 'status-bar');
-    bar.textContent = msg;
-    bar.className = `status-bar ${type}`;
-    bar.style.display = 'block';
-    if (type === 'success') statusTimeout = setTimeout(() => { bar.style.display='none'; }, 5000);
+    const statusIds = inSettings && type === 'info'
+      ? ['status-bar', 'settings-status']
+      : [inSettings ? 'settings-status' : 'status-bar'];
+    for (const id of statusIds) {
+      const bar = document.getElementById(id);
+      bar.textContent = msg;
+      bar.className = `status-bar ${type}`;
+      bar.style.display = 'block';
+    }
+    if (type === 'success') statusTimeout = setTimeout(clearStatus, 5000);
   }
   function clearStatus() {
     clearTimeout(statusTimeout);
