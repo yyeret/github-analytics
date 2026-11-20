@@ -8,7 +8,7 @@ from functools import partial
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -340,6 +340,58 @@ def session_analysis_key(repo, request, analysis_id):
 @app.get("/api/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/api/github/repos")
+async def list_active_private_repos(request: Request, limit: int = Query(default=12, ge=1, le=30)):
+    identity = await github_auth.authenticate(request)
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {identity.token}",
+        "User-Agent": "github-flow-analytics/0.1",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    url = (
+        "https://api.github.com/user/repos"
+        "?visibility=private&affiliation=owner,collaborator,organization_member"
+        "&sort=pushed&direction=desc&per_page=30"
+    )
+    try:
+        status, _, payload = await asyncio.wait_for(request_json(url, headers=headers, timeout=10), 10)
+    except (TimeoutError, httpx.HTTPError) as exc:
+        raise HTTPException(502, "GitHub could not be reached. Please try again.") from exc
+    if status == 401:
+        await github_auth.delete_session(request)
+        raise HTTPException(401, "Your GitHub credential expired or was revoked. Sign in again.")
+    if status == 403:
+        raise HTTPException(429, "GitHub is currently refusing repository list requests. Please try again later.")
+    if status != 200 or not isinstance(payload, list):
+        raise HTTPException(502, "GitHub could not be reached. Please try again.")
+    repos = []
+    for item in payload:
+        if not isinstance(item, dict) or item.get("private") is not True:
+            continue
+        if item.get("archived") or item.get("disabled"):
+            continue
+        full_name = item.get("full_name")
+        if not isinstance(full_name, str):
+            continue
+        try:
+            canonical = parse_repo(full_name)
+        except HTTPException:
+            continue
+        description = item.get("description")
+        cleaned_desc = description.strip()[:160] if isinstance(description, str) and description.strip() else None
+        repos.append({
+            "full_name": canonical,
+            "description": cleaned_desc,
+            "pushed_at": item.get("pushed_at") if isinstance(item.get("pushed_at"), str) else None,
+            "language": item.get("language") if isinstance(item.get("language"), str) else None,
+            "open_issues_count": item.get("open_issues_count") if type(item.get("open_issues_count")) is int else 0,
+        })
+        if len(repos) >= limit:
+            break
+    return {"login": identity.login, "repos": repos}
 
 
 @app.post("/api/analyze")

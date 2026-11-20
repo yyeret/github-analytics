@@ -122,6 +122,25 @@
     #repo-setup a{color:#c4b5fd;}
     #repo-setup details{color:var(--text-dim);font-size:.875rem;}
     #repo-setup summary{cursor:pointer;}
+    #private-repos-section:not([hidden]){display:grid;gap:.5rem;max-width:600px;}
+    .private-repos-header{display:flex;justify-content:space-between;align-items:center;gap:.75rem;font-size:.82rem;color:var(--text-dim);}
+    .private-repos-title{font-weight:600;color:var(--text-dim);}
+    .btn-link{background:none;border:none;color:#c4b5fd;font:inherit;font-size:.8rem;cursor:pointer;padding:0;}
+    .btn-link:hover{text-decoration:underline;}
+    .private-repos-status{font-size:.82rem;color:var(--text-muted);}
+    .private-repos-status:empty{display:none;}
+    .private-repos-list{display:flex;flex-wrap:wrap;gap:.5rem;}
+    .repo-pill{
+      display:inline-flex;align-items:center;gap:.45rem;
+      padding:.45rem .75rem;max-width:100%;
+      background:var(--surface);border:1px solid var(--border);border-radius:10px;
+      color:var(--text);font-family:inherit;font-size:.82rem;text-align:left;
+      cursor:pointer;transition:border-color .15s,background .15s,transform .15s;
+    }
+    .repo-pill:hover{border-color:var(--violet);background:rgba(139,92,246,.12);transform:translateY(-1px);}
+    .repo-pill:focus-visible{outline:2px solid var(--violet);outline-offset:2px;}
+    .repo-pill-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .repo-pill-meta{font-size:.74rem;color:var(--text-muted);white-space:nowrap;}
     .provider-keys{display:grid;gap:.5rem;margin-top:.75rem;}
     .provider-keys input{max-width:100%;padding:.5rem;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px;}
 
@@ -523,6 +542,14 @@
       </button>
     </div>
     <a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a>
+    <section id="private-repos-section" aria-label="Active private repositories" hidden>
+      <div class="private-repos-header">
+        <span class="private-repos-title">Most active private repositories</span>
+        <button id="private-repos-refresh" class="btn-link" type="button" onclick="loadPrivateRepositories()">Refresh</button>
+      </div>
+      <div id="private-repos-status" class="private-repos-status" role="status"></div>
+      <div id="private-repos-list" class="private-repos-list"></div>
+    </section>
     <label class="settings-consent"><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev, including when this browser reopens the repository.</label>
     <details>
       <summary>AI assessment API keys (optional)</summary>
@@ -806,7 +833,75 @@
     document.getElementById('account-email').textContent = session.login || session.email;
     repositoryPreferenceKey = session.account_key;
     document.getElementById('analyze-btn').disabled = false;
+    if (session.provider === 'github') {
+      document.getElementById('github-connect').hidden = true;
+      loadPrivateRepositories();
+    }
     if (repositoryPreferenceKey) restoreLastRepository();
+  }
+
+  function formatRelativeActivity(isoTimestamp) {
+    if (!isoTimestamp) return '';
+    const pushedMs = Date.parse(isoTimestamp);
+    if (!Number.isFinite(pushedMs)) return '';
+    const diffHours = Math.max(0, Math.floor((Date.now() - pushedMs) / 3600000));
+    if (diffHours < 1) return '<1h ago';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays <= 30) return `${diffDays}d ago`;
+    return new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric'}).format(new Date(pushedMs));
+  }
+
+  async function loadPrivateRepositories() {
+    const section = document.getElementById('private-repos-section');
+    const statusEl = document.getElementById('private-repos-status');
+    const listEl = document.getElementById('private-repos-list');
+    section.hidden = false;
+    statusEl.textContent = 'Loading your most active private repositories…';
+    listEl.replaceChildren();
+    try {
+      const response = await fetch('/api/github/repos', {credentials: 'same-origin'});
+      const data = await readApiResponse(response);
+      const repos = Array.isArray(data?.repos) ? data.repos : [];
+      if (!repos.length) {
+        statusEl.textContent = 'No active private repositories found for this GitHub account.';
+        return;
+      }
+      statusEl.textContent = '';
+      for (const repo of repos) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'repo-pill';
+        if (repo.description) btn.title = repo.description;
+        const nameEl = document.createElement('span');
+        nameEl.className = 'repo-pill-name';
+        nameEl.textContent = repo.full_name;
+        const metaParts = [formatRelativeActivity(repo.pushed_at), repo.language].filter(Boolean);
+        btn.appendChild(nameEl);
+        if (metaParts.length) {
+          const metaEl = document.createElement('span');
+          metaEl.className = 'repo-pill-meta';
+          metaEl.textContent = metaParts.join(' · ');
+          btn.appendChild(metaEl);
+        }
+        btn.addEventListener('click', () => selectPrivateRepository(repo.full_name));
+        listEl.appendChild(btn);
+      }
+    } catch (e) {
+      statusEl.textContent = e.message || 'Could not load private repositories.';
+    }
+  }
+
+  function selectPrivateRepository(fullName) {
+    document.getElementById('repo-input').value = fullName;
+    restoredPrivateRepository = undefined;
+    const consent = document.getElementById('allow-private');
+    if (consent.checked) {
+      analyzeRepo();
+    } else {
+      consent.focus();
+      showStatus(`Selected ${fullName}. Check "Allow private analysis" and click Analyze.`, 'info');
+    }
   }
 
   async function signOut() {
