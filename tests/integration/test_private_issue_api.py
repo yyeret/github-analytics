@@ -236,3 +236,68 @@ def test_google_owned_snapshot_remains_readable_after_connecting_github(monkeypa
         'repo': 'o/r', 'analysis_id': 'original', 'message': 'Next?'})
     assert response.status_code == 200
     assert response.json()['reply'] == 'Throughput rose.'
+
+
+def test_auth_config_exposes_valid_github_app_install_url(monkeypatch):
+    client, env, _, _ = setup(monkeypatch)
+    assert client.get('/api/auth/config').json()['github_app_install_url'] == ''
+
+    env.MCP_GITHUB_APP_SLUG = 'flowy-analytics'
+    assert client.get('/api/auth/config').json()['github_app_install_url'] == (
+        'https://github.com/apps/flowy-analytics/installations/new'
+    )
+
+    env.GITHUB_APP_SLUG = 'browser-app'
+    assert client.get('/api/auth/config').json()['github_app_install_url'] == (
+        'https://github.com/apps/browser-app/installations/new'
+    )
+
+    env.GITHUB_APP_SLUG = 'bad/slug'
+    assert client.get('/api/auth/config').json()['github_app_install_url'] == ''
+
+
+def test_repo_404_distinguishes_missing_github_identity_from_app_installation(monkeypatch):
+    client, _, _, _ = setup(monkeypatch)
+    async def missing(*_, **__): return 404, {}, {'message': 'Not Found'}
+    monkeypatch.setattr(hosted, 'request_json', missing)
+
+    unauthenticated = client.post('/api/analyze', json={'repo_url': 'o/private-repo', 'allow_private': True})
+    assert unauthenticated.status_code == 404
+    assert 'connect GitHub' in unauthenticated.json()['detail']
+    assert 'connected GitHub identity' not in unauthenticated.json()['detail']
+
+    authenticated = client.post('/api/analyze', headers={'Authorization': 'Bearer caller-a'},
+                                json={'repo_url': 'o/private-repo', 'allow_private': True})
+    assert authenticated.status_code == 404
+    assert '@owner' in authenticated.json()['detail']
+    assert 'GitHub App' in authenticated.json()['detail']
+
+
+def test_github_repos_endpoint_lists_installed_repositories_for_connected_identity(monkeypatch):
+    client, env, _, _ = setup(monkeypatch)
+    env.MCP_GITHUB_APP_SLUG = 'flowy-analytics'
+
+    async def github_installations(url, **kwargs):
+        assert kwargs['headers']['Authorization'] == 'Bearer caller-a'
+        if url.endswith('/user/installations?per_page=100'):
+            return 200, {}, {'installations': [{'id': 99}]}
+        if url.endswith('/user/installations/99/repositories?per_page=100'):
+            return 200, {}, {
+                'total_count': 2,
+                'repositories': [
+                    {'full_name': 'owner/public-repo', 'private': False, 'pushed_at': '2026-11-10T00:00:00Z'},
+                    {'full_name': 'owner/private-repo', 'private': True, 'pushed_at': '2026-11-19T00:00:00Z'},
+                ],
+            }
+        raise AssertionError(f'Unexpected URL: {url}')
+
+    monkeypatch.setattr(hosted, 'request_json', github_installations)
+    assert client.get('/api/github/repos').status_code == 401
+    response = client.get('/api/github/repos', headers={'Authorization': 'Bearer caller-a'})
+    assert response.status_code == 200
+    body = response.json()
+    assert body['login'] == 'owner'
+    assert body['source'] == 'github_app'
+    assert body['installation_count'] == 1
+    assert body['install_url'] == 'https://github.com/apps/flowy-analytics/installations/new'
+    assert [r['full_name'] for r in body['repositories']] == ['owner/private-repo', 'owner/public-repo']

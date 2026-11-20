@@ -120,6 +120,9 @@
     }
     .btn-ghost:hover{border-color:var(--violet);color:var(--text);}
     #repo-setup a{color:#c4b5fd;}
+    .github-access-bar:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:.4rem 1rem;font-size:.875rem;color:var(--text-dim);}
+    #github-status{color:#6ee7b7;font-weight:500;}
+    #github-repos-summary{color:var(--text-dim);}
     #repo-setup details{color:var(--text-dim);font-size:.875rem;}
     #repo-setup summary{cursor:pointer;}
     .provider-keys{display:grid;gap:.5rem;margin-top:.75rem;}
@@ -512,17 +515,24 @@
       <input
         id="repo-input"
         type="text"
+        list="accessible-repos"
         aria-label="GitHub repository URL"
         placeholder="github.com/owner/repo or owner/repo"
         autocomplete="off"
         spellcheck="false"
       />
+      <datalist id="accessible-repos"></datalist>
       <button id="analyze-btn" class="btn btn-primary" type="submit" aria-label="Analyze" disabled>
         <span class="spinner" aria-hidden="true"></span>
         <span class="btn-label">Analyze</span>
       </button>
     </div>
-    <a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a>
+    <div id="github-access-bar" class="github-access-bar" hidden>
+      <span id="github-status" hidden></span>
+      <a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a>
+      <span id="github-repos-summary" hidden></span>
+      <a id="github-app-install" href="#" target="_blank" rel="noopener" hidden>Manage repository access (GitHub App)</a>
+    </div>
     <label class="settings-consent"><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev, including when this browser reopens the repository.</label>
     <details>
       <summary>AI assessment API keys (optional)</summary>
@@ -741,6 +751,52 @@
   let repositoryPreferenceKey;
   let restoredPrivateRepository;
 
+  function updateGitHubAccessUI(session) {
+    const bar = document.getElementById('github-access-bar');
+    const status = document.getElementById('github-status');
+    const connect = document.getElementById('github-connect');
+    const install = document.getElementById('github-app-install');
+    const enabled = Boolean(authConfig.github_enabled);
+    bar.hidden = !enabled;
+    if (!enabled) return;
+    const isGitHub = session?.provider === 'github' && Boolean(session.login);
+    status.hidden = !isGitHub;
+    status.textContent = isGitHub ? `Connected to GitHub as @${session.login}` : '';
+    connect.hidden = isGitHub;
+    const installUrl = typeof authConfig.github_app_install_url === 'string' ? authConfig.github_app_install_url : '';
+    install.hidden = !installUrl;
+    if (installUrl) install.href = installUrl;
+  }
+
+  async function loadAccessibleRepositories() {
+    const summaryEl = document.getElementById('github-repos-summary');
+    const datalist = document.getElementById('accessible-repos');
+    if (!summaryEl || !datalist) return;
+    try {
+      const response = await fetch('/api/github/repos', {credentials:'same-origin', signal: AbortSignal.timeout(12000)});
+      if (!response.ok) return;
+      const data = await response.json();
+      const repos = Array.isArray(data?.repositories) ? data.repositories : [];
+      datalist.replaceChildren(...repos.map(repo => {
+        const option = document.createElement('option');
+        option.value = repo.full_name;
+        option.label = repo.private ? `${repo.full_name} (private)` : repo.full_name;
+        return option;
+      }));
+      const privateCount = repos.filter(repo => repo.private).length;
+      if (repos.length === 0) {
+        summaryEl.textContent = '0 repositories granted to GitHub App';
+      } else {
+        const suffix = data.truncated ? '+' : '';
+        summaryEl.textContent = `${repos.length}${suffix} accessible ${repos.length === 1 ? 'repo' : 'repos'}`
+          + (privateCount ? ` (${privateCount} private)` : '');
+      }
+      summaryEl.hidden = false;
+    } catch {
+      // Non-fatal: manual repository entry still works.
+    }
+  }
+
   async function configureAuthentication() {
     try {
       const signal = AbortSignal.timeout(12000);
@@ -751,7 +807,7 @@
       }
       authConfig = await readApiResponse(response);
       document.getElementById('github-signin').hidden = !authConfig.github_enabled;
-      document.getElementById('github-connect').hidden = !authConfig.github_enabled;
+      updateGitHubAccessUI(null);
       document.getElementById('chat-github-help').hidden = !authConfig.github_enabled;
       document.getElementById('chat-github-unavailable').hidden = authConfig.github_enabled !== false;
       if (authConfig.required) document.getElementById('login-gate').classList.add('visible');
@@ -804,8 +860,10 @@
     document.getElementById('login-gate').classList.remove('visible');
     document.getElementById('account-actions').hidden = false;
     document.getElementById('account-email').textContent = session.login || session.email;
+    updateGitHubAccessUI(session);
     repositoryPreferenceKey = session.account_key;
     document.getElementById('analyze-btn').disabled = false;
+    if (session?.provider === 'github') loadAccessibleRepositories();
     if (repositoryPreferenceKey) restoreLastRepository();
   }
 

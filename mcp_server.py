@@ -65,6 +65,11 @@ class CoachArgs(BaseModel):
     history: list[Message] = Field(default_factory=list, max_length=10)
 
 
+class ListReposArgs(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    query: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 def definition(name, description, model, *, ui=True, app_only=False):
     security = [{'type': 'oauth2', 'scopes': [SCOPE]}]
     meta = {'securitySchemes': security, 'openai/widgetAccessible': True}
@@ -94,6 +99,10 @@ TOOLS = [
         RefreshArgs, ui=False, app_only=True),
     definition('assess_dashboard_issues', 'Assess the selected issues in the dashboard.',
         IssueArgs, ui=False, app_only=True),
+    definition('list_accessible_repositories',
+        'List repositories accessible to the connected GitHub App identity. '
+        'Only includes private repositories when private analysis was enabled during MCP sign-in.',
+        ListReposArgs, ui=False),
 ]
 
 
@@ -139,7 +148,7 @@ def routing_name(header):
     return header
 
 
-def install_mcp(app, analyze, issue_value, coach):
+def install_mcp(app, analyze, issue_value, coach, *, list_repos=None, install_url_for_env=None):
     async def call_tool(params, request, grant):
         name = params.get('name')
         args = params.get('arguments', {})
@@ -153,14 +162,47 @@ def install_mcp(app, analyze, issue_value, coach):
             inputs = IssueArgs.model_validate(args)
         elif name == 'ask_flow_coach':
             inputs = CoachArgs.model_validate(args)
+        elif name == 'list_accessible_repositories':
+            inputs = ListReposArgs.model_validate(args)
         else:
             raise HTTPException(400, 'Unknown GitHub Analytics tool.')
 
-        if inputs.allow_private and not grant['private_consent']:
+        if not isinstance(inputs, ListReposArgs) and inputs.allow_private and not grant['private_consent']:
             raise HTTPException(403, 'Reconnect GitHub Flow Analytics and enable private repositories during sign-in.')
         identity = await identify_token(grant['github_token'])
         if str(identity.github_id) != str(grant['github_id']):
             raise HTTPException(401, 'The GitHub identity changed. Reconnect GitHub Flow Analytics.')
+        if isinstance(inputs, ListReposArgs):
+            if list_repos is None:
+                raise HTTPException(503, 'Repository listing is unavailable.')
+            private_enabled = bool(grant['private_consent'])
+            result = await list_repos(identity, include_private=private_enabled)
+            repos = result.get('repositories', [])
+            if inputs.query:
+                needle = inputs.query.strip().lower()
+                repos = [item for item in repos if needle in item['full_name'].lower()]
+            install_url = install_url_for_env(request.scope.get('env')) if install_url_for_env else ''
+            data = {
+                'login': result.get('login', identity.login),
+                'source': result.get('source', 'github_app'),
+                'installation_count': result.get('installation_count', 0),
+                'private_consent_enabled': private_enabled,
+                'repositories': repos,
+                'truncated': bool(result.get('truncated', False)),
+                **({'install_url': install_url} if install_url else {}),
+            }
+            names = [item['full_name'] for item in repos]
+            if names:
+                preview = ', '.join(names[:25])
+                extra = f' (+{len(names) - 25} more)' if len(names) > 25 else ''
+                text = f'@{data["login"]} can access {len(names)} repositories: {preview}{extra}.'
+            else:
+                text = f'No accessible repositories found for @{data["login"]}.'
+                if install_url:
+                    text += f' Install or configure the GitHub App: {install_url}'
+            if not private_enabled:
+                text += ' Private repositories are hidden because private analysis was not enabled during sign-in.'
+            return tool_result(text, data)
         if isinstance(inputs, CoachArgs):
             answer = await coach(inputs, request, identity, full_dashboard=True)
             return tool_result(answer['reply'], answer)
