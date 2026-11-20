@@ -70,3 +70,32 @@ test('an empty-description PR displays its reason without a score beside assesse
   assert.match(unscored, /Not scored: The PR description is empty/);
   assert.doesNotMatch(unscored, /<strong>|null|NaN/);
 });
+
+test('GitHub access bar shows connected login and app install link when signed in with GitHub', () => {
+  const elements = Object.fromEntries(
+    ['github-access-bar', 'github-status', 'github-connect', 'github-app-install']
+      .map(id => [id, {hidden: true, textContent: '', href: ''}])
+  );
+  const authStart = html.indexOf('  function updateGitHubAccessUI(');
+  const authEnd = html.indexOf('  async function loadAccessibleRepositories(', authStart);
+  assert.ok(authStart > -1 && authEnd > authStart, 'updateGitHubAccessUI helper should exist');
+  const context = vm.createContext({
+    authConfig: {github_enabled: true, github_app_install_url: 'https://github.com/apps/flowy/installations/new'},
+    document: {getElementById: id => elements[id]},
+  });
+  vm.runInContext(html.slice(authStart, authEnd), context);
+
+  context.updateGitHubAccessUI({signed_in: true, email: 'user@example.test'});
+  assert.equal(elements['github-access-bar'].hidden, false);
+  assert.equal(elements['github-connect'].hidden, false);
+  assert.equal(elements['github-status'].hidden, true);
+  assert.equal(elements['github-app-install'].hidden, false);
+  assert.equal(elements['github-app-install'].href, 'https://github.com/apps/flowy/installations/new');
+
+  context.updateGitHubAccessUI({signed_in: true, provider: 'github', login: 'yyeret'});
+  assert.equal(elements['github-access-bar'].hidden, false);
+  assert.equal(elements['github-connect'].hidden, true);
+  assert.equal(elements['github-status'].hidden, false);
+  assert.equal(elements['github-status'].textContent, 'Connected to GitHub as @yyeret');
+  assert.equal(elements['github-app-install'].hidden, false);
+});

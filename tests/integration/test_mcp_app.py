@@ -364,3 +364,32 @@ def test_public_mcp_value_uses_visibility_checked_github_reads(client, monkeypat
         assert record['assessed'] == 1
         assert record['items'][0]['cost_of_delay'] == 29
         assert record['sources']['readme']
+
+
+def test_mcp_list_accessible_repositories_respects_private_consent_and_query(client, monkeypatch):
+    async def installations(url, **kwargs):
+        assert kwargs['headers']['Authorization'] == 'Bearer ghu_provider-secret'
+        if url.endswith('/user/installations?per_page=100'):
+            return 200, {}, {'installations': [{'id': 42}]}
+        if url.endswith('/user/installations/42/repositories?per_page=100'):
+            return 200, {}, {
+                'total_count': 2,
+                'repositories': [
+                    {'full_name': 'o/public-flow', 'private': False, 'pushed_at': '2026-11-18T00:00:00Z'},
+                    {'full_name': 'o/secret-flow', 'private': True, 'pushed_at': '2026-11-19T00:00:00Z'},
+                ],
+            }
+        raise AssertionError(f'Unexpected URL: {url}')
+
+    monkeypatch.setattr(hosted, 'request_json', installations)
+
+    public_token = connect(client, private=False)
+    public_result = tool(client, 'list_accessible_repositories', {}, public_token)
+    assert [r['full_name'] for r in public_result['structuredContent']['repositories']] == ['o/public-flow']
+    assert public_result['structuredContent']['private_consent_enabled'] is False
+    assert 'o/secret-flow' not in str(public_result)
+
+    private_token = connect(client, private=True)
+    private_result = tool(client, 'list_accessible_repositories', {'query': 'secret'}, private_token)
+    assert [r['full_name'] for r in private_result['structuredContent']['repositories']] == ['o/secret-flow']
+    assert private_result['structuredContent']['private_consent_enabled'] is True

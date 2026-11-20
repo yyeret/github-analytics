@@ -145,6 +145,15 @@ def repository_preference_key(provider: str, account_id: str | int) -> str:
     return f'{provider}:{digest}'
 
 
+def github_app_install_url(env) -> str:
+    if not env:
+        return ""
+    slug = getattr(env, "GITHUB_APP_SLUG", "") or getattr(env, "MCP_GITHUB_APP_SLUG", "")
+    if isinstance(slug, str) and re.fullmatch(r"[A-Za-z0-9-]{1,100}", slug):
+        return f"https://github.com/apps/{slug}/installations/new"
+    return ""
+
+
 @app.get("/api/auth/config")
 async def auth_config(request: Request):
     env = environment(request)
@@ -153,6 +162,7 @@ async def auth_config(request: Request):
         "required": auth_required(request),
         "github_enabled": bool(env and getattr(env, 'GITHUB_OAUTH_CLIENT_ID', '')
             and getattr(env, 'GITHUB_OAUTH_CLIENT_SECRET', '') and getattr(env, 'GITHUB_OAUTH_REDIRECT_URI', '')),
+        "github_app_install_url": github_app_install_url(env),
     }
 
 
@@ -259,7 +269,13 @@ async def delete_account(request: Request):
     return response
 
 
-async def public_repo_exists(repo: str, token: str | None, *, allow_private=False) -> dict:
+async def public_repo_exists(
+    repo: str,
+    token: str | None,
+    *,
+    allow_private: bool = False,
+    github_login: str | None = None,
+) -> dict:
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "github-flow-analytics/0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -269,7 +285,17 @@ async def public_repo_exists(repo: str, token: str | None, *, allow_private=Fals
     except (TimeoutError, httpx.HTTPError) as exc:
         raise HTTPException(502, 'GitHub could not be reached. Please try again.') from exc
     if status == 404:
-        raise HTTPException(status_code=404, detail="Repository not found or unavailable to the connected GitHub identity.")
+        if github_login:
+            detail = (
+                f"Repository not found or the GitHub App is not installed on this repository for @{github_login}. "
+                "Grant repository access in GitHub App settings and try again."
+            )
+        else:
+            detail = (
+                "Repository not found. If it is private, connect GitHub, install the GitHub App on the repository, "
+                "and allow private analysis."
+            )
+        raise HTTPException(status_code=404, detail=detail)
     if status == 403:
         raise HTTPException(status_code=429,
             detail="GitHub is currently refusing analysis requests from this service. Please try again later.")
@@ -280,6 +306,105 @@ async def public_repo_exists(repo: str, token: str | None, *, allow_private=Fals
     if data['private'] and not allow_private:
         raise HTTPException(status_code=400, detail='Private analysis requires a connected GitHub identity and allow_private=true. Repository text is sent to Gemini and Jev.')
     return data
+
+
+async def list_accessible_repositories(identity, *, include_private: bool = True) -> dict[str, Any]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {identity.token}",
+        "User-Agent": "github-flow-analytics/0.1",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        status, _, payload = await asyncio.wait_for(
+            request_json("https://api.github.com/user/installations?per_page=100", headers=headers, timeout=10), 10
+        )
+    except (TimeoutError, httpx.HTTPError) as exc:
+        raise HTTPException(502, "GitHub could not be reached. Please try again.") from exc
+    if status == 401:
+        raise HTTPException(401, "Your GitHub credential expired or was revoked. Sign in again.")
+
+    repos_by_key: dict[str, dict[str, Any]] = {}
+    truncated = False
+    installation_count = 0
+    source = "github_app"
+
+    def collect(items: list[Any]) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            full_name = item.get("full_name")
+            if not isinstance(full_name, str) or "/" not in full_name:
+                continue
+            is_private = bool(item.get("private"))
+            if is_private and not include_private:
+                continue
+            repos_by_key[full_name.lower()] = {
+                "full_name": full_name,
+                "private": is_private,
+                "pushed_at": item.get("pushed_at") if isinstance(item.get("pushed_at"), str) else "",
+            }
+
+    if status == 200 and isinstance(payload, dict) and isinstance(payload.get("installations"), list):
+        installations = payload["installations"]
+        installation_count = len(installations)
+        if installation_count > 10:
+            truncated = True
+        for inst in installations[:10]:
+            inst_id = inst.get("id") if isinstance(inst, dict) else None
+            if type(inst_id) is not int or inst_id <= 0:
+                continue
+            try:
+                r_status, _, r_payload = await asyncio.wait_for(
+                    request_json(
+                        f"https://api.github.com/user/installations/{inst_id}/repositories?per_page=100",
+                        headers=headers,
+                        timeout=10,
+                    ),
+                    10,
+                )
+            except (TimeoutError, httpx.HTTPError) as exc:
+                raise HTTPException(502, "GitHub could not be reached. Please try again.") from exc
+            if r_status == 200 and isinstance(r_payload, dict) and isinstance(r_payload.get("repositories"), list):
+                items = r_payload["repositories"]
+                collect(items)
+                total = r_payload.get("total_count")
+                if isinstance(total, int) and total > len(items):
+                    truncated = True
+    elif status == 403:
+        source = "oauth_or_pat"
+        try:
+            r_status, _, r_payload = await asyncio.wait_for(
+                request_json("https://api.github.com/user/repos?per_page=100&sort=pushed", headers=headers, timeout=10),
+                10,
+            )
+        except (TimeoutError, httpx.HTTPError) as exc:
+            raise HTTPException(502, "GitHub could not be reached. Please try again.") from exc
+        if r_status == 401:
+            raise HTTPException(401, "Your GitHub credential expired or was revoked. Sign in again.")
+        if r_status != 200 or not isinstance(r_payload, list):
+            raise HTTPException(502, "GitHub could not list accessible repositories. Please try again.")
+        collect(r_payload)
+        if len(r_payload) >= 100:
+            truncated = True
+    else:
+        raise HTTPException(502, "GitHub could not list accessible repositories. Please try again.")
+
+    repositories = sorted(
+        repos_by_key.values(),
+        key=lambda item: (item["pushed_at"], item["full_name"].lower()),
+        reverse=True,
+    )
+    if len(repositories) > 200:
+        repositories = repositories[:200]
+        truncated = True
+    return {
+        "login": identity.login,
+        "source": source,
+        "installation_count": installation_count,
+        "repositories": repositories,
+        "truncated": truncated,
+    }
 
 
 async def caller_github(request):
@@ -307,15 +432,17 @@ async def authorize_analysis(request, *, expected_account=None):
 
 async def repository_access(repo, request, identity, allow_private):
     token = identity.token if identity else getattr(environment(request), 'GITHUB_TOKEN', None)
-    metadata = await public_repo_exists(repo, token, allow_private=allow_private)
+    metadata = await public_repo_exists(
+        repo, token, allow_private=allow_private, github_login=identity.login if identity else None
+    )
     if metadata['private'] and not identity:
         raise HTTPException(401, 'Connect your GitHub identity or supply its bearer credential for private analysis.')
     # Anonymous content reads cannot cross a later public-to-private transition.
     return token if metadata['private'] else None, metadata['private']
 
 
-async def mcp_repository_access(repo, token, allow_private):
-    metadata = await public_repo_exists(repo, token, allow_private=allow_private)
+async def mcp_repository_access(repo, token, allow_private, *, github_login=None):
+    metadata = await public_repo_exists(repo, token, allow_private=allow_private, github_login=github_login)
     repository_id = metadata.get('id')
     if type(repository_id) is not int or repository_id < 1:
         raise HTTPException(502, 'GitHub returned unreadable repository access information.')
@@ -342,6 +469,16 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/api/github/repos")
+async def github_repos(request: Request):
+    identity = await caller_github(request)
+    if not identity:
+        raise HTTPException(401, "Connect your GitHub identity to list accessible repositories.")
+    result = await list_accessible_repositories(identity, include_private=True)
+    result["install_url"] = github_app_install_url(environment(request))
+    return result
+
+
 @app.post("/api/analyze")
 async def analyze_repo(req: AnalyzeRequest, request: Request):
     identity = await authorize_analysis(request, expected_account=request.headers.get('X-Analysis-Account'))
@@ -353,7 +490,9 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     repo = parse_repo(req.repo_url)
     env = request.scope.get("env")
     if full_dashboard:
-        repo, private, repository_id = await mcp_repository_access(repo, identity.token, req.allow_private)
+        repo, private, repository_id = await mcp_repository_access(
+            repo, identity.token, req.allow_private, github_login=identity.login
+        )
         token = identity.token if private else None
     else:
         token, private = await repository_access(repo, request, identity, req.allow_private)
@@ -446,7 +585,9 @@ async def issue_value_for_identity(req, request, identity, *, mcp=False):
     await enforce_limit(request, 'analyze', 10, identity=identity if mcp else None)
     repo = parse_repo(req.repo_url)
     if mcp:
-        repo, private, repository_id = await mcp_repository_access(repo, identity.token, req.allow_private)
+        repo, private, repository_id = await mcp_repository_access(
+            repo, identity.token, req.allow_private, github_login=identity.login
+        )
         token = identity.token if private else None
     else:
         token, private = await repository_access(repo, request, identity, req.allow_private)
@@ -581,7 +722,7 @@ async def chat_for_identity(req, request, identity, *, full_dashboard=False):
     if full_dashboard:
         if private and not req.allow_private:
             raise HTTPException(403, 'Allow private analysis to coach against this snapshot.')
-        metadata = await public_repo_exists(repo, identity.token, allow_private=private)
+        metadata = await public_repo_exists(repo, identity.token, allow_private=private, github_login=identity.login)
         if metadata['private'] != private or metadata.get('id') != metrics.get('repository_id'):
             raise HTTPException(403, 'Repository access changed. Analyze it again.')
         if private:
@@ -618,7 +759,14 @@ async def chat_for_identity(req, request, identity, *, full_dashboard=False):
         raise HTTPException(status_code=502, detail="AI service is temporarily unavailable.") from exc
 
 
-install_mcp(app, analyze_for_identity, issue_value_for_identity, chat_for_identity)
+install_mcp(
+    app,
+    analyze_for_identity,
+    issue_value_for_identity,
+    chat_for_identity,
+    list_repos=list_accessible_repositories,
+    install_url_for_env=github_app_install_url,
+)
 
 
 @app.api_route("/{path:path}", methods=["GET", "HEAD"])
