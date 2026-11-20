@@ -1404,9 +1404,13 @@
     if (!cfd) return;
     const {coverage, profile, points, stages} = cfd;
     const project = cfd.source === 'github_project';
+    const factory = cfd.source === 'tessl_factory';
     const notes = project ? [
       `GitHub Project · ${profile}. ${coverage.with_workflow_signal} of ${coverage.issues} sampled issues appear in the chart.`,
       'Snapshots use UTC. Each issue enters the chart at its first recorded status.'
+    ] : factory ? [
+      `Tessl Factory · ${coverage.with_workflow_signal} of ${coverage.issues} sampled issues have observed factory lifecycle signals.`,
+      'Stages use trigger labels, Tessl Factory status comments, and linked PR activity. Done means the issue was closed.'
     ] : [
       `${coverage.with_workflow_signal} of ${coverage.issues} sampled issues have observed workflow signals.`,
       profile === 'signals-only' ? 'Stages use linked PR activity.' : `Stages use the workflow mapping for ${profile}.`,

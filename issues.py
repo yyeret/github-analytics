@@ -8,6 +8,7 @@ import asyncio
 import concurrent.futures
 import datetime
 import json
+import re
 import subprocess
 from itertools import groupby
 from urllib.parse import urlencode
@@ -30,6 +31,32 @@ PAGE_SIZE = 100
 BASELINE_WINDOW = "2021-06-01..2021-12-31"
 
 FLOW_STAGES = ["Unobserved", "Triage", "Ready", "In Progress", "Review", "Done"]
+TESSL_FACTORY_STAGES = ["Backlog", "Queued", "Agent Working", "Blocked", "PR Review", "Done"]
+_TESSL_LIFECYCLE_RE = re.compile(r"<!--\s*tessl-lifecycle:\s*([^>]*?)-->", re.IGNORECASE)
+_TESSL_STAGE_KV_RE = re.compile(r"\bstage\s*=\s*([a-z0-9_-]+)", re.IGNORECASE)
+_TESSL_PR_OPENED_RE = re.compile(r"^\s*PR\s+(?:opened|ready for review):\s*https://", re.IGNORECASE | re.MULTILINE)
+_TESSL_BLOCKED_RE = re.compile(
+    r"\b(?:have not started|could not|cannot|blocked|did not run|not ready)\b",
+    re.IGNORECASE,
+)
+_TESSL_STAGE_ALIASES = {
+    "backlog": "Backlog",
+    "queued": "Queued",
+    "working": "Agent Working",
+    "in_progress": "Agent Working",
+    "in-progress": "Agent Working",
+    "agent_working": "Agent Working",
+    "agent-working": "Agent Working",
+    "blocked": "Blocked",
+    "needs_human": "Blocked",
+    "needs-human": "Blocked",
+    "review": "PR Review",
+    "pr_review": "PR Review",
+    "pr-review": "PR Review",
+    "in_review": "PR Review",
+    "in-review": "PR Review",
+    "done": "Done",
+}
 WORKFLOW_LABEL_PROFILES = {
     "Fission-AI/OpenSpec": {
         "needs-triage": "Triage",
@@ -320,6 +347,230 @@ def build_github_issue_lifecycle(issue, repo=None, *, history_start=None):
     return transitions, bool((timeline.get("pageInfo") or {}).get("hasNextPage"))
 
 
+def _is_tessl_factory_label(name):
+    lowered = (name or "").strip().lower()
+    return lowered == "tessl" or lowered.startswith("factory:")
+
+
+def _issue_label_names(issue):
+    labels = issue.get("labels")
+    if isinstance(labels, list):
+        return [lbl["name"] if isinstance(lbl, dict) else lbl for lbl in labels if isinstance(lbl, (str, dict))]
+    if isinstance(labels, dict):
+        return [node.get("name", "") for node in labels.get("nodes") or [] if isinstance(node, dict)]
+    return []
+
+
+def _has_tessl_factory_comment_marker(body):
+    lowered = (body or "").lower()
+    return "<!-- tessl-factory" in lowered or "<!-- tessl-lifecycle:" in lowered
+
+
+def _parse_tessl_factory_comment(body):
+    """Return (stage, is_explicit) from a Tessl Factory comment, or (None, False) to ignore."""
+    if not isinstance(body, str) or not _has_tessl_factory_comment_marker(body):
+        return None, False
+    marker = _TESSL_LIFECYCLE_RE.search(body)
+    if marker:
+        kv = _TESSL_STAGE_KV_RE.search(marker.group(1))
+        if kv:
+            stage = _TESSL_STAGE_ALIASES.get(kv.group(1).lower())
+            if stage:
+                return stage, True
+    if _TESSL_PR_OPENED_RE.search(body):
+        return "PR Review", False
+    if "tessl is working on this" in body.lower():
+        return "Agent Working", False
+    if _TESSL_BLOCKED_RE.search(body):
+        return "Blocked", False
+    return None, False
+
+
+def _has_tessl_factory_signals(issues):
+    for issue in issues:
+        if any(_is_tessl_factory_label(name) for name in _issue_label_names(issue)):
+            return True
+        for node in (issue.get("timelineItems") or {}).get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            typename = node.get("__typename")
+            if typename in ("LabeledEvent", "UnlabeledEvent"):
+                if _is_tessl_factory_label((node.get("label") or {}).get("name")):
+                    return True
+            elif typename == "IssueComment" and _has_tessl_factory_comment_marker(node.get("body")):
+                return True
+    return False
+
+
+def build_tessl_factory_issue_lifecycle(issue, *, history_start=None):
+    """Build stage transitions for a Tessl Factory issue from labels, comments, and PRs."""
+    created = _parse(issue.get("createdAt"))
+    if not created:
+        return [], False
+    timeline = issue.get("timelineItems") or {}
+    closed_at = _parse(issue.get("closedAt"))
+    start = max(created, history_start) if history_start else created
+    state_events = _issue_state_events(timeline, start, closed_at)
+    issue_closed = False
+    if start > created:
+        if state_events:
+            first_time, first_closed = state_events[0]
+            issue_closed = not first_closed
+            if any(stamp == first_time and closed != first_closed for stamp, closed in state_events):
+                issue_closed = None
+        elif issue.get("state") in ("OPEN", "CLOSED"):
+            issue_closed = issue["state"] == "CLOSED"
+        else:
+            issue_closed = None
+
+    events = [(start, 0, "sample_start", None)]
+    events.extend((stamp, 50, "issue_state", closed) for stamp, closed in state_events)
+    for node in (n for n in timeline.get("nodes") or [] if n):
+        event_at = _parse(node.get("createdAt"))
+        if not event_at or event_at < start:
+            continue
+        typename = node.get("__typename")
+        if typename in ("LabeledEvent", "UnlabeledEvent"):
+            label = ((node.get("label") or {}).get("name") or "").strip().lower()
+            if _is_tessl_factory_label(label):
+                kind = "trigger_add" if typename == "LabeledEvent" else "trigger_remove"
+                events.append((event_at, 10, kind, label))
+        elif typename == "IssueComment":
+            stage, explicit = _parse_tessl_factory_comment(node.get("body"))
+            if stage:
+                events.append((event_at, 25, "factory_comment", (stage, explicit)))
+
+    linked_prs = (issue.get("closedByPullRequestsReferences") or {}).get("nodes") or []
+    for pr in linked_prs:
+        if not pr or not pr.get("number"):
+            continue
+        pr_number = pr["number"]
+        pr_created = _parse(pr.get("createdAt"))
+        commit_dates = [
+            ((node.get("commit") or {}).get("committedDate"))
+            for node in (pr.get("commits") or {}).get("nodes") or []
+        ]
+        work_started = _first_timestamp(commit_dates) or pr_created
+        if work_started and work_started < created:
+            work_started = created
+        pr_ended = _first_timestamp([pr.get("mergedAt"), pr.get("closedAt")])
+        if not work_started or (pr_ended and pr_ended <= work_started):
+            continue
+        events.append((work_started, 20, "pr_work", pr_number))
+        ready_dates = [node.get("createdAt") for node in (pr.get("timelineItems") or {}).get("nodes") or []]
+        review_dates = [node.get("createdAt") for node in (pr.get("reviews") or {}).get("nodes") or []]
+        review_started = _first_timestamp(ready_dates + review_dates)
+        if not review_started and pr.get("isDraft") is False:
+            review_started = pr_created
+        if review_started:
+            review_started = max(review_started, work_started)
+        if review_started and (not pr_ended or review_started < pr_ended):
+            events.append((review_started, 30, "pr_review", pr_number))
+        if pr_ended:
+            events.append((pr_ended, 40, "pr_end", pr_number))
+
+    trigger_labels = set()
+    pr_phases = {}
+    factory_stage = None
+    transitions = []
+    events.sort(key=lambda event: (event[0], event[1]))
+    for event_at, same_time in groupby(events, key=lambda event: event[0]):
+        for _, _, kind, value in same_time:
+            if kind == "trigger_add":
+                trigger_labels.add(value)
+            elif kind == "trigger_remove":
+                trigger_labels.discard(value)
+            elif kind == "factory_comment":
+                next_stage, explicit = value
+                if explicit or not (next_stage == "Blocked" and factory_stage == "PR Review"):
+                    factory_stage = next_stage
+            elif kind == "pr_work":
+                pr_phases[value] = "Agent Working"
+            elif kind == "pr_review":
+                pr_phases[value] = "PR Review"
+            elif kind == "pr_end":
+                pr_phases.pop(value, None)
+            elif kind == "issue_state":
+                if issue_closed is True and value is False:
+                    factory_stage = None
+                issue_closed = value
+
+        if event_at < start:
+            continue
+        if issue_closed is None:
+            continue
+        if issue_closed or factory_stage == "Done":
+            stage = "Done"
+        elif "PR Review" in pr_phases.values() or factory_stage == "PR Review":
+            stage = "PR Review"
+        elif factory_stage == "Blocked":
+            stage = "Blocked"
+        elif "Agent Working" in pr_phases.values() or factory_stage == "Agent Working":
+            stage = "Agent Working"
+        elif factory_stage == "Queued" or trigger_labels:
+            stage = "Queued"
+        else:
+            stage = "Backlog"
+
+        if not transitions or stage != transitions[-1][1]:
+            transitions.append((event_at, stage))
+
+    return transitions, bool((timeline.get("pageInfo") or {}).get("hasNextPage"))
+
+
+def _tessl_factory_lifecycle_cfd(issues, window_start, now, history_start):
+    intervals = {stage: [] for stage in TESSL_FACTORY_STAGES}
+    active_starts = []
+    issue_active_spans = []
+    truncated = 0
+    for issue in issues:
+        transitions, timeline_truncated = build_tessl_factory_issue_lifecycle(issue, history_start=history_start)
+        truncated += timeline_truncated
+        if timeline_truncated:
+            continue
+        spans = []
+        for i, (start, stage) in enumerate(transitions):
+            end = transitions[i + 1][0] if i + 1 < len(transitions) else None
+            intervals[stage].append((start, end))
+            if stage not in ("Backlog", "Done"):
+                active_starts.append(start)
+                spans.append((start, end))
+        if spans:
+            issue_active_spans.append(spans)
+
+    if not active_starts:
+        return None
+    floor = max(window_start, history_start) if history_start else window_start
+    first = max(floor, min(active_starts))
+    days = max(0, (now.date() - first.date()).days)
+    step = 7 if days >= 14 else 1
+    midnight = datetime.datetime.combine(now.date(), datetime.time.min)
+    samples = [midnight - datetime.timedelta(days=offset - 1, seconds=1)
+               for offset in range(days - days % step, 0, -step)] + [now]
+    if len(samples) < 2:
+        return None
+
+    series = {stage: count_intervals(intervals[stage], samples) for stage in TESSL_FACTORY_STAGES}
+    series = {stage: counts for stage, counts in series.items() if any(counts)}
+    active_stages = [stage for stage in series if stage not in ("Backlog", "Done")]
+    if not active_stages or sum(any(counts) for counts in zip(*series.values())) < 2:
+        return None
+    observed = sum(any(count_intervals(spans, samples)) for spans in issue_active_spans)
+    return {
+        "source": "tessl_factory",
+        "profile": "Tessl Factory",
+        "stages": list(series),
+        "points": [{"date": sample.date().isoformat(), "counts": dict(zip(series, counts))}
+                   for sample, counts in zip(samples, zip(*series.values()))],
+        "coverage": {
+            "issues": len(issues),
+            "with_workflow_signal": observed,
+            "timeline_truncated": truncated,
+            "event_sample_truncated": history_start is not None,
+        },
+    }
+
+
 def _compute_lifecycle_cfd(issues, samples, repo, history_start):
     if len(samples) < 2:
         return None
@@ -532,6 +783,9 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
     project_status = project_history.get("status")
     if project_status == "available" and not project_cfd:
         project_status = "insufficient"
+    factory_cfd = None
+    if not project_cfd and flow_available and not _workflow_label_stages(repo) and _has_tessl_factory_signals(lifecycle_issues):
+        factory_cfd = _tessl_factory_lifecycle_cfd(lifecycle_issues, window_start, now, history_start)
     return {
         "sample_size": len(sampled),
         "open_available": open_available,
@@ -549,8 +803,10 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]) if len(weekly) >= NET_WINDOW_WEEKS else None,
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
-        "lifecycle_cfd": project_cfd or (_compute_lifecycle_cfd(lifecycle_issues, lifecycle_samples, repo, history_start)
-                                         if flow_available else None),
+        "lifecycle_cfd": project_cfd or factory_cfd or (
+            _compute_lifecycle_cfd(lifecycle_issues, lifecycle_samples, repo, history_start)
+            if flow_available else None
+        ),
         **({"project_history_status": project_status} if project_status else {}),
         "resolution": None if rest else _resolution_summary(modern_closed),
     }
@@ -678,10 +934,15 @@ async def _search_rest_issues(query, headers, sort):
             if (not isinstance(row, dict) or type(row.get("number")) is not int or row["number"] < 1
                     or row.get("state") not in ("open", "closed") or "pull_request" in row):
                 raise ValueError("GitHub returned an invalid issue")
+            labels = [
+                lbl["name"] for lbl in row.get("labels") or []
+                if isinstance(lbl, dict) and isinstance(lbl.get("name"), str)
+            ]
             items[row["number"]] = {
                 "number": row["number"], "title": row.get("title"), "body": row.get("body"),
                 "createdAt": row.get("created_at"), "updatedAt": row.get("updated_at"),
                 "closedAt": row.get("closed_at"), "state": row["state"].upper(),
+                **({"labels": labels} if labels else {}),
             }
         if len(rows) < PAGE_SIZE or len(items) >= total:
             break
@@ -724,6 +985,46 @@ async def _enrich_rest_issue_history(repo, headers, issues):
     return oldest.isoformat() if capped else None
 
 
+async def _enrich_rest_factory_comments(repo, headers, issues):
+    """Fetch bounded repo-wide issue comments and attach Tessl Factory markers only."""
+    by_number = {issue["number"]: issue for issue in issues}
+    relevant = []
+    oldest = None
+    capped = True
+    for page in range(1, REST_EVENT_PAGE_CAP + 1):
+        payload = await _rest_json(
+            f"https://api.github.com/repos/{repo}/issues/comments?sort=created&direction=desc&per_page=100&page={page}",
+            headers,
+        )
+        if not isinstance(payload, list) or any(not isinstance(comment, dict) for comment in payload):
+            raise ValueError("GitHub returned invalid issue comments")
+        for comment in payload:
+            stamp = _parse(comment.get("created_at"))
+            if stamp is None:
+                continue
+            oldest = stamp if oldest is None else min(oldest, stamp)
+            body = comment.get("body")
+            if not _has_tessl_factory_comment_marker(body):
+                continue
+            issue_url = comment.get("issue_url") or ""
+            tail = issue_url.rsplit("/", 1)[-1]
+            number = int(tail) if tail.isdigit() else None
+            if number in by_number:
+                relevant.append((number, {
+                    "__typename": "IssueComment",
+                    "createdAt": comment["created_at"],
+                    "body": body,
+                }))
+        if len(payload) < PAGE_SIZE:
+            capped = False
+            break
+    if capped and oldest is None:
+        raise ValueError("GitHub did not timestamp the issue comments")
+    for number, event in reversed(relevant):
+        by_number[number].setdefault("timelineItems", {"nodes": []})["nodes"].append(event)
+    return oldest.isoformat() if capped else None
+
+
 async def collect_rest_issues(repo, headers, now):
     """Collect bounded issue details independently of PRs or model providers."""
     since = (now - datetime.timedelta(weeks=ISSUE_WINDOW_WEEKS)).date().isoformat()
@@ -750,11 +1051,21 @@ async def collect_rest_issues(repo, headers, now):
     closed = [item for item in closed if item["number"] not in open_numbers]
     history_start = None
     history_retry = False
-    if open_result is not None and closed_result is not None and (opened or closed) and _workflow_label_stages(repo):
+    all_issues = opened + closed
+    has_label_profile = bool(_workflow_label_stages(repo))
+    has_factory = not has_label_profile and _has_tessl_factory_signals(all_issues)
+    if open_result is not None and closed_result is not None and all_issues and (has_label_profile or has_factory):
         try:
-            history_start = await _enrich_rest_issue_history(repo, headers, opened + closed)
+            history_start = await _enrich_rest_issue_history(repo, headers, all_issues)
         except (ValueError, TimeoutError, httpx.HTTPError):
             history_retry = True
+        if has_factory:
+            try:
+                comments_start = await _enrich_rest_factory_comments(repo, headers, all_issues)
+                if comments_start and (history_start is None or _parse(comments_start) > _parse(history_start)):
+                    history_start = comments_start
+            except (ValueError, TimeoutError, httpx.HTTPError):
+                history_retry = True
     return {"open": opened, "closed": closed, "pre_ai": [],
             "open_truncated": open_truncated, "closed_truncated": closed_truncated,
             "source": "rest", "history_start": history_start,
