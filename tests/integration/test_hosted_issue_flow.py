@@ -137,3 +137,116 @@ def test_hosted_analysis_keeps_open_pr_work_alongside_issues(monkeypatch):
     assert [point['num'] for point in result['active_wip_points']] == [9]
     assert result['product_value']['items'][0]['number'] == 9
     assert result['issues']['open_now'] == 1
+
+
+@freeze_time("2026-11-20T12:00:00Z")
+def test_hosted_analysis_charts_tessl_factory_issue_lifecycle(monkeypatch):
+    opened_review = {
+        **issue(147, 'open', '2026-11-16T18:15:00Z'),
+        'labels': [{'name': 'factory:ce-pilot'}],
+    }
+    opened_blocked = {
+        **issue(153, 'open', '2026-11-17T00:21:00Z'),
+        'labels': [{'name': 'tessl'}],
+    }
+    closed_done = {
+        **issue(144, 'closed', '2026-11-16T10:53:00Z', '2026-11-16T16:37:33Z'),
+        'labels': [{'name': 'factory:ce-pilot'}],
+    }
+
+    async def upstream(url, **kwargs):
+        path = urlsplit(url)
+        if path.path.endswith('/pulls'):
+            return 200, {}, []
+        if path.path.endswith('/issues/events'):
+            return 200, {}, [
+                {'event': 'labeled', 'created_at': '2026-11-17T00:21:04Z',
+                 'issue': {'number': 153}, 'label': {'name': 'tessl'}},
+                {'event': 'labeled', 'created_at': '2026-11-16T18:15:41Z',
+                 'issue': {'number': 147}, 'label': {'name': 'factory:ce-pilot'}},
+                {'event': 'closed', 'created_at': '2026-11-16T16:37:33Z',
+                 'issue': {'number': 144}},
+            ]
+        if path.path.endswith('/issues/comments'):
+            return 200, {}, [
+                {
+                    'created_at': '2026-11-17T00:28:07Z',
+                    'issue_url': 'https://api.github.com/repos/o/r/issues/153',
+                    'body': 'I could not finish the trace from here.\n\n<!-- tessl-factory -->',
+                },
+                {
+                    'created_at': '2026-11-16T18:18:49Z',
+                    'issue_url': 'https://api.github.com/repos/o/r/issues/147',
+                    'body': 'PR opened: https://github.com/o/r/pull/148\n\n<!-- tessl-factory -->',
+                },
+                {
+                    'created_at': '2026-11-16T18:16:29Z',
+                    'issue_url': 'https://api.github.com/repos/o/r/issues/147',
+                    'body': 'Tessl is working on this.\n\n<!-- tessl-factory -->',
+                },
+                {
+                    'created_at': '2026-11-16T18:19:00Z',
+                    'issue_url': 'https://api.github.com/repos/o/r/issues/999',
+                    'body': 'PR ready for review: https://github.com/o/r/pull/999\n\n<!-- tessl-factory -->',
+                },
+            ]
+        query = parse_qs(path.query)['q'][0]
+        if 'is:pr' in query:
+            return 200, {}, {'items': []}
+        items = [opened_review, opened_blocked] if 'is:open' in query else [closed_done]
+        return 200, {}, {'total_count': len(items), 'incomplete_results': False, 'items': items}
+
+    async def metadata(*args, **kwargs):
+        return 200, {}, {'private': False}
+
+    async def allowed(_):
+        return {'success': True}
+
+    monkeypatch.setattr(github_api, 'request_json', upstream)
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(hosted, 'assess_product_value', lambda *_a, **_kw: pytest.fail('No PRs to score'))
+    env = SimpleNamespace(AUTH_REQUIRED='false', ANALYZE_LIMIT=SimpleNamespace(limit=allowed))
+    response = hosted_client(env).post('/api/analyze', json={'repo_url': 'o/r'})
+    assert response.status_code == 200, response.text
+    cfd = response.json()['issues']['lifecycle_cfd']
+    assert cfd is not None
+    assert cfd['source'] == 'tessl_factory'
+    assert cfd['profile'] == 'Tessl Factory'
+    assert cfd['points'][-1]['date'] == '2026-11-20'
+    assert cfd['points'][-1]['counts'] == {'Blocked': 1, 'PR Review': 1, 'Done': 1}
+
+
+@freeze_time("2026-11-20T12:00:00Z")
+def test_hosted_analysis_suppresses_factory_cfd_when_comment_enrichment_fails(monkeypatch):
+    opened = {**issue(147, 'open', '2026-11-16T18:15:00Z'), 'labels': [{'name': 'tessl'}]}
+
+    async def upstream(url, **kwargs):
+        path = urlsplit(url)
+        if path.path.endswith('/pulls'):
+            return 200, {}, []
+        if path.path.endswith('/issues/events'):
+            return 200, {}, [
+                {'event': 'labeled', 'created_at': '2026-11-16T18:15:41Z',
+                 'issue': {'number': 147}, 'label': {'name': 'tessl'}},
+            ]
+        if path.path.endswith('/issues/comments'):
+            return 503, {}, {}
+        query = parse_qs(path.query)['q'][0]
+        if 'is:pr' in query:
+            return 200, {}, {'items': []}
+        items = [opened] if 'is:open' in query else []
+        return 200, {}, {'total_count': len(items), 'incomplete_results': False, 'items': items}
+
+    async def metadata(*args, **kwargs):
+        return 200, {}, {'private': False}
+
+    async def allowed(_):
+        return {'success': True}
+
+    monkeypatch.setattr(github_api, 'request_json', upstream)
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(hosted, 'assess_product_value', lambda *_a, **_kw: pytest.fail('No PRs to score'))
+    env = SimpleNamespace(AUTH_REQUIRED='false', ANALYZE_LIMIT=SimpleNamespace(limit=allowed))
+    response = hosted_client(env).post('/api/analyze', json={'repo_url': 'o/r'})
+    assert response.status_code == 200, response.text
+    assert response.json()['issues']['lifecycle_cfd'] is None
