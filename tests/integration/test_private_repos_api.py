@@ -171,3 +171,31 @@ def test_list_private_repos_clears_session_on_revoked_token(monkeypatch, status,
     assert response.status_code == expected
     assert deleted == [True]
     assert "Bad credentials" not in response.text
+
+
+def test_list_private_repos_paginates_past_archived_first_page(monkeypatch):
+    env = SimpleNamespace(USERS_DB=Database())
+
+    async def fake_auth(request, optional=False):
+        return github_auth.GitHubIdentity(github_id=42, login="yyeret", token="caller-gh-token")
+
+    pages_requested = []
+
+    async def fake_paginated(url, **kwargs):
+        pages_requested.append(url)
+        if "&page=1" in url:
+            return 200, {}, [
+                {"full_name": f"yyeret/archived-{i}", "private": True, "archived": True}
+                for i in range(100)
+            ]
+        return 200, {}, [
+            {"full_name": "yyeret/page2-active", "private": True, "archived": False, "pushed_at": "2026-11-15T00:00:00Z"},
+        ]
+
+    monkeypatch.setattr(github_auth, "authenticate", fake_auth)
+    monkeypatch.setattr(hosted, "request_json", fake_paginated)
+
+    response = hosted_client(env).get("/api/github/repos?limit=5")
+    assert response.status_code == 200
+    assert len(pages_requested) == 2
+    assert [r["full_name"] for r in response.json()["repos"]] == ["yyeret/page2-active"]

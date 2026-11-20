@@ -767,6 +767,7 @@
   let authConfig     = {required:false, client_id:''};
   let repositoryPreferenceKey;
   let restoredPrivateRepository;
+  let privateReposRequestId = 0;
 
   async function configureAuthentication() {
     try {
@@ -853,16 +854,21 @@
   }
 
   async function loadPrivateRepositories() {
+    const requestId = ++privateReposRequestId;
     const section = document.getElementById('private-repos-section');
     const statusEl = document.getElementById('private-repos-status');
     const listEl = document.getElementById('private-repos-list');
+    const refreshBtn = document.getElementById('private-repos-refresh');
     section.hidden = false;
     statusEl.textContent = 'Loading your most active private repositories…';
     listEl.replaceChildren();
+    if (refreshBtn) refreshBtn.disabled = true;
     try {
       const response = await fetch('/api/github/repos', {credentials: 'same-origin'});
       const data = await readApiResponse(response);
+      if (requestId !== privateReposRequestId) return;
       const repos = Array.isArray(data?.repos) ? data.repos : [];
+      listEl.replaceChildren();
       if (!repos.length) {
         statusEl.textContent = 'No active private repositories found for this GitHub account.';
         return;
@@ -888,14 +894,21 @@
         listEl.appendChild(btn);
       }
     } catch (e) {
+      if (requestId !== privateReposRequestId) return;
+      listEl.replaceChildren();
       statusEl.textContent = e.message || 'Could not load private repositories.';
+    } finally {
+      if (refreshBtn && requestId === privateReposRequestId) refreshBtn.disabled = false;
     }
   }
 
   function selectPrivateRepository(fullName) {
     document.getElementById('repo-input').value = fullName;
-    restoredPrivateRepository = undefined;
     const consent = document.getElementById('allow-private');
+    if (restoredPrivateRepository && restoredPrivateRepository !== fullName) {
+      consent.checked = false;
+      restoredPrivateRepository = undefined;
+    }
     if (consent.checked) {
       analyzeRepo();
     } else {

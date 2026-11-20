@@ -52,7 +52,7 @@ function loadAuthAndPicker(fetchImpl) {
   const ids = [
     'login-gate', 'account-actions', 'account-email', 'analyze-btn',
     'github-connect', 'repo-input', 'allow-private',
-    'private-repos-section', 'private-repos-status', 'private-repos-list',
+    'private-repos-section', 'private-repos-status', 'private-repos-list', 'private-repos-refresh',
   ];
   const elements = Object.fromEntries(ids.map(id => [id, makeElement()]));
   elements['private-repos-section'].hidden = true;
@@ -145,4 +145,62 @@ test('clicking a private repo requires explicit consent before analyzing', async
   elements['allow-private'].checked = true;
   pill.click();
   assert.deepEqual(analyzed, ['yyeret/secret-repo']);
+});
+
+test('selecting a different private repo clears restored repository-scoped consent', async () => {
+  const {context, elements, statuses, analyzed} = loadAuthAndPicker(async () => new Response(JSON.stringify({
+    login: 'yyeret',
+    repos: [
+      {full_name: 'yyeret/restored-a', pushed_at: new Date().toISOString()},
+      {full_name: 'yyeret/other-b', pushed_at: new Date().toISOString()},
+    ],
+  }), {status: 200}));
+
+  await context.loadPrivateRepositories();
+  // Simulate restored consent scoped to repo A
+  vm.runInContext("restoredPrivateRepository = 'yyeret/restored-a';", context);
+  elements['allow-private'].checked = true;
+
+  // Selecting repo B must revoke restored consent and NOT auto-analyze B
+  elements['private-repos-list'].children[1].click();
+  assert.equal(elements['repo-input'].value, 'yyeret/other-b');
+  assert.equal(elements['allow-private'].checked, false);
+  assert.equal(elements['allow-private'].focused, true);
+  assert.deepEqual(analyzed, []);
+  assert.match(statuses.at(-1).msg, /Allow private analysis/);
+
+  // Re-selecting restored repo A preserves its restored consent
+  vm.runInContext("restoredPrivateRepository = 'yyeret/restored-a';", context);
+  elements['allow-private'].checked = true;
+  elements['private-repos-list'].children[0].click();
+  assert.deepEqual(analyzed, ['yyeret/restored-a']);
+});
+
+test('overlapping picker refreshes ignore stale responses and preserve only the latest load', async () => {
+  const resolvers = [];
+  const {context, elements} = loadAuthAndPicker(() => new Promise(resolve => resolvers.push(resolve)));
+
+  const first = context.loadPrivateRepositories();
+  assert.equal(elements['private-repos-refresh'].disabled, true);
+  const second = context.loadPrivateRepositories();
+
+  // Resolve the newer second request first
+  resolvers[1](new Response(JSON.stringify({
+    login: 'yyeret',
+    repos: [{full_name: 'yyeret/fresh-repo', pushed_at: new Date().toISOString()}],
+  }), {status: 200}));
+  await second;
+
+  assert.equal(elements['private-repos-list'].children.length, 1);
+  assert.equal(elements['private-repos-list'].children[0].children[0].textContent, 'yyeret/fresh-repo');
+  assert.equal(elements['private-repos-status'].textContent, '');
+  assert.equal(elements['private-repos-refresh'].disabled, false);
+
+  // Now resolve the stale first request with empty list: must be ignored
+  resolvers[0](new Response(JSON.stringify({login: 'yyeret', repos: []}), {status: 200}));
+  await first;
+
+  assert.equal(elements['private-repos-list'].children.length, 1);
+  assert.equal(elements['private-repos-list'].children[0].children[0].textContent, 'yyeret/fresh-repo');
+  assert.equal(elements['private-repos-status'].textContent, '');
 });
