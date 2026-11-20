@@ -193,3 +193,120 @@ def test_compute_issue_metrics_uses_daily_sampling_for_short_tessl_factory_burst
     dates = [row["date"] for row in cfd["points"]]
     assert dates == ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"]
     assert cfd["points"][-1]["counts"] == {"Blocked": 1, "PR Review": 1, "Done": 1}
+
+
+def test_explicit_blocked_marker_overrides_active_linked_pr_review():
+    created = dt.datetime(2026, 11, 18, 10, 0)
+    row = {
+        "number": 210,
+        "createdAt": iso(created),
+        "closedAt": None,
+        "state": "OPEN",
+        "labels": ["tessl"],
+        "closedByPullRequestsReferences": {
+            "nodes": [
+                {
+                    "number": 211,
+                    "createdAt": iso(created + dt.timedelta(minutes=30)),
+                    "isDraft": False,
+                    "mergedAt": None,
+                    "closedAt": None,
+                }
+            ]
+        },
+        "timelineItems": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {
+                    "__typename": "IssueComment",
+                    "createdAt": iso(created + dt.timedelta(hours=1)),
+                    "body": "CI refused.\n\n<!-- tessl-lifecycle: stage=blocked reason=ci_blocked -->",
+                },
+                {
+                    "__typename": "IssueComment",
+                    "createdAt": iso(created + dt.timedelta(hours=2)),
+                    "body": "CI green.\n\n<!-- tessl-lifecycle: stage=pr_review pr=211 -->",
+                },
+            ],
+        },
+    }
+    transitions, _ = build_tessl_factory_issue_lifecycle(row)
+    assert [stage for _, stage in transitions] == ["Backlog", "PR Review", "Blocked", "PR Review"]
+
+
+def test_pre_cutoff_evidence_initializes_stage_and_unknown_pre_cutoff_is_unobserved():
+    cutoff = dt.datetime(2026, 11, 16, 0, 0)
+    with_pre_cutoff_comment = {
+        "number": 212,
+        "createdAt": "2026-11-10T00:00:00Z",
+        "closedAt": None,
+        "state": "OPEN",
+        "labels": ["tessl"],
+        "timelineItems": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {
+                    "__typename": "IssueComment",
+                    "createdAt": "2026-11-15T12:00:00Z",
+                    "body": "PR opened: https://github.com/o/r/pull/1\n\n<!-- tessl-factory -->",
+                }
+            ],
+        },
+    }
+    without_pre_cutoff_evidence = {
+        "number": 213,
+        "createdAt": "2026-11-10T00:00:00Z",
+        "closedAt": None,
+        "state": "OPEN",
+        "labels": ["tessl"],
+        "timelineItems": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+    }
+    t1, _ = build_tessl_factory_issue_lifecycle(with_pre_cutoff_comment, history_start=cutoff)
+    t2, _ = build_tessl_factory_issue_lifecycle(without_pre_cutoff_evidence, history_start=cutoff)
+    assert t1 == [(cutoff, "PR Review")]
+    assert t2 == [(cutoff, "Unobserved")]
+
+
+def test_open_issue_cannot_enter_done_via_comment_marker():
+    created = dt.datetime(2026, 11, 18, 10, 0)
+    row = {
+        "number": 214,
+        "createdAt": iso(created),
+        "closedAt": None,
+        "state": "OPEN",
+        "labels": ["tessl"],
+        "timelineItems": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {
+                    "__typename": "IssueComment",
+                    "createdAt": iso(created + dt.timedelta(minutes=5)),
+                    "body": "Finished.\n\n<!-- tessl-lifecycle: stage=done -->",
+                }
+            ],
+        },
+    }
+    transitions, _ = build_tessl_factory_issue_lifecycle(row)
+    assert [stage for _, stage in transitions] == ["Backlog"]
+
+
+def test_graphql_labels_without_collected_comments_do_not_select_factory_cfd():
+    now = dt.datetime(2026, 11, 20, 12, 0)
+    weekly_bins = [now - dt.timedelta(days=7 * i) for i in range(8, -1, -1)]
+    labeled_only = {
+        "number": 215,
+        "title": "Labeled without comment collection",
+        "createdAt": "2026-11-16T10:00:00Z",
+        "updatedAt": "2026-11-16T10:05:00Z",
+        "closedAt": None,
+        "state": "OPEN",
+        "timelineItems": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {"__typename": "LabeledEvent", "createdAt": "2026-11-16T10:05:00Z", "label": {"name": "tessl"}}
+            ],
+        },
+    }
+    raw = {"open": [labeled_only], "closed": [], "pre_ai": []}
+    out = compute_issue_metrics(raw, weekly_bins, now, repo="yyeret/mini-crm")
+    assert out["lifecycle_cfd"] is None

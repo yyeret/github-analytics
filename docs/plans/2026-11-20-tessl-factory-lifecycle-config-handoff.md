@@ -29,13 +29,16 @@ Optional key-value metadata may follow `stage=<stage>` (e.g. `run=<id> pr=<numbe
 | `in_progress` | `working`, `agent_working` | `Agent Working` |
 | `blocked` | `needs_human` | `Blocked` |
 | `pr_review` | `review`, `in_review` | `PR Review` |
-| `done` | — | `Done` |
 
-`<!-- tessl-lifecycle: ... -->` takes precedence over legacy prose matching in `issues.py` (`_parse_tessl_factory_comment`) and can move an issue in any direction (including `PR Review -> Blocked` if CI/merge fails, or `Blocked -> Agent Working` when unblocked).
+`Done` is driven exclusively by GitHub issue closure (`ClosedEvent` / `closedAt`), never by a comment marker, so `Done` always means the issue was closed.
 
-### Optional durable upgrade: GitHub Project v2 `Status`
+`<!-- tessl-lifecycle: ... -->` takes precedence over legacy prose matching in `issues.py` (`_parse_tessl_factory_comment`) and can move an issue in any direction (including `PR Review -> Blocked` if CI/merge fails, even when a linked PR is open, or `Blocked -> Agent Working` / `PR Review` when unblocked).
 
-If Tessl Factory also updates a single open GitHub Project v2 linked to the repository (`Status` field), `github-analytics` prefers Project v2 status history over comment heuristics automatically. Project history is immune to repo-wide comment-volume truncation (GitHub REST `/issues/comments` mixes PR and issue comments and is capped at 300 most recent comments in hosted mode).
+**Hosted REST discovery requirement:** To avoid extra API calls on non-Factory repos, hosted REST collection only enriches factory comments when at least one sampled issue carries a surviving `tessl` or `factory:*` label. Keep the trigger label on Factory issues rather than removing it on pickup/completion.
+
+### Optional durable upgrade (private repos only): GitHub Project v2 `Status`
+
+For **private repositories**, if Tessl Factory updates a single open GitHub Project v2 linked to the repository (`Status` field), `github-analytics` automatically prefers Project v2 status history over comment heuristics. Note that hosted Project v2 history is intentionally restricted to private repositories (`cloudflare_app.py` / `github_projects.py` reject public repos); public Factory repositories should rely on the `<!-- tessl-lifecycle: stage=... -->` comment contract above.
 
 ## Specific gaps to fix in Tessl Factory config (observed on `yyeret/mini-crm`)
 
@@ -48,8 +51,8 @@ If Tessl Factory also updates a single open GitHub Project v2 linked to the repo
    - On `mini-crm`, issues `#152` (PR `#157`) and `#162` (PR `#164`) were cross-referenced without a closing keyword, so GitHub's `closedByPullRequestsReferences` missed them.
 3. **Mirror PR-level CI / merge blocks back to the parent issue:**
    - On Nov 18, `tessl-app` posted 13 CI-refusal comments on PRs `#121`–`#132`, not on their parent issues. When a PR cannot proceed because CI or checks are blocked, post `<!-- tessl-lifecycle: stage=blocked reason=ci_blocked pr=<pr-number> -->` on the parent issue (and `stage=pr_review` once green again).
-4. **Reduce PR-comment noise or prefer Project/label signals if comment volume grows:**
-   - On `mini-crm`, 60+ of the 100 most recent `/issues/comments` entries were PR-level `PR ready for review` / CI comments. Updating a single comment in place on PRs (or moving lifecycle state to a linked GitHub Project v2) keeps repo-wide issue history uncapped.
+4. **Mitigate PR-comment noise in `/issues/comments`:**
+   - On `mini-crm`, 60+ of the 100 most recent `/issues/comments` entries were PR-level `PR ready for review` / CI comments. Updating a single PR comment in place slows down hitting the 300-comment REST creation-time cap (it mitigates rather than eliminates truncation, since normal issue/PR discussion still counts toward the 300-comment window). For private repos needing deeper history, use a linked GitHub Project v2 `Status` field.
 
 ## Acceptance criteria
 

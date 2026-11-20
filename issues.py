@@ -31,7 +31,7 @@ PAGE_SIZE = 100
 BASELINE_WINDOW = "2021-06-01..2021-12-31"
 
 FLOW_STAGES = ["Unobserved", "Triage", "Ready", "In Progress", "Review", "Done"]
-TESSL_FACTORY_STAGES = ["Backlog", "Queued", "Agent Working", "Blocked", "PR Review", "Done"]
+TESSL_FACTORY_STAGES = ["Unobserved", "Backlog", "Queued", "Agent Working", "Blocked", "PR Review", "Done"]
 _TESSL_LIFECYCLE_RE = re.compile(r"<!--\s*tessl-lifecycle:\s*([^>]*?)-->", re.IGNORECASE)
 _TESSL_STAGE_KV_RE = re.compile(r"\bstage\s*=\s*([a-z0-9_-]+)", re.IGNORECASE)
 _TESSL_PR_OPENED_RE = re.compile(r"^\s*PR\s+(?:opened|ready for review):\s*https://", re.IGNORECASE | re.MULTILINE)
@@ -55,7 +55,6 @@ _TESSL_STAGE_ALIASES = {
     "pr-review": "PR Review",
     "in_review": "PR Review",
     "in-review": "PR Review",
-    "done": "Done",
 }
 WORKFLOW_LABEL_PROFILES = {
     "Fission-AI/OpenSpec": {
@@ -386,6 +385,15 @@ def _parse_tessl_factory_comment(body):
     return None, False
 
 
+def _has_tessl_factory_comments(issues):
+    for issue in issues:
+        for node in (issue.get("timelineItems") or {}).get("nodes") or []:
+            if isinstance(node, dict) and node.get("__typename") == "IssueComment":
+                if _has_tessl_factory_comment_marker(node.get("body")):
+                    return True
+    return False
+
+
 def _has_tessl_factory_signals(issues):
     for issue in issues:
         if any(_is_tessl_factory_label(name) for name in _issue_label_names(issue)):
@@ -427,7 +435,7 @@ def build_tessl_factory_issue_lifecycle(issue, *, history_start=None):
     events.extend((stamp, 50, "issue_state", closed) for stamp, closed in state_events)
     for node in (n for n in timeline.get("nodes") or [] if n):
         event_at = _parse(node.get("createdAt"))
-        if not event_at or event_at < start:
+        if not event_at or event_at < created:
             continue
         typename = node.get("__typename")
         if typename in ("LabeledEvent", "UnlabeledEvent"):
@@ -472,6 +480,7 @@ def build_tessl_factory_issue_lifecycle(issue, *, history_start=None):
     trigger_labels = set()
     pr_phases = {}
     factory_stage = None
+    explicit_override = None
     transitions = []
     events.sort(key=lambda event: (event[0], event[1]))
     for event_at, same_time in groupby(events, key=lambda event: event[0]):
@@ -482,25 +491,35 @@ def build_tessl_factory_issue_lifecycle(issue, *, history_start=None):
                 trigger_labels.discard(value)
             elif kind == "factory_comment":
                 next_stage, explicit = value
-                if explicit or not (next_stage == "Blocked" and factory_stage == "PR Review"):
+                if explicit:
+                    factory_stage = next_stage
+                    explicit_override = next_stage
+                elif not (next_stage == "Blocked" and factory_stage == "PR Review"):
                     factory_stage = next_stage
             elif kind == "pr_work":
                 pr_phases[value] = "Agent Working"
+                if explicit_override == "Blocked":
+                    explicit_override = None
             elif kind == "pr_review":
                 pr_phases[value] = "PR Review"
+                if explicit_override in ("Blocked", "Agent Working", "Queued", "Backlog"):
+                    explicit_override = None
             elif kind == "pr_end":
                 pr_phases.pop(value, None)
             elif kind == "issue_state":
                 if issue_closed is True and value is False:
                     factory_stage = None
+                    explicit_override = None
                 issue_closed = value
 
         if event_at < start:
             continue
         if issue_closed is None:
-            continue
-        if issue_closed or factory_stage == "Done":
+            stage = "Unobserved"
+        elif issue_closed:
             stage = "Done"
+        elif explicit_override is not None:
+            stage = explicit_override
         elif "PR Review" in pr_phases.values() or factory_stage == "PR Review":
             stage = "PR Review"
         elif factory_stage == "Blocked":
@@ -509,6 +528,8 @@ def build_tessl_factory_issue_lifecycle(issue, *, history_start=None):
             stage = "Agent Working"
         elif factory_stage == "Queued" or trigger_labels:
             stage = "Queued"
+        elif start > created:
+            stage = "Unobserved"
         else:
             stage = "Backlog"
 
@@ -532,7 +553,7 @@ def _tessl_factory_lifecycle_cfd(issues, window_start, now, history_start):
         for i, (start, stage) in enumerate(transitions):
             end = transitions[i + 1][0] if i + 1 < len(transitions) else None
             intervals[stage].append((start, end))
-            if stage not in ("Backlog", "Done"):
+            if stage not in ("Unobserved", "Backlog", "Done"):
                 active_starts.append(start)
                 spans.append((start, end))
         if spans:
@@ -552,7 +573,7 @@ def _tessl_factory_lifecycle_cfd(issues, window_start, now, history_start):
 
     series = {stage: count_intervals(intervals[stage], samples) for stage in TESSL_FACTORY_STAGES}
     series = {stage: counts for stage, counts in series.items() if any(counts)}
-    active_stages = [stage for stage in series if stage not in ("Backlog", "Done")]
+    active_stages = [stage for stage in series if stage not in ("Unobserved", "Backlog", "Done")]
     if not active_stages or sum(any(counts) for counts in zip(*series.values())) < 2:
         return None
     observed = sum(any(count_intervals(spans, samples)) for spans in issue_active_spans)
@@ -784,7 +805,13 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
     if project_status == "available" and not project_cfd:
         project_status = "insufficient"
     factory_cfd = None
-    if not project_cfd and flow_available and not _workflow_label_stages(repo) and _has_tessl_factory_signals(lifecycle_issues):
+    factory_comments_available = issues_raw.get("factory_comments_available")
+    factory_evidence_ready = (
+        factory_comments_available is True
+        or (factory_comments_available is None and _has_tessl_factory_comments(lifecycle_issues))
+    )
+    if (not project_cfd and flow_available and not _workflow_label_stages(repo)
+            and factory_evidence_ready and _has_tessl_factory_signals(lifecycle_issues)):
         factory_cfd = _tessl_factory_lifecycle_cfd(lifecycle_issues, window_start, now, history_start)
     return {
         "sample_size": len(sampled),
@@ -1051,12 +1078,17 @@ async def collect_rest_issues(repo, headers, now):
     closed = [item for item in closed if item["number"] not in open_numbers]
     history_start = None
     history_retry = False
+    factory_comments_available = None
     all_issues = opened + closed
     has_label_profile = bool(_workflow_label_stages(repo))
+    # Hosted REST discovery gates comment enrichment on a surviving trigger label (tessl / factory:*)
+    # so non-Factory repositories avoid extra /issues/events and /issues/comments requests.
     has_factory = not has_label_profile and _has_tessl_factory_signals(all_issues)
     if open_result is not None and closed_result is not None and all_issues and (has_label_profile or has_factory):
+        events_ok = False
         try:
             history_start = await _enrich_rest_issue_history(repo, headers, all_issues)
+            events_ok = True
         except (ValueError, TimeoutError, httpx.HTTPError):
             history_retry = True
         if has_factory:
@@ -1064,10 +1096,14 @@ async def collect_rest_issues(repo, headers, now):
                 comments_start = await _enrich_rest_factory_comments(repo, headers, all_issues)
                 if comments_start and (history_start is None or _parse(comments_start) > _parse(history_start)):
                     history_start = comments_start
+                factory_comments_available = events_ok
             except (ValueError, TimeoutError, httpx.HTTPError):
                 history_retry = True
+                factory_comments_available = False
     return {"open": opened, "closed": closed, "pre_ai": [],
             "open_truncated": open_truncated, "closed_truncated": closed_truncated,
             "source": "rest", "history_start": history_start,
+            **({"factory_comments_available": factory_comments_available}
+               if factory_comments_available is not None else {}),
             "retry_collection": open_retry or closed_retry or history_retry,
             "open_available": open_result is not None, "closed_available": closed_result is not None}
