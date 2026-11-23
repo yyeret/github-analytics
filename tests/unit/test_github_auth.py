@@ -36,6 +36,11 @@ class Statement:
         self.db.connection.commit()
         return dict(result) if result else None
 
+    async def all(self):
+        rows = self.db.connection.execute(self.sql, self.args).fetchall()
+        self.db.connection.commit()
+        return {'results': [dict(row) for row in rows]}
+
     async def run(self):
         self.db.connection.execute(self.sql, self.args)
         self.db.connection.commit()

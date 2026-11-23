@@ -17,9 +17,17 @@ from github_api import request_json
 from google_auth import verify_id_token
 from product_value import assess_product_value, assess_issue_value
 import github_auth
+import linear_auth
 from issue_candidates import collect_issue_candidates
 from mcp_oauth import delete_mcp_grants, router as mcp_oauth_router
 from github_projects import collect_project_history
+from linear_issues import (
+    LinearError,
+    collect_linear_issues,
+    detect_linear_team_from_texts,
+    discover_linear_team_from_github,
+    parse_linear_team,
+)
 from mcp_analytics import (check_private_dashboard_access, collect_dashboard_data,
                            collect_public_value_issues, public_value_sources)
 from mcp_server import install_mcp
@@ -48,6 +56,7 @@ class AnalyzeRequest(BaseModel):
     repo_url: str = Field(max_length=300)
     force_refresh: bool = False
     allow_private: bool = False
+    linear_team_url: str | None = Field(default=None, max_length=300)
 
 
 class OwnerEvidence(BaseModel):
@@ -153,6 +162,7 @@ async def auth_config(request: Request):
         "required": auth_required(request),
         "github_enabled": bool(env and getattr(env, 'GITHUB_OAUTH_CLIENT_ID', '')
             and getattr(env, 'GITHUB_OAUTH_CLIENT_SECRET', '') and getattr(env, 'GITHUB_OAUTH_REDIRECT_URI', '')),
+        "linear_enabled": linear_auth.is_configured(env),
     }
 
 
@@ -165,16 +175,42 @@ async def issue_nonce(request: Request):
     return response
 
 
+async def resolve_account_key(request: Request, *, identity=None) -> str | None:
+    if identity is None:
+        try:
+            identity = await caller_github(request)
+        except HTTPException:
+            identity = None
+    if identity:
+        return repository_preference_key("github", identity.github_id)
+    if request.cookies.get(SESSION_COOKIE):
+        try:
+            user = await signed_in_user(request)
+            return repository_preference_key("google", user["google_sub"])
+        except HTTPException:
+            return None
+    return None
+
+
+linear_auth.install_linear_auth(app, resolve_account_key)
+
+
 @app.get("/api/auth/session")
 async def auth_session(request: Request):
+    env = environment(request)
+    db = getattr(env, "USERS_DB", None) if env else None
     identity = await caller_github(request)
     if identity:
+        account_key = repository_preference_key('github', identity.github_id)
+        workspaces = await linear_auth.list_connected_workspaces(db, account_key)
         return {'signed_in': True, 'provider': 'github', 'login': identity.login,
-                'account_key': repository_preference_key('github', identity.github_id)}
+                'account_key': account_key, 'linear_workspaces': workspaces}
     try:
         user = await signed_in_user(request)
+        account_key = repository_preference_key('google', user['google_sub'])
+        workspaces = await linear_auth.list_connected_workspaces(db, account_key)
         return {"signed_in": True, "email": user["email"],
-                "account_key": repository_preference_key('google', user['google_sub'])}
+                "account_key": account_key, "linear_workspaces": workspaces}
     except HTTPException as exc:
         if exc.status_code == 401:
             return {"signed_in": False}
@@ -250,9 +286,12 @@ async def delete_account(request: Request):
     if identity:
         db = d1(request)
         await delete_mcp_grants(db, identity.github_id)
+        await linear_auth.delete_account_grants(db, repository_preference_key('github', identity.github_id))
         await db.prepare('DELETE FROM github_sessions WHERE github_id = ?').bind(identity.github_id).run()
     if user:
-        await d1(request).prepare("DELETE FROM users WHERE google_sub = ?").bind(user["google_sub"]).run()
+        db = d1(request)
+        await linear_auth.delete_account_grants(db, repository_preference_key('google', user["google_sub"]))
+        await db.prepare("DELETE FROM users WHERE google_sub = ?").bind(user["google_sub"]).run()
     response = Response(content="{}", media_type="application/json")
     response.delete_cookie(SESSION_COOKIE, path="/", secure=request.url.scheme == "https", samesite="lax")
     response.delete_cookie(github_auth.GITHUB_SESSION_COOKIE, path='/', secure=True, samesite='lax')
@@ -416,8 +455,38 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         token, private = await repository_access(repo, request, identity, req.allow_private)
     gemini_override = None if full_dashboard else request.headers.get("X-Gemini-Api-Key")
     jev_override = None if full_dashboard else request.headers.get("X-TypeSafe-Api-Key")
-    caller_keys = gemini_override or jev_override
-    cache = getattr(env, "ANALYTICS_CACHE", None) if env and not caller_keys and not private else None
+    linear_override = None if full_dashboard else (request.headers.get("X-Linear-Api-Key") or "").strip() or None
+    linear_team_url = (getattr(req, "linear_team_url", None) or "").strip() or None
+    db = getattr(env, "USERS_DB", None) if env else None
+    account_key = await resolve_account_key(request, identity=identity)
+    linear_key = linear_override
+    if linear_team_url:
+        try:
+            parsed_linear = parse_linear_team(linear_team_url)
+        except LinearError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if not linear_key:
+            linear_key, _ = await linear_auth.resolve_linear_token(db, account_key, parsed_linear["org"])
+        if not linear_key:
+            if linear_auth.is_configured(env):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Connect your Linear workspace at /api/auth/linear/start (or provide a Linear API key in Settings) to analyze Linear issues.",
+                )
+            raise HTTPException(
+                status_code=400,
+                detail="Linear API key is required. Add your Linear API key in Settings.",
+            )
+    caller_keys = gemini_override or jev_override or linear_override
+    is_linear = bool(linear_team_url)
+    connected_linear = (
+        await linear_auth.list_connected_workspaces(db, account_key)
+        if not is_linear and not linear_override and account_key else []
+    )
+    cache = (
+        getattr(env, "ANALYTICS_CACHE", None)
+        if env and not caller_keys and not private and not is_linear and not connected_linear else None
+    )
     cache_key = public_analysis_key(repo, full_dashboard)
     if cache and not req.force_refresh:
         saved = await cache.get(cache_key)
@@ -430,14 +499,64 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
                 if snapshot:
                     return json.loads(snapshot)
     try:
-        raw = (await collect_dashboard_data(repo, identity.token, private, repository_id)
-               if full_dashboard else await collect_public_data(repo, token))
-        issues = raw.get("issues") or {}
-        if private and issues.get("open_available", True) and issues.get("closed_available", True):
-            issue_sample = (issues.get("open") or []) + (issues.get("closed") or [])
-            if issue_sample:
-                issues["project_history"] = await collect_project_history(repo, token, issue_sample)
+        linear_detected = None
+        if is_linear:
+            github_coro = (
+                collect_dashboard_data(repo, identity.token, private, repository_id)
+                if full_dashboard else collect_public_data(repo, token, include_issues=False)
+            )
+            raw, linear_issues = await asyncio.gather(
+                github_coro,
+                collect_linear_issues(linear_team_url, linear_key, repo=repo),
+            )
+            raw["issues"] = linear_issues
+        else:
+            raw = (await collect_dashboard_data(repo, identity.token, private, repository_id)
+                   if full_dashboard else await collect_public_data(repo, token))
+            pr_bodies = [
+                pr.get("body")
+                for group in ("recent_prs", "open_prs")
+                for pr in (raw.get(group) or [])
+                if isinstance(pr, dict) and pr.get("body")
+            ]
+            if linear_override or connected_linear:
+                discovered = await discover_linear_team_from_github(repo, token, pr_bodies=pr_bodies)
+                if discovered:
+                    auto_token = linear_override
+                    if not auto_token:
+                        auto_token, _ = await linear_auth.resolve_linear_token(db, account_key, discovered["org"])
+                    if auto_token:
+                        try:
+                            linear_issues = await collect_linear_issues(discovered["url"], auto_token, repo=repo)
+                            linear_issues["linear_team"]["auto_discovered"] = True
+                            raw["issues"] = linear_issues
+                            is_linear = True
+                        except LinearError:
+                            if linear_override:
+                                raise
+                            linear_detected = {**discovered, "status": "connect_required"}
+                    else:
+                        linear_detected = {**discovered, "status": "connect_required"}
+            else:
+                discovered = detect_linear_team_from_texts(pr_bodies)
+                if discovered:
+                    status_label = "connect_required" if linear_auth.is_configured(env) else "key_required"
+                    linear_detected = {**discovered, "status": status_label}
+            if not is_linear:
+                issues = raw.get("issues") or {}
+                if private and issues.get("open_available", True) and issues.get("closed_available", True):
+                    issue_sample = (issues.get("open") or []) + (issues.get("closed") or [])
+                    if issue_sample:
+                        issues["project_history"] = await collect_project_history(repo, token, issue_sample)
         metrics = compute_flow_metrics(raw)
+        if linear_detected and not metrics.get("linear_team"):
+            if linear_detected.get("status") == "connect_required":
+                url = linear_auth.connect_url(env, repo=repo)
+                if url:
+                    linear_detected["connect_url"] = url
+            metrics["linear_detected"] = linear_detected
+    except LinearError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="Repository analysis failed. Please try again.") from exc
     gemini_key = gemini_override or getattr(env, "GEMINI_API_KEY", None)
@@ -456,12 +575,12 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
         if metrics.get("recent_stats", {}).get("total") or raw.get("open_prs") else None
     )
-    if private or (caller_keys and identity):
+    if private or ((caller_keys or is_linear) and identity):
         if not full_dashboard:
             metrics['analysis_id'] = secrets.token_urlsafe(24)
         cache = getattr(env, 'ANALYTICS_CACHE', None)
         cache_key = private_analysis_key(repo, identity, metrics['analysis_id'], full_dashboard)
-    elif caller_keys:
+    elif caller_keys or is_linear:
         metrics["analysis_id"] = secrets.token_urlsafe(24)
         if env and request.cookies.get(SESSION_COOKIE):
             cache = getattr(env, "ANALYTICS_CACHE", None)

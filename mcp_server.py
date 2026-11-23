@@ -16,14 +16,16 @@ RESOURCE_META = {
     'ui': {'prefersBorder': True, 'csp': {'connectDomains': [], 'resourceDomains': ['https://cdn.jsdelivr.net']}},
     'openai/widgetCSP': {'connect_domains': [], 'resource_domains': ['https://cdn.jsdelivr.net']},
     'openai/ui': {'availableDisplayModes': ['inline', 'fullscreen'], 'preferredDisplayMode': 'inline'},
-    'openai/widgetDescription': 'Interactive GitHub flow charts, backlog, content framing, cost of delay and coaching.',
+    'openai/widgetDescription': 'Interactive GitHub + Linear flow charts, issue lifecycle CFD, backlog, content framing, cost of delay and coaching.',
 }
 RESOURCE = {'uri': URI, 'name': 'GitHub Flow Analytics dashboard', 'mimeType': MIME, '_meta': RESOURCE_META}
 SERVER = {'name': 'github-flow-analytics', 'version': '1.0.0'}
 VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26']
 CAPABILITIES = {'tools': {}, 'resources': {}, 'extensions': {'io.modelcontextprotocol/ui': {'mimeTypes': [MIME]}}}
 INSTRUCTIONS = (
-    'Use show_github_dashboard when the user asks for repository flow or an interactive chart. '
+    'Use show_github_dashboard when the user asks for repository flow, Linear + GitHub combo flow, or an interactive chart. '
+    'Pass linear_team_url (for example https://linear.app/<org>/team/<KEY>/overview or a team key) to pair Linear issues and '
+    'workflow-stage CFDs with GitHub PR metrics, or omit it to auto-detect from GitHub Linear linkbacks when the user has connected Linear via OAuth. '
     'For issue cost of delay, use show_issue_value. Assessments describe stated intent and expected value. '
     'Ask for explicit permission to share private analytics with the chat client and process repository '
     'context with Gemini and Jev before passing allow_private. Never ask for access tokens.'
@@ -33,6 +35,11 @@ INSTRUCTIONS = (
 class DashboardArgs(BaseModel):
     model_config = ConfigDict(extra='forbid')
     repo: str | None = Field(default=None, max_length=200, description='GitHub owner/repo or github.com URL.')
+    linear_team_url: str | None = Field(
+        default=None,
+        max_length=300,
+        description='Optional Linear team URL (linear.app/<org>/team/<KEY>/overview) or team key to pair Linear issues and lifecycle CFD with GitHub PRs.',
+    )
     view: Literal['overview', 'flow', 'work', 'batch', 'issues', 'value'] = 'overview'
     force_refresh: bool = Field(default=False, strict=True)
     allow_private: bool = Field(default=False, strict=True, description='Enable only with explicit permission to process private data.')
@@ -125,8 +132,28 @@ def summary(metrics, view):
             'active_prs': len(metrics.get('active_wip_points', [])),
             'recent_complete_weeks': [{'week': row['week'], 'merged_prs': row['total']} for row in tp]}
     if issues := metrics.get('issues'):
-        data.update({'open_issues_in_sample': issues['open_now'], 'open_issues_capped': issues['open_truncated'],
-                     'net_backlog_8w': issues['net_8w'], 'stale_issues_in_sample': issues['stale']['count']})
+        data.update({
+            'issue_source': issues.get('source', 'github'),
+            'open_issues_in_sample': issues['open_now'],
+            'open_issues_capped': issues['open_truncated'],
+            'net_backlog_8w': issues['net_8w'],
+            'stale_issues_in_sample': issues['stale']['count'],
+        })
+        if cfd := issues.get('lifecycle_cfd'):
+            data['lifecycle_stages'] = cfd.get('stages', [])
+            points = cfd.get('points') or []
+            if points:
+                data['latest_stage_counts'] = points[-1].get('counts', {})
+    if linear_team := metrics.get('linear_team'):
+        data['linear_team'] = {
+            'key': linear_team.get('key'),
+            'name': linear_team.get('name'),
+            'org': linear_team.get('org'),
+            'url': linear_team.get('url'),
+            'auto_discovered': bool(linear_team.get('auto_discovered')),
+        }
+    elif linear_detected := metrics.get('linear_detected'):
+        data['linear_detected'] = linear_detected
     return data
 
 
@@ -173,14 +200,21 @@ def install_mcp(app, analyze, issue_value, coach):
                                issueValue=results, privateEnabled=bool(grant['private_consent']))
 
         metrics = await analyze(AnalysisInput(repo_url=inputs.repo or '', force_refresh=inputs.force_refresh,
-                              allow_private=inputs.allow_private), request, identity, full_dashboard=True)
+                              allow_private=inputs.allow_private, linear_team_url=inputs.linear_team_url),
+                              request, identity, full_dashboard=True)
         data = summary(metrics, inputs.view)
         text = (f'{data["visibility"].capitalize()} repository {data["repo"]}. '
                 f'{data["merged_pr_sample"]} merged PRs and {data["active_prs"]} open PRs in the sample.')
         if data['p85_cycle_hours'] is not None:
             text += f' P85 cycle time {data["p85_cycle_hours"]:.1f} hours.'
-        if 'open_issues_in_sample' in data:
+        if linear_team := data.get('linear_team'):
+            auto = ' (auto-detected)' if linear_team.get('auto_discovered') else ''
+            text += f' Linear team {linear_team["key"]}{auto}: {data.get("open_issues_in_sample", 0)} open issues in the sample.'
+        elif 'open_issues_in_sample' in data:
             text += f' {data["open_issues_in_sample"]} open issues in the sample.'
+        if (detected := data.get('linear_detected')) and detected.get('connect_url'):
+            slug = f'{detected["org"]}/{detected["team_key"]}' if detected.get('org') else detected.get('team_key', '')
+            text += f' Linear team {slug} detected — connect Linear (read-only) at {detected["connect_url"]} then refresh.'
         return tool_result(text, data, metrics=metrics, privateEnabled=bool(grant['private_consent']))
 
     @app.api_route('/mcp', methods=['GET', 'DELETE'])
@@ -278,6 +312,7 @@ class AnalysisInput(BaseModel):
     repo_url: str
     allow_private: bool
     force_refresh: bool
+    linear_team_url: str | None = None
 
 
 class IssueAnalysisInput(IssueArgs):

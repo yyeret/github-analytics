@@ -29,6 +29,7 @@ def client(monkeypatch):
     db = Database(check_same_thread=False)
     db.connection.execute('PRAGMA foreign_keys=ON')
     db.connection.executescript((Path(__file__).parents[2] / 'migrations/0003_mcp_oauth.sql').read_text())
+    db.connection.executescript((Path(__file__).parents[2] / 'migrations/0004_linear_auth.sql').read_text())
     async def allowed(_):
         return {'success': True}
 
@@ -364,3 +365,55 @@ def test_public_mcp_value_uses_visibility_checked_github_reads(client, monkeypat
         assert record['assessed'] == 1
         assert record['items'][0]['cost_of_delay'] == 29
         assert record['sources']['readme']
+
+
+def test_mcp_app_exposes_linear_issues_and_dashboard_controls(client, monkeypatch):
+    from tests.integration.test_linear_combo_api import _sample_linear_raw
+
+    token = connect(client, private=True)
+    tools = {t['name']: t for t in rpc(client, 'tools/list', token=token).json()['result']['tools']}
+    assert 'linear_team_url' in tools['show_github_dashboard']['inputSchema']['properties']
+    assert 'linear_team_url' in tools['refresh_github_dashboard']['inputSchema']['properties']
+
+    html = rpc(client, 'resources/read', {'uri': 'ui://github-analytics/dashboard-v1.html'}, token=token).json()['result']['contents'][0]['text']
+    assert 'id="linear-team-input"' in html
+    assert 'linear_team_url' in html
+
+    async def metadata(*args, **kwargs):
+        return 200, {}, {'id': 77, 'full_name': 'o/r', 'private': True}
+
+    async def collect_dashboard(repo, tok, private, repo_id):
+        return {'repo': repo, 'captured_at': '2026-11-23T12:00:00Z', 'recent_prs': [], 'open_prs': [], 'issues': None}
+
+    async def collect_linear(team_ref, api_key, now=None, *, repo=None):
+        assert team_ref == 'https://linear.app/yeret-agility/team/CRM/overview'
+        assert api_key == 'Bearer user-linear-oauth-token'
+        assert repo == 'o/r'
+        return _sample_linear_raw()
+
+    async def configure(request, kind, limit, **_):
+        account_key = hosted.repository_preference_key('github', 12)
+        await request.scope['env'].USERS_DB.prepare(
+            'INSERT OR REPLACE INTO linear_grants (account_key, org_slug, org_name, access_token, expires_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(account_key, 'yeret-agility', 'Yeret Agility', 'user-linear-oauth-token', 9999999999, 1000).run()
+
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(hosted, 'enforce_limit', configure)
+    monkeypatch.setattr(hosted, 'collect_dashboard_data', collect_dashboard)
+    monkeypatch.setattr(hosted, 'collect_linear_issues', collect_linear)
+
+    result = tool(client, 'show_github_dashboard', {
+        'repo': 'o/r',
+        'linear_team_url': 'https://linear.app/yeret-agility/team/CRM/overview',
+        'allow_private': True,
+        'view': 'issues',
+    }, token)
+    assert not result.get('isError'), result
+    sc = result['structuredContent']
+    assert sc['issue_source'] == 'linear'
+    assert sc['linear_team']['key'] == 'CRM'
+    assert 'Review PR' in sc['lifecycle_stages']
+    assert sc['latest_stage_counts']['Review PR'] == 1
+    assert 'Linear team CRM' in result['content'][0]['text']
+
