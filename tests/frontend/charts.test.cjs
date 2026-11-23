@@ -26,13 +26,13 @@ test('renderWIP includes Draft only when drafts exist and orders Opened -> In Re
     { x: 'In Review', y: 2.5, num: 2, title: 'Reviewed PR', classification: 'Human' },
     { x: 'Approved', y: 3.5, num: 3, title: 'Approved PR', classification: 'Human' },
   ]);
-  assert.deepEqual(Array.from(captured.config.options.scales.x.categories), ['Opened', 'In Review', 'Approved']);
+  assert.deepEqual(Array.from(captured.config.options.scales.x.labels), ['Opened', 'In Review', 'Approved']);
 
   ctx.renderWIP([
     { x: 'Draft', y: 0.5, num: 4, title: 'Draft PR', classification: 'Human' },
     { x: 'Opened', y: 1.5, num: 1, title: 'Open PR', classification: 'Human' },
   ]);
-  assert.deepEqual(Array.from(captured.config.options.scales.x.categories), ['Draft', 'Opened', 'In Review', 'Approved']);
+  assert.deepEqual(Array.from(captured.config.options.scales.x.labels), ['Draft', 'Opened', 'In Review', 'Approved']);
 });
 
 test('renderCorrelation hides chart and shows note when all PR sizes are 0', () => {
@@ -129,5 +129,6 @@ test('renderIssues replaces weekly arrivals with CFD and age distribution with W
   assert.equal(drawn['chart-issue-flow'], undefined);
   assert.equal(els['issue-age-title'].textContent, 'Work Item Aging by Status');
   assert.equal(drawn['chart-issue-age'].type, 'scatter');
-  assert.deepEqual(Array.from(drawn['chart-issue-age'].options.scales.x.categories), ['Todo', 'In Progress']);
+  assert.deepEqual(Array.from(drawn['chart-issue-age'].options.scales.x.labels), ['Todo', 'In Progress']);
+  assert.deepEqual(Array.from(drawn['chart-issue-age'].data.labels), ['Todo', 'In Progress']);
 });

@@ -1612,6 +1612,7 @@
       mkChart('chart-issue-age', {
         type: 'scatter',
         data: {
+          labels: aging.stages,
           datasets: [{
             label: 'Open issues',
             data: aging.items.map(item => ({x: item.stage, y: item.age_days, identifier: item.identifier, title: item.title})),
@@ -1634,7 +1635,7 @@
             }
           },
           scales:{
-            x:{ type:'category', categories: aging.stages, grid:{color:'rgba(255,255,255,.04)'} },
+            x:{ type:'category', labels: aging.stages, grid:{color:'rgba(255,255,255,.04)'} },
             y:{ grid:{color:'rgba(255,255,255,.04)'}, title:{display:true, text:'Age (days)', color:'#64748b'}, beginAtZero:true }
           }
         }
@@ -1703,6 +1704,7 @@
     mkChart('chart-wip', {
       type: 'scatter',
       data: {
+        labels: stageOrder,
         datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
           label: cls,
           data: normalized.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y, title:p.title, num:p.num})),
@@ -1724,7 +1726,7 @@
           }
         },
         scales:{
-          x:{ type:'category', categories: stageOrder, grid:{color:'rgba(255,255,255,.04)'} },
+          x:{ type:'category', labels: stageOrder, grid:{color:'rgba(255,255,255,.04)'} },
           y:{ grid:{color:'rgba(255,255,255,.04)'}, title:{display:true,text:'Age (days)',color:'#64748b'}, beginAtZero:true }
         }
       }
