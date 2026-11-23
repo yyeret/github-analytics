@@ -697,6 +697,108 @@ def _project_lifecycle_cfd(issues, history, window_start):
     }
 
 
+def _linear_lifecycle_cfd(issues, issues_raw, window_start, now):
+    """Build a Cumulative Flow Diagram from Linear team workflow state transitions."""
+    if not issues or issues_raw.get("source") != "linear":
+        return None
+    ordered_names = [
+        state["name"] for state in (issues_raw.get("linear_states") or [])
+        if isinstance(state, dict) and isinstance(state.get("name"), str) and state["name"]
+    ]
+    intervals = {name: [] for name in ordered_names}
+    issue_spans = []
+    timeline_truncated = 0
+
+    for issue in issues:
+        created = _parse(issue.get("createdAt"))
+        if created is None or created > now:
+            continue
+        history = issue.get("linearHistory") or {}
+        if history.get("hasNextPage"):
+            timeline_truncated += 1
+            continue
+        transitions = []
+        for event in history.get("transitions") or []:
+            at = _parse(event.get("createdAt"))
+            to_state = event.get("toState")
+            if at is None or at > now or not to_state:
+                continue
+            transitions.append((at, event.get("fromState"), to_state))
+        transitions.sort(key=lambda item: item[0])
+
+        initial_stage = (
+            (transitions[0][1] or issue.get("linearState"))
+            if transitions
+            else issue.get("linearState")
+        )
+        changes = []
+        if initial_stage:
+            changes.append((created, initial_stage))
+        for at, _, to_state in transitions:
+            if at < created:
+                continue
+            changes.append((at, to_state))
+        if not changes:
+            continue
+
+        spans = []
+        for idx, (start, stage) in enumerate(changes):
+            end = changes[idx + 1][0] if idx + 1 < len(changes) else None
+            if not stage or (end is not None and (end <= window_start or end <= start)):
+                continue
+            intervals.setdefault(stage, []).append((start, end))
+            spans.append((start, end))
+        if spans:
+            issue_spans.append(spans)
+
+    if not issue_spans:
+        return None
+
+    first = max(window_start, min(spans[0][0] for spans in issue_spans))
+    days = (now.date() - first.date()).days
+    if days >= 28:
+        step = 7
+        midnight = datetime.datetime.combine(now.date(), datetime.time.min)
+        samples = [midnight - datetime.timedelta(days=offset - 1, seconds=1)
+                   for offset in range(days - days % step, 0, -step)] + [now]
+        labels = [at.date().isoformat() for at in samples]
+    elif days >= 1:
+        midnight = datetime.datetime.combine(now.date(), datetime.time.min)
+        samples = [midnight - datetime.timedelta(days=offset - 1, seconds=1)
+                   for offset in range(days, 0, -1)] + [now]
+        labels = [at.date().isoformat() for at in samples]
+    else:
+        span_seconds = max(0.0, (now - first).total_seconds())
+        if span_seconds < 60:
+            return None
+        steps = 6
+        samples = [first + datetime.timedelta(seconds=span_seconds * i / steps) for i in range(steps)] + [now]
+        labels = [at.strftime("%Y-%m-%d %H:%M") for at in samples]
+
+    series = {stage: count_intervals(spans, samples) for stage, spans in intervals.items() if spans}
+    series = {stage: counts for stage, counts in series.items() if any(counts)}
+    if not series or sum(any(counts) for counts in zip(*series.values())) < 2:
+        return None
+
+    observed = sum(any(count_intervals(spans, samples)) for spans in issue_spans)
+    team = issues_raw.get("linear_team") or {}
+    key = team.get("key") or "Linear"
+    name = team.get("name")
+    profile = f"{key} · {name}" if name and name.lower() != key.lower() else key
+    return {
+        "source": "linear",
+        "profile": profile,
+        "stages": list(series),
+        "points": [{"date": label, "counts": dict(zip(series, counts))}
+                   for label, counts in zip(labels, zip(*series.values()))],
+        "coverage": {
+            "issues": len(issues),
+            "with_workflow_signal": observed,
+            "timeline_truncated": timeline_truncated,
+        },
+    }
+
+
 def _window_start(issues_raw, weekly_bins):
     start = weekly_bins[0]
     if issues_raw.get("closed_truncated"):
@@ -738,6 +840,7 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
     open_issues = issues_raw.get("open") or []
     closed_issues = issues_raw.get("closed") or []
     rest = issues_raw.get("source") == "rest"
+    is_linear = issues_raw.get("source") == "linear"
     open_available = issues_raw.get("open_available", True)
     closed_available = issues_raw.get("closed_available", True)
     flow_available = open_available and closed_available
@@ -782,15 +885,20 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
             if age_days >= low and (high is None or age_days < high):
                 age_counts[label] += 1
                 break
-        last = _parse(it.get("updatedAt")) if rest else _last_activity(it)
+        last = _parse(it.get("updatedAt")) if (rest or is_linear) else _last_activity(it)
         idle_days = elapsed(last, now, 86400.0) if last else age_days
         if idle_days > stale_days:
-            stale_items.append({
+            stale_entry = {
                 "number": it.get("number"),
                 "title": it.get("title", ""),
                 "age_days": age_days,
                 "days_since_activity": idle_days,
-            })
+            }
+            if it.get("identifier"):
+                stale_entry["identifier"] = it["identifier"]
+            if it.get("url"):
+                stale_entry["url"] = it["url"]
+            stale_items.append(stale_entry)
     stale_items.sort(key=lambda s: s["days_since_activity"], reverse=True)
 
     lifecycle_samples = [t for t in weekly_bins[1:] if t >= window_start and (history_start is None or t >= history_start)]
@@ -799,9 +907,10 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         days = min(7, (now - start).days)
         lifecycle_samples = [now - datetime.timedelta(days=i) for i in range(days, -1, -1)]
     lifecycle_issues = open_issues + modern_closed
+    linear_cfd = _linear_lifecycle_cfd(lifecycle_issues, issues_raw, window_start, now) if (is_linear and flow_available) else None
     project_history = issues_raw.get("project_history") or {}
-    project_cfd = _project_lifecycle_cfd(lifecycle_issues, project_history, window_start)
-    project_status = project_history.get("status")
+    project_cfd = None if is_linear else _project_lifecycle_cfd(lifecycle_issues, project_history, window_start)
+    project_status = None if is_linear else project_history.get("status")
     if project_status == "available" and not project_cfd:
         project_status = "insufficient"
     factory_cfd = None
@@ -810,14 +919,16 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         factory_comments_available is True
         or (factory_comments_available is None and _has_tessl_factory_comments(lifecycle_issues))
     )
-    if (not project_cfd and flow_available and not _workflow_label_stages(repo)
+    if (not is_linear and not project_cfd and flow_available and not _workflow_label_stages(repo)
             and factory_evidence_ready and _has_tessl_factory_signals(lifecycle_issues)):
         factory_cfd = _tessl_factory_lifecycle_cfd(lifecycle_issues, window_start, now, history_start)
     return {
         "sample_size": len(sampled),
         "open_available": open_available,
         "closed_available": closed_available,
-        "stale_basis": "updated" if rest else "comment",
+        "stale_basis": "updated" if (rest or is_linear) else "comment",
+        **({"source": "linear"} if is_linear else {}),
+        **({"linear_team": issues_raw.get("linear_team")} if is_linear and issues_raw.get("linear_team") else {}),
         "window_start": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "closed_truncated": bool(issues_raw.get("closed_truncated")),
         "open_truncated": bool(issues_raw.get("open_truncated")),
@@ -830,12 +941,12 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]) if len(weekly) >= NET_WINDOW_WEEKS else None,
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
-        "lifecycle_cfd": project_cfd or factory_cfd or (
+        "lifecycle_cfd": linear_cfd if is_linear else (project_cfd or factory_cfd or (
             _compute_lifecycle_cfd(lifecycle_issues, lifecycle_samples, repo, history_start)
             if flow_available else None
-        ),
+        )),
         **({"project_history_status": project_status} if project_status else {}),
-        "resolution": None if rest else _resolution_summary(modern_closed),
+        "resolution": None if (rest or is_linear) else _resolution_summary(modern_closed),
     }
 
 

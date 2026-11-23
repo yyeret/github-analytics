@@ -32,7 +32,7 @@ def main():
     bundle = ROOT / '.wrangler' / 'worker'
     bundle.mkdir(parents=True, exist_ok=True)
     for name in ['cloudflare_worker.py', 'cloudflare_app.py', 'mcp_oauth.py', 'mcp_server.py', 'mcp_analytics.py',
-                 'analyze.py', 'issues.py', 'flow_metrics_core.py',
+                 'analyze.py', 'issues.py', 'linear_auth.py', 'linear_issues.py', 'flow_metrics_core.py',
                  'github_api.py', 'github_auth.py', 'github_projects.py', 'google_auth.py', 'issue_candidates.py', 'product_value.py', 'repo_research.py', 'value_classification.py']:
         shutil.copy2(ROOT / name, bundle / name)
     (ROOT / 'public').mkdir(exist_ok=True)

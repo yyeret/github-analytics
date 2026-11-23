@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ async def request_json(
     headers: dict[str, str],
     method: str = "GET",
     body: dict[str, Any] | None = None,
+    form: dict[str, str] | None = None,
     timeout: float = 15,
 ) -> tuple[int, dict[str, str], Any]:
     """Return status, lowercase response headers, and decoded JSON.
@@ -41,7 +42,10 @@ async def request_json(
         import httpx
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.request(method, url, headers=headers, json=body)
+            if form is not None:
+                response = await client.request(method, url, headers=headers, data=form)
+            else:
+                response = await client.request(method, url, headers=headers, json=body)
         status = response.status_code
         response_headers = {name.lower(): value for name, value in response.headers.items()}
         text = response.text
@@ -49,7 +53,10 @@ async def request_json(
         worker_headers = dict(headers)
         controller = AbortController.new()
         options: dict[str, Any] = {"method": method, "headers": worker_headers, "signal": controller.signal}
-        if body is not None:
+        if form is not None:
+            worker_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            options["body"] = urlencode(form)
+        elif body is not None:
             worker_headers.setdefault("Content-Type", "application/json")
             options["body"] = json.dumps(body, separators=(",", ":"))
         try:
@@ -71,6 +78,10 @@ async def request_json(
         payload = {"message": text[:1000]}
     if status >= 400:
         host = urlsplit(url).hostname
-        provider = {"api.github.com": "github", "generativelanguage.googleapis.com": "gemini"}.get(host, "other")
+        provider = {
+            "api.github.com": "github",
+            "api.linear.app": "linear",
+            "generativelanguage.googleapis.com": "gemini",
+        }.get(host, "other")
         log_event(logging.ERROR, "upstream_http_error", provider=provider, http_status=status)
     return status, response_headers, payload

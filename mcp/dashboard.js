@@ -161,6 +161,7 @@
       repo = '';
       allowPrivate = false;
       byId('repo-input').value = '';
+      byId('linear-team-input').value = '';
       byId('allow-private').checked = false;
       byId('views').hidden = true;
       showView(data.view);
@@ -175,6 +176,7 @@
     repo = data.repo;
     allowPrivate = data.visibility === 'private';
     byId('repo-input').value = repo;
+    byId('linear-team-input').value = data.linear_team?.url || data.linear_team?.key || '';
     byId('allow-private').checked = allowPrivate;
     byId('views').hidden = false;
     if (meta.metrics) {
@@ -182,7 +184,10 @@
       renderDashboard(metrics);
       markEmptyCharts();
       const basis = byId('dashboard-basis');
-      basis.textContent = (allowPrivate ? 'Private repository. ' : '') + 'GitHub sample · ' +
+      const sourceLabel = data.linear_team?.key
+        ? 'GitHub PRs + Linear (' + data.linear_team.key + (data.linear_team.auto_discovered ? ', auto-detected' : '') + ') sample · '
+        : 'GitHub sample · ';
+      basis.textContent = (allowPrivate ? 'Private repository. ' : '') + sourceLabel +
         (data.captured_at?.slice(0, 10) || '') +
         '. Contributor type and active PR stages are estimates from sampled activity.';
       basis.hidden = false;
@@ -244,9 +249,11 @@
   function analyze(force) {
     const requestedRepo = byId('repo-input').value.trim();
     if (!requestedRepo) return showStatus('Enter a GitHub repository.');
+    const requestedLinear = byId('linear-team-input').value.trim();
     run(byId('analyze-form'), 'Analyzing repository…', async () => {
       const result = await callTool('refresh_github_dashboard', {
         repo: requestedRepo,
+        ...(requestedLinear ? {linear_team_url: requestedLinear} : {}),
         view: ['issue-value', 'coach'].includes(view) ? 'overview' : view,
         force_refresh: force,
         allow_private: byId('allow-private').checked,
@@ -255,6 +262,11 @@
     });
   }
   action('analyze', 'repo-input', () => analyze(false));
+  byId('linear-team-input').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing && !byId('analyze').disabled && byId('repo-input').reportValidity()) {
+      analyze(false);
+    }
+  });
   action('refresh', 'repo-input', () => analyze(true), false);
   action('assess', 'issue-numbers', () => {
     run(byId('issue-form'), 'Assessing issue value…', async () => {

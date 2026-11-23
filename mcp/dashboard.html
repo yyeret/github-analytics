@@ -67,6 +67,10 @@
       <button id="analyze" class="primary" type="button">Analyze</button>
       <button type="button" id="refresh" hidden>Refresh</button>
     </div>
+    <label for="linear-team-input">Linear team (optional)</label>
+    <div class="controls">
+      <input id="linear-team-input" maxlength="300" placeholder="linear.app/org/team/KEY/overview or KEY (auto-detected if configured)" autocomplete="off" spellcheck="false">
+    </div>
     <label id="private-option" hidden><input id="allow-private" type="checkbox">
       Allow private analysis and share results with this chat client. Sends bounded repository context to Gemini and Jev.
     </label>

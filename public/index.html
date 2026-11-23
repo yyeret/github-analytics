@@ -541,7 +541,19 @@
         <span class="btn-label">Analyze</span>
       </button>
     </div>
+    <div class="repo-bar">
+      <input
+        id="linear-team-input"
+        type="text"
+        aria-label="Linear team URL or key (optional)"
+        placeholder="Optional Linear team URL/key (auto-detected when Linear API key is set)"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </div>
     <a id="github-connect" href="/api/auth/github/start" hidden>Connect GitHub</a>
+    <a id="linear-connect" href="/api/auth/linear/start" hidden>Connect Linear</a>
+    <span id="linear-connected-status" class="private-repos-status" hidden></span>
     <section id="private-repos-section" aria-label="Active private repositories" hidden>
       <div class="private-repos-header">
         <span class="private-repos-title">Most active private repositories</span>
@@ -552,9 +564,11 @@
     </section>
     <label class="settings-consent"><input id="allow-private" type="checkbox"> Allow private analysis using my connected GitHub identity. Send bounded repository context and descriptions to Gemini and Jev, including when this browser reopens the repository.</label>
     <details>
-      <summary>AI assessment API keys (optional)</summary>
+      <summary>API keys (optional: Linear, Gemini, Jev)</summary>
       <div class="provider-keys">
         <p>Use your own keys for this analysis, or leave blank to use configured server keys. Keys are sent securely to this app and kept out of browser storage and saved results.</p>
+        <label for="linear-key">Linear API key (for GitHub + Linear combo)</label>
+        <input id="linear-key" type="password" autocomplete="off" placeholder="lin_api_...">
         <label for="typesafe-key">TypeSafe / Jev key</label>
         <input id="typesafe-key" type="password" autocomplete="off" placeholder="TypeSafe API key">
         <label for="gemini-key">Gemini key</label>
@@ -653,6 +667,7 @@
         <div class="section-line"></div>
       </div>
       <div class="issue-note" id="issues-note"></div>
+      <div class="issue-note" id="linear-connect-banner" hidden></div>
       <div id="issue-details" hidden>
         <div class="chart-card charts-full" id="issue-lifecycle-card" hidden>
           <div class="chart-title">Issue Lifecycle CFD</div>
@@ -778,6 +793,7 @@
         return;
       }
       authConfig = await readApiResponse(response);
+      linearAuthEnabled = Boolean(authConfig.linear_enabled);
       document.getElementById('github-signin').hidden = !authConfig.github_enabled;
       document.getElementById('github-connect').hidden = !authConfig.github_enabled;
       document.getElementById('chat-github-help').hidden = !authConfig.github_enabled;
@@ -828,6 +844,8 @@
     completeSignIn(data);
   }
 
+  let linearAuthEnabled = false;
+
   function completeSignIn(session) {
     document.getElementById('login-gate').classList.remove('visible');
     document.getElementById('account-actions').hidden = false;
@@ -837,6 +855,28 @@
     if (session.provider === 'github') {
       document.getElementById('github-connect').hidden = true;
       loadPrivateRepositories();
+    }
+    const linearConnect = document.getElementById('linear-connect');
+    const linearStatus = document.getElementById('linear-connected-status');
+    if (linearAuthEnabled && linearConnect) {
+      const workspaces = Array.isArray(session.linear_workspaces) ? session.linear_workspaces : [];
+      linearConnect.hidden = false;
+      linearConnect.textContent = workspaces.length ? 'Connect another Linear workspace' : 'Connect Linear';
+      if (linearStatus) {
+        linearStatus.hidden = !workspaces.length;
+        if (workspaces.length) {
+          linearStatus.textContent = 'Linear connected: ' + workspaces.map(w => w.org).join(', ');
+        }
+      }
+    }
+    const search = typeof window !== 'undefined' ? window.location?.search : '';
+    const urlParams = (typeof URLSearchParams === 'function' && search) ? new URLSearchParams(search) : null;
+    if (urlParams?.get('autorun') === '1' && document.getElementById('repo-input')?.value?.trim()) {
+      urlParams.delete('autorun');
+      const nextQuery = urlParams.toString();
+      window.history?.replaceState?.({}, '', nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname);
+      analyzeRepo();
+      return;
     }
     if (repositoryPreferenceKey) restoreLastRepository();
   }
@@ -997,18 +1037,22 @@
       const headers = {'Content-Type':'application/json'};
       if (preferenceKey) headers['X-Analysis-Account'] = preferenceKey;
       if (!savedRepository) {
-        for (const [id, header] of [['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
-          const key = document.getElementById(id).value.trim();
+        for (const [id, header] of [['linear-key', 'X-Linear-Api-Key'], ['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
+          const key = document.getElementById(id)?.value?.trim();
           if (key) headers[header] = key;
         }
       }
+      const linearTeamInput = document.getElementById('linear-team-input');
+      const linearTeam = savedRepository ? undefined : (linearTeamInput?.value?.trim() || undefined);
       const consentChecked = document.getElementById('allow-private').checked;
       const allowPrivate = savedRepository?.private
         ?? (consentChecked && (!restoredPrivateRepository || input === restoredPrivateRepository));
+      const payload = { repo_url: input, force_refresh: false, allow_private: allowPrivate };
+      if (linearTeam) payload.linear_team_url = linearTeam;
       response = await fetch('/api/analyze', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ repo_url: input, force_refresh: false, allow_private: allowPrivate })
+        body: JSON.stringify(payload)
       });
       const data = await readApiResponse(response);
       renderDashboard(data);
@@ -1064,7 +1108,10 @@
   function renderDashboard(d) {
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
-    document.getElementById('repo-name-display').textContent = d.repo;
+    const linearLabel = d.linear_team?.key
+      ? ` + Linear: ${d.linear_team.key}${d.linear_team.name && d.linear_team.name.toLowerCase() !== d.linear_team.key.toLowerCase() ? ` (${d.linear_team.name})` : ''}`
+      : '';
+    document.getElementById('repo-name-display').textContent = `${d.repo}${linearLabel}`;
     for (const chart of Object.values(charts)) chart.destroy();
     charts = {};
 
@@ -1088,7 +1135,7 @@
       renderComet(d.comet_points);
     }
     if (hasPRs || hasOpenPRs) renderWIP(d.active_wip_points, d.stage_percentiles);
-    renderIssues(d.issues);
+    renderIssues(d.issues, d.linear_detected);
     renderValueClassification(d.value_classification);
     renderProductValue(d.product_value);
   }
@@ -1403,9 +1450,13 @@
     document.getElementById('issue-lifecycle-card').hidden = !cfd;
     if (!cfd) return;
     const {coverage, profile, points, stages} = cfd;
+    const linear = cfd.source === 'linear';
     const project = cfd.source === 'github_project';
     const factory = cfd.source === 'tessl_factory';
-    const notes = project ? [
+    const notes = linear ? [
+      `Linear · ${profile}. ${coverage.with_workflow_signal} of ${coverage.issues} sampled issues appear in the chart.`,
+      'Snapshots use UTC. Stages follow the team’s Linear workflow state history.'
+    ] : project ? [
       `GitHub Project · ${profile}. ${coverage.with_workflow_signal} of ${coverage.issues} sampled issues appear in the chart.`,
       'Snapshots use UTC. Each issue enters the chart at its first recorded status.'
     ] : factory ? [
@@ -1443,7 +1494,7 @@
     });
   }
 
-  function renderIssues(iss) {
+  function renderIssues(iss, linearDetected) {
     const sec = document.getElementById('issues-section');
     sec.style.display = 'block';
     const note = document.getElementById('issues-note');
@@ -1458,6 +1509,29 @@
     if (!iss.sample_size) {
       note.textContent = notes.join(' ') || 'No open or recently closed issues were found in the analysis window.';
       return;
+    }
+    const banner = document.getElementById('linear-connect-banner');
+    if (banner) {
+      banner.hidden = true;
+      banner.textContent = '';
+    }
+    if (iss.source === 'linear' && iss.linear_team?.key) {
+      notes.push(`Linear team ${iss.linear_team.key}${iss.linear_team.auto_discovered ? ' (auto-detected from GitHub)' : ''}.`);
+    } else if (linearDetected?.team_key) {
+      const slug = linearDetected.org ? `${linearDetected.org}/${linearDetected.team_key}` : linearDetected.team_key;
+      if (banner && linearDetected.connect_url) {
+        banner.hidden = false;
+        const link = document.createElement('a');
+        link.href = linearDetected.connect_url;
+        if (window.parent !== window) {
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+        }
+        link.textContent = `Connect Linear (${slug}, read-only)`;
+        banner.append(`Linear team ${slug} detected from PR links · `, link, ' to chart Linear workflow stages.');
+      } else {
+        notes.push(`Linear team ${slug} detected from PR links — connect Linear or add a Linear API key in Settings to chart Linear workflow stages.`);
+      }
     }
     if (iss.open_available) notes.push(`${iss.open_now} open issues in the sample.`);
     const cycle = iss.cycle_time.modern;
@@ -1518,7 +1592,7 @@
     const basis = iss.stale_basis === 'updated' ? 'update' : 'comment';
     document.getElementById('issue-stale-title').textContent = `Stale Issues (no ${basis} for over ${iss.stale.threshold_days} days)`;
     const rows = iss.stale.items.map(i =>
-      `<tr><td class="num">#${i.number}</td><td>${escapeHtml(i.title || '')}</td><td class="num">${Math.round(i.days_since_activity)}d idle</td><td class="num">${Math.round(i.age_days)}d old</td></tr>`
+      `<tr><td class="num">${escapeHtml(i.identifier || ('#' + i.number))}</td><td>${escapeHtml(i.title || '')}</td><td class="num">${Math.round(i.days_since_activity)}d idle</td><td class="num">${Math.round(i.age_days)}d old</td></tr>`
     ).join('');
     document.getElementById('issue-stale-table').innerHTML = rows
       ? `<thead><tr><th>Issue</th><th>Title</th><th>Idle</th><th>Age</th></tr></thead><tbody>${rows}</tbody>`
@@ -1849,12 +1923,16 @@
     document.getElementById('loading-overlay').classList.remove('visible');
   }
 
-  // Pre-fill from URL param ?repo=
+  // Pre-fill from URL params ?repo= and ?linear=
   (function() {
     const params = new URLSearchParams(window.location.search);
     const r = params.get('repo');
     if (r) {
       document.getElementById('repo-input').value = r;
+    }
+    const linear = params.get('linear');
+    if (linear) {
+      document.getElementById('linear-team-input').value = linear;
     }
   })();
   document.getElementById('repo-input').addEventListener('input', () => {

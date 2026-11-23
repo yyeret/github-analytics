@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze import collect_data, compute_flow_metrics
+from linear_issues import LinearError, parse_linear_team
 from product_value import assess_product_value
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,8 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 class AnalyzeRequest(BaseModel):
     repo_url: str = Field(max_length=300)  # e.g. "https://github.com/sveltejs/svelte" or "sveltejs/svelte"
     force_refresh: bool = False
+    allow_private: bool = False
+    linear_team_url: Optional[str] = Field(default=None, max_length=300)
 
 
 class ChatMessage(BaseModel):
@@ -106,19 +109,38 @@ def _parse_repo_slug(repo_url: str) -> str:
     raise ValueError(f"Cannot parse repo slug from: {repo_url!r}")
 
 
-def _run_analysis(repo: str, force: bool, gemini_key=None, jev_key=None) -> dict:
+def _run_analysis(repo: str, force: bool, gemini_key=None, jev_key=None, *,
+                  allow_private: bool = False, linear_team_url: Optional[str] = None,
+                  linear_key: Optional[str] = None) -> dict:
     """Blocking function that collects raw data and computes metrics."""
     result = subprocess.run(
         ["gh", "api", "--hostname", "github.com", f"repos/{repo}", "--jq", ".private"],
         capture_output=True, text=True, check=True, timeout=15,
     )
-    if result.stdout.strip() != "false":
+    is_private = result.stdout.strip() != "false"
+    if is_private and not allow_private:
         raise HTTPException(status_code=400, detail="Only public repositories are supported.")
-    raw = collect_data(repo)
+    cleaned_linear = (linear_team_url or "").strip() or None
+    resolved_linear_key = (linear_key or os.environ.get("LINEAR_API_KEY") or "").strip() or None
+    if cleaned_linear:
+        parse_linear_team(cleaned_linear)
+        if not resolved_linear_key:
+            raise LinearError(
+                "Linear API key is required. Add your Linear API key in Settings or set LINEAR_API_KEY.",
+                status_code=400,
+            )
+    raw = (
+        collect_data(repo, linear_team=cleaned_linear, linear_api_key=resolved_linear_key)
+        if (cleaned_linear or resolved_linear_key)
+        else collect_data(repo)
+    )
     metrics = compute_flow_metrics(raw)
+    metrics["repository_visibility"] = "private" if is_private else "public"
+    value_kwargs = {"allow_private": True} if is_private else {}
     metrics["product_value"] = asyncio.run(assess_product_value(
         repo, raw, gemini_key or _get_gemini_key(), os.environ.get("GITHUB_TOKEN"),
-        jev_key=jev_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")))
+        jev_key=jev_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY"),
+        **value_kwargs))
     return metrics
 
 
@@ -230,12 +252,18 @@ def _build_issue_block(issues: Optional[dict]) -> str:
     days = lambda hours: f"{hours / 24:.1f}d"
     oldest = stale.get("items", [])[:3]
     oldest_str = "\n".join(
-        f"  - #{i['number']}: {i['title'][:60]} | idle {i['days_since_activity']:.0f}d" for i in oldest
+        f"  - {i.get('identifier') or '#' + str(i['number'])}: {i['title'][:60]} | idle {i['days_since_activity']:.0f}d" for i in oldest
     ) or "  None"
     truncated = ""
     if issues.get("closed_truncated") or issues.get("open_truncated"):
         truncated = "\n- Note: issue sample was capped, so early weeks or the open count may be incomplete"
-    return f"""### Issue Backlog
+    linear_team = issues.get("linear_team") or {}
+    heading = (
+        f"### Issue Backlog (Linear team: {linear_team.get('key', 'Linear')})"
+        if issues.get("source") == "linear"
+        else "### Issue Backlog"
+    )
+    return f"""{heading}
 - **Open issues now**: {issues.get('open_now', 0)}
 - **Net backlog change (last 8 weeks)**: {net_display} (arrivals minus resolutions)
 - **Issue cycle time, modern era**: median {days(modern.get('median_hours', 0))}, 85th pct {days(modern.get('p85_hours', 0))} ({modern.get('n', 0)} closed)
@@ -276,10 +304,29 @@ async def analyze_repo(req: AnalyzeRequest, request: Request):
     # Run blocking collection+computation in thread pool
     loop = asyncio.get_event_loop()
     try:
-        metrics = await loop.run_in_executor(_executor, _run_analysis, repo, req.force_refresh,
-            request.headers.get("X-Gemini-Api-Key"), request.headers.get("X-TypeSafe-Api-Key"))
+        linear_key = request.headers.get("X-Linear-Api-Key")
+        if req.allow_private or req.linear_team_url or linear_key:
+            from functools import partial
+            runner = partial(
+                _run_analysis,
+                repo,
+                req.force_refresh,
+                request.headers.get("X-Gemini-Api-Key"),
+                request.headers.get("X-TypeSafe-Api-Key"),
+                allow_private=req.allow_private,
+                linear_team_url=req.linear_team_url,
+                linear_key=linear_key,
+            )
+            metrics = await loop.run_in_executor(_executor, runner)
+        else:
+            metrics = await loop.run_in_executor(
+                _executor, _run_analysis, repo, req.force_refresh,
+                request.headers.get("X-Gemini-Api-Key"), request.headers.get("X-TypeSafe-Api-Key"),
+            )
     except HTTPException:
         raise
+    except LinearError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
     except Exception:
         raise HTTPException(status_code=500, detail="Analysis failed. Check the local server configuration.")
 

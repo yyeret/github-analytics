@@ -9,6 +9,12 @@ import concurrent.futures
 from flow_metrics_core import count_events_in_windows, count_intervals, elapsed, percentiles
 from value_classification import compute_value_classification, render_value_report
 from issues import collect_issues, collect_rest_issues, compute_issue_metrics, issue_weekly_bins
+from linear_issues import (
+    LinearError,
+    collect_linear_issues_sync,
+    detect_linear_team_from_texts,
+    discover_linear_team_from_github_sync,
+)
 
 # File paths
 RAW_DATA_FILE = "raw_data.json"
@@ -102,13 +108,21 @@ def run_graphql_query(search_query, count=100):
         print("Stderr:", e.stderr)
         return []
 
-def collect_data(repo="sveltejs/svelte"):
+def collect_data(repo="sveltejs/svelte", *, linear_team=None, linear_api_key=None):
     import subprocess
     print(f"Collecting data for {repo}...")
 
-    # Issues are independent of the PR queries, so fetch them alongside; fail-soft to None
+    # Issues are independent of the PR queries, so fetch them alongside; fail-soft to None for GitHub issues
     issue_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    issues_future = issue_pool.submit(collect_issues, repo)
+    if linear_team:
+        issues_future = issue_pool.submit(
+            collect_linear_issues_sync,
+            linear_team,
+            linear_api_key or os.environ.get("LINEAR_API_KEY", ""),
+            repo=repo,
+        )
+    else:
+        issues_future = issue_pool.submit(collect_issues, repo)
     issue_pool.shutdown(wait=False)  # the submitted fetch still runs; this only releases the pool
     
     # 1. Pre-AI Era (2021) baseline
@@ -308,6 +322,22 @@ def collect_data(repo="sveltejs/svelte"):
     print("Waiting for issues...")
     issues_raw = issues_future.result()
 
+    if not linear_team and linear_api_key:
+        pr_bodies = [
+            pr.get("body")
+            for group in (recent_nodes, open_nodes)
+            for pr in group
+            if isinstance(pr, dict) and pr.get("body")
+        ]
+        discovered = discover_linear_team_from_github_sync(repo, pr_bodies=pr_bodies)
+        if discovered:
+            try:
+                linear_raw = collect_linear_issues_sync(discovered["url"], linear_api_key, repo=repo)
+                linear_raw["linear_team"]["auto_discovered"] = True
+                issues_raw = linear_raw
+            except LinearError:
+                pass
+
     all_data = {
         "repo": repo,
         "pre_ai_prs": pre_ai_nodes,
@@ -325,8 +355,8 @@ def collect_data(repo="sveltejs/svelte"):
 REST_PR_COLLECTION_TIMEOUT = 45
 
 
-async def collect_public_data(repo, token=None):
-    """Collect PRs and issues using Workers-compatible GitHub REST requests."""
+async def collect_public_data(repo, token=None, *, include_issues=True):
+    """Collect PRs and optionally GitHub issues using Workers-compatible GitHub REST requests."""
     import asyncio
 
     import httpx
@@ -335,13 +365,20 @@ async def collect_public_data(repo, token=None):
     if token:
         headers["Authorization"] = f"Bearer {token}"
     now = datetime.datetime.now(datetime.timezone.utc)
-    pulls, issues = await asyncio.gather(
-        asyncio.wait_for(_collect_rest_pull_requests(repo, headers), REST_PR_COLLECTION_TIMEOUT),
-        collect_rest_issues(repo, headers, now),
-        return_exceptions=True,
-    )
-    if isinstance(issues, BaseException):
-        raise issues
+    if include_issues:
+        pulls, issues = await asyncio.gather(
+            asyncio.wait_for(_collect_rest_pull_requests(repo, headers), REST_PR_COLLECTION_TIMEOUT),
+            collect_rest_issues(repo, headers, now),
+            return_exceptions=True,
+        )
+        if isinstance(issues, BaseException):
+            raise issues
+    else:
+        issues = None
+        try:
+            pulls = await asyncio.wait_for(_collect_rest_pull_requests(repo, headers), REST_PR_COLLECTION_TIMEOUT)
+        except Exception as exc:
+            pulls = exc
     if isinstance(pulls, BaseException):
         if not isinstance(pulls, (ValueError, TimeoutError, httpx.HTTPError)) or not issues or not (issues["open"] or issues["closed"]):
             if isinstance(pulls, TimeoutError):
@@ -407,8 +444,8 @@ async def _collect_rest_pull_requests(repo, headers):
     return {"pre_ai_prs": [normalized(pr) for pr in historical],
             "recent_prs": recent, "open_prs": [normalized(pr) for pr in open_data]}
 
-def load_or_collect(repo="sveltejs/svelte", force=False):
-    if not force and os.path.exists(RAW_DATA_FILE):
+def load_or_collect(repo="sveltejs/svelte", force=False, *, linear_team=None):
+    if not force and not linear_team and os.path.exists(RAW_DATA_FILE):
         print(f"Loading cached data from {RAW_DATA_FILE}...")
         try:
             with open(RAW_DATA_FILE, "r", encoding="utf-8") as f:
@@ -417,7 +454,7 @@ def load_or_collect(repo="sveltejs/svelte", force=False):
             print(f"Error loading cache, re-collecting: {e}")
             return collect_data(repo)
     else:
-        return collect_data(repo)
+        return collect_data(repo, linear_team=linear_team)
 
 def parse_date(date_str):
     if not date_str:
@@ -872,6 +909,23 @@ def compute_flow_metrics(data):
 
     recent_scatter_points = [{"x": p["merged_ts"], "y": p["cycle_time_hours"], "classification": p["classification"], "num": p["number"]} for p in recent_prs]
 
+    linear_team = (
+        data["issues"]["linear_team"]
+        if isinstance(data.get("issues"), dict) and data["issues"].get("source") == "linear" and data["issues"].get("linear_team")
+        else None
+    )
+    linear_detected = None
+    if not linear_team:
+        pr_bodies = [
+            pr.get("body")
+            for group in ("recent_prs", "open_prs")
+            for pr in (data.get(group) or [])
+            if isinstance(pr, dict) and pr.get("body")
+        ]
+        detected = detect_linear_team_from_texts(pr_bodies)
+        if detected:
+            linear_detected = {**detected, "status": "key_required"}
+
     return {
         "repo": data.get("repo", ""),
         "captured_at": data.get("captured_at", ""),
@@ -897,6 +951,8 @@ def compute_flow_metrics(data):
             for p in recent_prs[:50]  # top 50 for chat context
         ],
         "issues": compute_issue_metrics(data.get("issues"), issue_weekly_bins(now), now, repo=data.get("repo")),
+        **({"linear_team": linear_team} if linear_team else {}),
+        **({"linear_detected": linear_detected} if linear_detected else {}),
         **({"pr_collection_unavailable": True} if data.get("pr_collection_unavailable") else {}),
     }
 
@@ -2232,11 +2288,24 @@ def analyze_and_build_report(data):
 
 if __name__ == "__main__":
     repo = "sveltejs/svelte"
-    args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
-    if args:
-        repo = args[0]
-    
+    linear_team = None
+    positional = []
+    idx = 1
+    while idx < len(sys.argv):
+        arg = sys.argv[idx]
+        if arg == "--linear-team" and idx + 1 < len(sys.argv):
+            linear_team = sys.argv[idx + 1]
+            idx += 2
+            continue
+        if arg.startswith("--linear-team="):
+            linear_team = arg.split("=", 1)[1]
+        elif not arg.startswith("--"):
+            positional.append(arg)
+        idx += 1
+    if positional:
+        repo = positional[0]
+
     force_refresh = "--refresh" in sys.argv
-    data = load_or_collect(repo, force=force_refresh)
+    data = load_or_collect(repo, force=force_refresh, linear_team=linear_team)
     analyze_and_build_report(data)
     print("Execution complete. Open dashboard.html in your browser.")
