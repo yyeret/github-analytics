@@ -650,6 +650,7 @@
     <div class="charts-2col">
       <div class="chart-card">
         <div class="chart-title">PR Size vs Cycle Time (Spearman Correlation)</div>
+        <p class="issue-note" id="correlation-note" hidden></p>
         <div class="chart-canvas-wrap tall"><canvas id="chart-correlation"></canvas></div>
       </div>
       <div class="chart-card charts-full">
@@ -680,7 +681,7 @@
             <div class="chart-canvas-wrap tall"><canvas id="chart-issue-flow"></canvas></div>
           </div>
           <div class="chart-card" id="issue-age-card">
-            <div class="chart-title">Open Issue Age Distribution</div>
+            <div class="chart-title" id="issue-age-title">Open Issue Age Distribution</div>
             <div class="chart-canvas-wrap tall"><canvas id="chart-issue-age"></canvas></div>
           </div>
         </div>
@@ -1368,22 +1369,34 @@
     const pts = cfd.slice(-52);
     const labels = pts.map(c => c.month);
 
+    // Standard CFD stacking: end of process (Merged) at the bottom, earlier stages stacked above.
+    const layers = [
+      { key: 'merged', label: 'Merged', borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,.45)', always: true },
+      { key: 'review', label: 'In Review', borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.45)', always: true },
+      { key: 'coding', label: 'Coding', borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,.45)', always: false },
+      { key: 'backlog', label: 'Backlog', borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,.35)', always: false },
+    ].filter(layer => layer.always || pts.some(c => (c[layer.key] || 0) > 0));
+
     mkChart('chart-cfd', {
       type: 'line',
       data: {
         labels,
-        datasets: [
-          { label:'Opened', data: pts.map(c=>c.opened), borderColor:'#8b5cf6', backgroundColor:'rgba(139,92,246,.15)', fill:true, tension:.3, pointRadius:0 },
-          { label:'Merged', data: pts.map(c=>c.merged), borderColor:'#10b981', backgroundColor:'rgba(16,185,129,.12)', fill:true, tension:.3, pointRadius:0 },
-          { label:'In Review', data: pts.map(c=>c.review), borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,.1)', fill:true, tension:.3, pointRadius:0 },
-        ]
+        datasets: layers.map((layer, index) => ({
+          label: layer.label,
+          data: pts.map(c => c[layer.key] || 0),
+          borderColor: layer.borderColor,
+          backgroundColor: layer.backgroundColor,
+          fill: index === 0 ? 'origin' : '-1',
+          tension: .3,
+          pointRadius: 0,
+        })),
       },
       options: {
         responsive:true,maintainAspectRatio:true,
         plugins:{ legend:{ position:'top', labels:{ boxWidth:10, padding:16 } }, tooltip:{ mode:'index', intersect:false } },
         scales:{
           x:{ grid:{color:'rgba(255,255,255,.04)'}, ticks:{ maxTicksLimit:8, maxRotation:0 } },
-          y:{ grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true }
+          y:{ stacked:true, grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true }
         }
       }
     });
@@ -1552,8 +1565,8 @@
     renderIssueLifecycle(iss.lifecycle_cfd);
 
     const pts = iss.weekly.slice(-52);
-    document.getElementById('issue-flow-card').hidden = pts.length < 2;
-    if (pts.length >= 2) mkChart('chart-issue-flow', {
+    document.getElementById('issue-flow-card').hidden = Boolean(iss.lifecycle_cfd) || pts.length < 2;
+    if (!iss.lifecycle_cfd && pts.length >= 2) mkChart('chart-issue-flow', {
       type: 'bar',
       data: {
         labels: pts.map(w => w.week),
@@ -1574,20 +1587,73 @@
       }
     });
 
-    document.getElementById('issue-age-card').hidden = !iss.open_now;
+    const aging = iss.work_item_aging;
+    const hasAging = Boolean(aging?.items?.length && aging?.stages?.length);
+    document.getElementById('issue-age-card').hidden = !hasAging && !iss.open_now;
     document.getElementById('issue-stale-card').hidden = !iss.open_now;
-    if (iss.open_now) mkChart('chart-issue-age', {
-      type: 'bar',
-      data: {
-        labels: iss.age_buckets.map(b => b.label),
-        datasets: [{ label:'Open issues', data: iss.age_buckets.map(b => b.count), backgroundColor:'rgba(245,158,11,.75)' }]
-      },
-      options: {
-        responsive:true, maintainAspectRatio:true,
-        plugins:{ legend:{ display:false } },
-        scales:{ x:{ grid:{display:false} }, y:{ grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true } }
+    const ageTitle = document.getElementById('issue-age-title');
+    if (hasAging) {
+      if (ageTitle) ageTitle.textContent = 'Work Item Aging by Status';
+      const annotations = {};
+      if (aging.p50_days != null) {
+        annotations.p50line = {
+          type:'line', yMin:aging.p50_days, yMax:aging.p50_days,
+          borderColor:'rgba(6,182,212,.7)', borderWidth:1.5, borderDash:[5,4],
+          label:{content:`P50: ${aging.p50_days.toFixed(1)}d`, display:true, position:'end', color:'#67e8f9', font:{size:11}}
+        };
       }
-    });
+      if (aging.p85_days != null) {
+        annotations.p85line = {
+          type:'line', yMin:aging.p85_days, yMax:aging.p85_days,
+          borderColor:'rgba(245,158,11,.8)', borderWidth:2,
+          label:{content:`P85: ${aging.p85_days.toFixed(1)}d`, display:true, position:'end', color:'#fcd34d', font:{size:11}}
+        };
+      }
+      mkChart('chart-issue-age', {
+        type: 'scatter',
+        data: {
+          datasets: [{
+            label: 'Open issues',
+            data: aging.items.map(item => ({x: item.stage, y: item.age_days, identifier: item.identifier, title: item.title})),
+            backgroundColor: 'rgba(245,158,11,.8)',
+            pointRadius: 5, pointHoverRadius: 9,
+          }]
+        },
+        options: {
+          responsive:true, maintainAspectRatio:true,
+          plugins:{
+            legend:{ display:false },
+            annotation:{ annotations },
+            tooltip:{
+              callbacks:{
+                label: ctx => {
+                  const d = ctx.raw;
+                  return [`${d.identifier}: ${(d.title || '').slice(0, 50)}`, `${d.x} · ${d.y?.toFixed(1)} days`];
+                }
+              }
+            }
+          },
+          scales:{
+            x:{ type:'category', categories: aging.stages, grid:{color:'rgba(255,255,255,.04)'} },
+            y:{ grid:{color:'rgba(255,255,255,.04)'}, title:{display:true, text:'Age (days)', color:'#64748b'}, beginAtZero:true }
+          }
+        }
+      });
+    } else if (iss.open_now) {
+      if (ageTitle) ageTitle.textContent = 'Open Issue Age Distribution';
+      mkChart('chart-issue-age', {
+        type: 'bar',
+        data: {
+          labels: iss.age_buckets.map(b => b.label),
+          datasets: [{ label:'Open issues', data: iss.age_buckets.map(b => b.count), backgroundColor:'rgba(245,158,11,.75)' }]
+        },
+        options: {
+          responsive:true, maintainAspectRatio:true,
+          plugins:{ legend:{ display:false } },
+          scales:{ x:{ grid:{display:false} }, y:{ grid:{color:'rgba(255,255,255,.04)'}, beginAtZero:true } }
+        }
+      });
+    }
 
     const basis = iss.stale_basis === 'updated' ? 'update' : 'comment';
     document.getElementById('issue-stale-title').textContent = `Stale Issues (no ${basis} for over ${iss.stale.threshold_days} days)`;
@@ -1628,23 +1694,18 @@
   // ── Active WIP Age ─────────────────────────────────────────────────
   function renderWIP(pts, stagePct) {
     if (!pts || !pts.length) return;
-    const stageOrder = ['1. Active Coding','2. Review Queue','3. Merge Delay'];
+    const legacyMap = {'1. Active Coding':'Draft', '2. Review Queue':'In Review', '3. Merge Delay':'Approved'};
+    const normalized = pts.map(p => ({...p, x: legacyMap[p.x] || p.x}));
+    const hasDraft = normalized.some(p => p.x === 'Draft');
+    const stageOrder = hasDraft ? ['Draft', 'Opened', 'In Review', 'Approved'] : ['Opened', 'In Review', 'Approved'];
     const colors = { Human:'rgba(139,92,246,.8)', 'AI-Assisted':'rgba(6,182,212,.8)', 'AI-Agentic':'rgba(244,63,94,.8)' };
-
-    // p85 lines per stage
-    const annotations = {};
-    const p85vals = {
-      '1. Active Coding': stagePct?.coding?.p85,
-      '2. Review Queue': stagePct?.review?.p85,
-      '3. Merge Delay': stagePct?.merge?.p85,
-    };
 
     mkChart('chart-wip', {
       type: 'scatter',
       data: {
         datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
           label: cls,
-          data: pts.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y, title:p.title, num:p.num})),
+          data: normalized.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y, title:p.title, num:p.num})),
           backgroundColor: colors[cls],
           pointRadius:5, pointHoverRadius:9,
         }))
@@ -1672,7 +1733,23 @@
 
   // ── Correlation Scatter ────────────────────────────────────────────
   function renderCorrelation(pts, corr) {
-    if (!pts || !pts.length) return;
+    const canvas = document.getElementById('chart-correlation');
+    const wrap = canvas?.parentElement;
+    const note = document.getElementById('correlation-note');
+    const hasSizeSample = Boolean(pts && pts.some(p => (p.x || 0) > 0));
+    if (!hasSizeSample) {
+      if (wrap) wrap.hidden = true;
+      if (note) {
+        note.hidden = false;
+        note.textContent = 'Sign in with GitHub to include PR size data.';
+      }
+      return;
+    }
+    if (wrap) wrap.hidden = false;
+    if (note) {
+      note.hidden = true;
+      note.textContent = '';
+    }
     const colors = { Human:'rgba(139,92,246,.65)', 'AI-Assisted':'rgba(6,182,212,.65)', 'AI-Agentic':'rgba(244,63,94,.65)' };
 
     mkChart('chart-correlation', {
@@ -1715,6 +1792,7 @@
     // Only render recent 300 items to keep it readable
     const recent = pts.slice(-300);
     const maxLane = Math.max(...recent.map(p=>p.lane));
+    const spanDays = (Math.max(...recent.map(p=>p.end)) - Math.min(...recent.map(p=>p.start))) / 86400000;
     const colors = { Human:'rgba(139,92,246,.7)', 'AI-Assisted':'rgba(6,182,212,.7)', 'AI-Agentic':'rgba(244,63,94,.7)' };
 
     // Transform to scatter datasets where each point is (midpoint_ts, lane)
@@ -1758,7 +1836,9 @@
               maxTicksLimit:8,
               callback: v => {
                 const d = new Date(v);
-                return d.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+                return spanDays <= 90
+                  ? d.toLocaleDateString('en-US',{month:'short',day:'numeric'})
+                  : d.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
               }
             }
           },

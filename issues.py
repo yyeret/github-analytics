@@ -874,9 +874,11 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         })
 
     modern_closed = [i for i, _, done in closed_rows if done and done >= window_start]
+    modern_stats = _cycle_stats(modern_closed)
 
     age_counts = {label: 0 for label, _, _ in AGE_BUCKETS}
     stale_items = []
+    aging_items = []
     for it, made, _ in open_rows:
         if not made:
             continue
@@ -885,6 +887,14 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
             if age_days >= low and (high is None or age_days < high):
                 age_counts[label] += 1
                 break
+        if is_linear and it.get("linearState"):
+            aging_items.append({
+                "identifier": it.get("identifier") or f"#{it.get('number')}",
+                "number": it.get("number"),
+                "title": it.get("title", ""),
+                "stage": it["linearState"],
+                "age_days": round(age_days, 2),
+            })
         last = _parse(it.get("updatedAt")) if (rest or is_linear) else _last_activity(it)
         idle_days = elapsed(last, now, 86400.0) if last else age_days
         if idle_days > stale_days:
@@ -922,6 +932,22 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
     if (not is_linear and not project_cfd and flow_available and not _workflow_label_stages(repo)
             and factory_evidence_ready and _has_tessl_factory_signals(lifecycle_issues)):
         factory_cfd = _tessl_factory_lifecycle_cfd(lifecycle_issues, window_start, now, history_start)
+    work_item_aging = None
+    if is_linear and open_available:
+        aging_stages = [
+            state["name"] for state in (issues_raw.get("linear_states") or [])
+            if isinstance(state, dict) and state.get("name") and state.get("type") not in ("completed", "canceled")
+        ]
+        for item in aging_items:
+            if item["stage"] not in aging_stages:
+                aging_stages.append(item["stage"])
+        if aging_stages and aging_items:
+            work_item_aging = {
+                "stages": aging_stages,
+                "items": aging_items,
+                "p50_days": round(modern_stats["median_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["median_hours"] is not None else None,
+                "p85_days": round(modern_stats["p85_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["p85_hours"] is not None else None,
+            }
     return {
         "sample_size": len(sampled),
         "open_available": open_available,
@@ -935,11 +961,12 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
         "open_now": len(open_issues) if open_available else None,
         "cycle_time": {
             "baseline": _cycle_stats(issues_raw.get("pre_ai") or []),
-            "modern": _cycle_stats(modern_closed),
+            "modern": modern_stats,
         },
         "weekly": weekly,
         "net_8w": sum(w["net"] for w in weekly[-NET_WINDOW_WEEKS:]) if len(weekly) >= NET_WINDOW_WEEKS else None,
         "age_buckets": [{"label": label, "count": age_counts[label]} for label, _, _ in AGE_BUCKETS],
+        **({"work_item_aging": work_item_aging} if work_item_aging else {}),
         "stale": {"threshold_days": stale_days, "count": len(stale_items), "items": stale_items[:STALE_ITEM_LIMIT]},
         "lifecycle_cfd": linear_cfd if is_linear else (project_cfd or factory_cfd or (
             _compute_lifecycle_cfd(lifecycle_issues, lifecycle_samples, repo, history_start)

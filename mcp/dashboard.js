@@ -89,7 +89,7 @@
       'chart-correlation': 'PR size and cycle time are unavailable.',
       'chart-comet': 'No PR timelines in the sample.',
     })) {
-      if (charts[id]) continue;
+      if (charts[id] || wrap.hidden) continue;
       const wrap = byId(id).parentElement;
       wrap.hidden = true;
       const note = document.createElement('p');

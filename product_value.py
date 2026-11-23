@@ -25,7 +25,7 @@ GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:g
 JEV_MODEL = "jev-1.14.0"
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 JEV_TIMEOUT = 20
-ASSESSMENT_TIMEOUT = 90
+ASSESSMENT_TIMEOUT = 120
 FIBONACCI = [1, 2, 3, 5, 8, 13]
 DIMENSIONS = {
     "value": {
@@ -92,8 +92,8 @@ DEFAULT_MAX_PRS = 30
 README_CHARS = 12_000
 BODY_CHARS = 1_500
 CONCURRENCY = 5
-GEMINI_TIMEOUT = 25
-CONTEXT_TIMEOUT = 45
+GEMINI_TIMEOUT = 30
+CONTEXT_TIMEOUT = 65
 CONTEXT_TOKEN_BUDGETS = (4096, 8192)
 CANVAS_KEYS = ("customer_segments", "problem", "solution", "unique_value_proposition",
                "channels", "revenue_streams", "cost_structure", "key_metrics", "unfair_advantage")

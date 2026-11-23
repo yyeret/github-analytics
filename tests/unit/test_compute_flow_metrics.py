@@ -22,9 +22,10 @@ def _recent_set():
 def _open_set():
     drafty = make_pr(10, "2024-02-20T00:00:00Z", None, title="[draft] wip")
     approved = make_pr(11, "2024-02-25T00:00:00Z", None, reviews=[make_review("2024-02-26T00:00:00Z", "APPROVED")])
-    queued = make_pr(12, "2024-02-26T00:00:00Z", None)
+    opened = make_pr(12, "2024-02-26T00:00:00Z", None)
+    in_review = make_pr(14, "2024-02-27T00:00:00Z", None, reviews=[make_review("2024-02-28T00:00:00Z", "COMMENTED")])
     ancient = make_pr(13, "2023-12-01T00:00:00Z", None)
-    return [drafty, approved, queued, ancient]
+    return [drafty, approved, opened, in_review, ancient]
 
 
 @pytest.fixture
@@ -116,10 +117,11 @@ def test_stage_percentile_floors():
 
 def test_open_prs_are_staged_and_old_ones_excluded(metrics):
     wip = {p["num"]: p for p in metrics["active_wip_points"]}
-    assert set(wip) == {10, 11, 12}  # 13 predates the oldest merge
-    assert wip[10]["x"] == "1. Active Coding"
-    assert wip[11]["x"] == "3. Merge Delay"
-    assert wip[12]["x"] == "2. Review Queue"
+    assert set(wip) == {10, 11, 12, 14}  # 13 predates the oldest merge
+    assert wip[10]["x"] == "Draft"
+    assert wip[11]["x"] == "Approved"
+    assert wip[12]["x"] == "Opened"
+    assert wip[14]["x"] == "In Review"
     assert wip[10]["y"] == pytest.approx(10.0)  # 2024-02-20 -> 2024-03-01
     assert wip[11]["y"] == pytest.approx(5.0)
 
