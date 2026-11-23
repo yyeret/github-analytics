@@ -364,3 +364,51 @@ def test_public_mcp_value_uses_visibility_checked_github_reads(client, monkeypat
         assert record['assessed'] == 1
         assert record['items'][0]['cost_of_delay'] == 29
         assert record['sources']['readme']
+
+
+def test_mcp_insights_first_dashboard_and_inspect_flow_slice(client, monkeypatch):
+    from tests.factories import make_pr
+
+    async def metadata(*_, **__):
+        return 200, {}, {'private': False, 'id': 55, 'full_name': 'acme/demo'}
+
+    async def graph(*_, **kwargs):
+        terms = kwargs['body']['variables']['searchQuery']
+        if 'is:pr is:merged' in terms and 'merged:' not in terms:
+            nodes = [
+                {**make_pr(number=1, created='2026-01-01T00:00:00Z', merged='2026-01-01T06:00:00Z', title='Small PR', additions=20, deletions=10),
+                 'repository': {'nameWithOwner': 'acme/demo', 'isPrivate': False, 'fullDatabaseId': '55'}},
+                {**make_pr(number=2, created='2026-01-02T00:00:00Z', merged='2026-01-05T00:00:00Z', title='Large PR', additions=500, deletions=120),
+                 'repository': {'nameWithOwner': 'acme/demo', 'isPrivate': False, 'fullDatabaseId': '55'}},
+            ]
+        elif 'is:pr is:open' in terms:
+            nodes = [
+                {**make_pr(number=9, created='2026-01-02T00:00:00Z', merged=None, title='Aging open PR', additions=300, deletions=50),
+                 'repository': {'nameWithOwner': 'acme/demo', 'isPrivate': False, 'fullDatabaseId': '55'}},
+            ]
+        else:
+            nodes = []
+        return 200, {}, {'data': {'search': {'nodes': nodes, 'pageInfo': {'hasNextPage': False}}}}
+
+    async def no_value(*_, **__):
+        return {'status': 'unavailable'}
+
+    monkeypatch.setattr(hosted, 'request_json', metadata)
+    monkeypatch.setattr(mcp_analytics, 'request_json', graph)
+    monkeypatch.setattr(hosted, 'assess_product_value', no_value)
+
+    token = connect(client)
+    dashboard = tool(client, 'show_github_dashboard', {'repo': 'acme/demo'}, token)
+    sc = dashboard['structuredContent']
+    assert sc['view'] == 'insights'
+    review = sc['operational_review']
+    assert review['key_insights']
+    assert review['review_questions']
+    assert review['featured_slices']
+    assert 'Questions to explore:' in dashboard['content'][0]['text']
+
+    drill = tool(client, 'inspect_flow_slice', {'repo': 'acme/demo', 'slice': 'wip_aging'}, token)
+    assert drill['structuredContent']['slice']['id'] == 'wip_aging'
+    assert drill['structuredContent']['slice']['evidence_items'][0]['number'] == 9
+    assert drill['_meta']['sliceFocus'] == 'wip_aging'
+

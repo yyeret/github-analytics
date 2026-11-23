@@ -35,6 +35,8 @@
     #app-status {font-size:.88rem;color:var(--text-dim);overflow-wrap:anywhere}
     #app-status:empty {display:none}
     #dashboard [hidden], [hidden] {display:none!important}
+    #backing-data-bar {display:none!important}
+    #backing-data-wrapper.collapsed > #backing-data-content {display:block!important}
     .section-header {margin-top:.5rem}
     .kpi-grid {grid-template-columns:repeat(auto-fit,minmax(min(135px,100%),1fr));gap:.55rem;margin-bottom:1rem}
     .kpi {padding:.8rem}
@@ -74,7 +76,9 @@
   </div>
   <p id="app-status" role="status" aria-live="polite"></p>
   <nav id="views" aria-label="Analytics views" hidden>
-    <button type="button" data-view="overview">Overview</button>
+    <button type="button" data-view="insights">Insights</button>
+    <button type="button" data-view="slices">Slices</button>
+    <button type="button" data-view="overview">KPIs</button>
     <button type="button" data-view="flow">Cycle &amp; flow</button>
     <button type="button" data-view="work">Throughput &amp; WIP</button>
     <button type="button" data-view="batch">Batch &amp; timeline</button>

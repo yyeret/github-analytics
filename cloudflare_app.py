@@ -23,6 +23,7 @@ from github_projects import collect_project_history
 from mcp_analytics import (check_private_dashboard_access, collect_dashboard_data,
                            collect_public_value_issues, public_value_sources)
 from mcp_server import install_mcp
+from operational_review import synthesize_operational_review
 
 app = FastAPI(title="GitHub Flow Analytics")
 app.include_router(github_auth.router)
@@ -455,6 +456,11 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     metrics["product_value"] = (
         await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
         if metrics.get("recent_stats", {}).get("total") or raw.get("open_prs") else None
+    )
+    pv = metrics["product_value"] or {}
+    allow_review_llm = not (pv.get("status") == "failed" and not pv.get("items"))
+    metrics["operational_review"] = await synthesize_operational_review(
+        metrics, gemini_key=gemini_key, allow_llm=allow_review_llm
     )
     if private or (caller_keys and identity):
         if not full_dashboard:
