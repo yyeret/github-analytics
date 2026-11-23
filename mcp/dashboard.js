@@ -91,6 +91,7 @@
     })) {
       if (charts[id]) continue;
       const wrap = byId(id).parentElement;
+      if (wrap.hidden) continue;
       wrap.hidden = true;
       const note = document.createElement('p');
       note.className = 'issue-note empty-chart';

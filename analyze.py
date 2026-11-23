@@ -400,7 +400,7 @@ async def _collect_rest_pull_requests(repo, headers):
             "number": pr.get("number"), "title": pr.get("title"), "body": pr.get("body"),
             "createdAt": pr.get("created_at"), "mergedAt": pr.get("merged_at"),
             "closedAt": pr.get("closed_at"), "additions": pr.get("additions", 0),
-            "deletions": pr.get("deletions", 0),
+            "deletions": pr.get("deletions", 0), "isDraft": bool(pr.get("draft")),
             "author": {"login": user.get("login", ""), "__typename": user.get("type", "User")},
             "closingIssuesReferences": {"nodes": []},
             "commits": {"totalCount": commits, "nodes": []},
@@ -758,6 +758,38 @@ def _pr_stage_percentiles(prs):
     }
 
 
+def _stage_active_wip(filtered_open, now):
+    """Classify open PRs into lifecycle stages: Draft (optional), Opened, In Review, Approved."""
+    points = []
+    for p in filtered_open:
+        created_dt = parse_date(p["createdAt"])
+        if not created_dt:
+            continue
+        age_days = max(0.02, elapsed(created_dt, now, 86400.0))
+        is_draft = p.get("is_draft")
+        if is_draft is None:
+            is_draft = (p.get("title") or "").lower().startswith("[draft]")
+        has_approval = p.get("approvals", 0) > 0
+        has_reviews = p.get("review_count", 0) > 0 or p.get("changes_requested", 0) > 0
+        if is_draft:
+            stage_name = "Draft"
+        elif has_approval:
+            stage_name = "Approved"
+        elif has_reviews:
+            stage_name = "In Review"
+        else:
+            stage_name = "Opened"
+        points.append({
+            "x": stage_name,
+            "y": age_days,
+            "num": p["number"],
+            "title": p["title"],
+            "classification": p["classification"],
+            "size": p["pr_size"],
+        })
+    return points
+
+
 def compute_flow_metrics(data):
     """
     Compute all flow coaching metrics from raw GitHub data.
@@ -858,26 +890,7 @@ def compute_flow_metrics(data):
     p50_sle, p85_sle = _pr_sle(recent_prs)
     stage_percentiles = _pr_stage_percentiles(recent_prs)
 
-    active_wip_points = []
-    for p in filtered_open:
-        created_dt = parse_date(p["createdAt"])
-        if not created_dt: continue
-        age_days = max(0.02, elapsed(created_dt, now, 86400.0))
-        ready_dt = p.get("ready_for_review_dt")
-        is_draft = p.get("is_draft")
-        if is_draft is None:
-            is_draft = (p.get("title") or "").lower().startswith("[draft]")
-        has_reviews = p.get("review_count", 0) > 0
-        has_approval = p.get("approvals", 0) > 0
-        if p.get("is_draft") is True:
-            stage_name = "1. Active Coding"
-        elif has_approval:
-            stage_name = "3. Merge Delay"
-        elif ready_dt or has_reviews or not is_draft:
-            stage_name = "2. Review Queue"
-        else:
-            stage_name = "1. Active Coding"
-        active_wip_points.append({"x": stage_name, "y": age_days, "num": p["number"], "title": p["title"], "classification": p["classification"], "size": p["pr_size"]})
+    active_wip_points = _stage_active_wip(filtered_open, now)
 
     pr_size_scatter_points = [{"x": p["pr_size"], "y": p["cycle_time_hours"], "classification": p["classification"], "num": p["number"], "title": p["title"]} for p in recent_prs if p["cycle_time_hours"] is not None]
 
@@ -1114,34 +1127,7 @@ def analyze_and_build_report(data):
     stage_percentiles = _pr_stage_percentiles(recent_prs)
 
     # Active WIP stage and age in days
-    active_wip_points = []
-    for p in filtered_open:
-        created_dt = parse_date(p["createdAt"])
-        if not created_dt:
-            continue
-        age_days = elapsed(created_dt, now, 86400.0)
-        age_days = max(0.02, age_days)
-        
-        ready_dt = p.get("ready_for_review_dt")
-        is_draft = p.get("title", "").lower().startswith("[draft]")
-        has_reviews = p.get("review_count", 0) > 0
-        has_approval = p.get("approvals", 0) > 0
-        
-        if has_approval:
-            stage_name = "3. Merge Delay"
-        elif ready_dt or has_reviews or not is_draft:
-            stage_name = "2. Review Queue"
-        else:
-            stage_name = "1. Active Coding"
-            
-        active_wip_points.append({
-            "x": stage_name,
-            "y": age_days,
-            "num": p["number"],
-            "title": p["title"],
-            "classification": p["classification"],
-            "size": p["pr_size"]
-        })
+    active_wip_points = _stage_active_wip(filtered_open, now)
 
     # 5. PR Size vs Cycle Time
     pr_size_scatter_points = [
