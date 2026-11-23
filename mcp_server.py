@@ -183,8 +183,10 @@ def install_mcp(app, analyze, issue_value, coach):
         else:
             raise HTTPException(400, 'Unknown GitHub Analytics tool.')
 
-        if inputs.allow_private and not grant['private_consent']:
+        if (inputs.allow_private or getattr(inputs, 'linear_team_url', None)) and not grant['private_consent']:
             raise HTTPException(403, 'Reconnect GitHub Flow Analytics and enable private repositories during sign-in.')
+        if getattr(inputs, 'linear_team_url', None) and not inputs.allow_private:
+            raise HTTPException(403, 'Pass allow_private=true (with user consent) to share private Linear workspace data.')
         identity = await identify_token(grant['github_token'])
         if str(identity.github_id) != str(grant['github_id']):
             raise HTTPException(401, 'The GitHub identity changed. Reconnect GitHub Flow Analytics.')

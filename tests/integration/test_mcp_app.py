@@ -382,7 +382,8 @@ def test_mcp_app_exposes_linear_issues_and_dashboard_controls(client, monkeypatc
     async def metadata(*args, **kwargs):
         return 200, {}, {'id': 77, 'full_name': 'o/r', 'private': True}
 
-    async def collect_dashboard(repo, tok, private, repo_id):
+    async def collect_dashboard(repo, tok, private, repo_id, *, include_issues=True):
+        assert include_issues is False
         return {'repo': repo, 'captured_at': '2026-11-23T12:00:00Z', 'recent_prs': [], 'open_prs': [], 'issues': None}
 
     async def collect_linear(team_ref, api_key, now=None, *, repo=None):

@@ -457,10 +457,16 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     jev_override = None if full_dashboard else request.headers.get("X-TypeSafe-Api-Key")
     linear_override = None if full_dashboard else (request.headers.get("X-Linear-Api-Key") or "").strip() or None
     linear_team_url = (getattr(req, "linear_team_url", None) or "").strip() or None
+    linear_allowed = (not full_dashboard) or bool(req.allow_private)
     db = getattr(env, "USERS_DB", None) if env else None
     account_key = await resolve_account_key(request, identity=identity)
     linear_key = linear_override
     if linear_team_url:
+        if not linear_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Pass allow_private=true (with user consent) to share private Linear workspace data.",
+            )
         try:
             parsed_linear = parse_linear_team(linear_team_url)
         except LinearError as exc:
@@ -481,7 +487,7 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     is_linear = bool(linear_team_url)
     connected_linear = (
         await linear_auth.list_connected_workspaces(db, account_key)
-        if not is_linear and not linear_override and account_key else []
+        if linear_allowed and not is_linear and not linear_override and account_key else []
     )
     cache = (
         getattr(env, "ANALYTICS_CACHE", None)
@@ -502,13 +508,18 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         linear_detected = None
         if is_linear:
             github_coro = (
-                collect_dashboard_data(repo, identity.token, private, repository_id)
+                collect_dashboard_data(repo, identity.token, private, repository_id, include_issues=False)
                 if full_dashboard else collect_public_data(repo, token, include_issues=False)
             )
-            raw, linear_issues = await asyncio.gather(
-                github_coro,
-                collect_linear_issues(linear_team_url, linear_key, repo=repo),
-            )
+            gh_task = asyncio.create_task(github_coro)
+            lin_task = asyncio.create_task(collect_linear_issues(linear_team_url, linear_key, repo=repo))
+            try:
+                raw, linear_issues = await asyncio.gather(gh_task, lin_task)
+            finally:
+                for task in (gh_task, lin_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(gh_task, lin_task, return_exceptions=True)
             raw["issues"] = linear_issues
         else:
             raw = (await collect_dashboard_data(repo, identity.token, private, repository_id)
@@ -519,7 +530,7 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
                 for pr in (raw.get(group) or [])
                 if isinstance(pr, dict) and pr.get("body")
             ]
-            if linear_override or connected_linear:
+            if linear_allowed and (linear_override or connected_linear):
                 discovered = await discover_linear_team_from_github(repo, token, pr_bodies=pr_bodies)
                 if discovered:
                     auto_token = linear_override
@@ -543,6 +554,8 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
                     status_label = "connect_required" if linear_auth.is_configured(env) else "key_required"
                     linear_detected = {**discovered, "status": status_label}
             if not is_linear:
+                if env and not caller_keys and not private:
+                    cache = getattr(env, "ANALYTICS_CACHE", None)
                 issues = raw.get("issues") or {}
                 if private and issues.get("open_available", True) and issues.get("closed_available", True):
                     issue_sample = (issues.get("open") or []) + (issues.get("closed") or [])
@@ -595,7 +608,7 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
                           or value.get("status") in ("failed", "unavailable") or value.get("failed"))
         ttl = 600 if partial_result else 21600
         payload = json.dumps(metrics, separators=(",", ":"))
-        if full_dashboard and not private:
+        if full_dashboard and not private and not is_linear and not caller_keys:
             await cache.put(public_dashboard_snapshot_key(repo, metrics['analysis_id']), payload, expiration_ttl=ttl)
             await cache.put(cache_key, json.dumps({'repository_id': repository_id, 'analysis_id': metrics['analysis_id']}),
                             expiration_ttl=ttl)

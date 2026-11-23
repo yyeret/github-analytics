@@ -393,10 +393,7 @@ def _normalize_linear_issue(node: dict, repo: str | None) -> dict | None:
             "hasNextPage": has_next_page,
             "transitions": transitions,
         },
-        "closedByPullRequestsReferences": {
-            "totalCount": len(pr_numbers),
-            "nodes": [{"number": number} for number in pr_numbers],
-        },
+        "linkedPullRequests": pr_numbers,
     }
     if labels:
         record["labels"] = labels

@@ -858,20 +858,23 @@
     }
     const linearConnect = document.getElementById('linear-connect');
     const linearStatus = document.getElementById('linear-connected-status');
-    if (linearAuthEnabled) {
+    if (linearAuthEnabled && linearConnect) {
       const workspaces = Array.isArray(session.linear_workspaces) ? session.linear_workspaces : [];
       linearConnect.hidden = false;
       linearConnect.textContent = workspaces.length ? 'Connect another Linear workspace' : 'Connect Linear';
-      linearStatus.hidden = !workspaces.length;
-      if (workspaces.length) {
-        linearStatus.textContent = 'Linear connected: ' + workspaces.map(w => w.org).join(', ');
+      if (linearStatus) {
+        linearStatus.hidden = !workspaces.length;
+        if (workspaces.length) {
+          linearStatus.textContent = 'Linear connected: ' + workspaces.map(w => w.org).join(', ');
+        }
       }
     }
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('autorun') === '1' && document.getElementById('repo-input').value.trim()) {
+    const search = typeof window !== 'undefined' ? window.location?.search : '';
+    const urlParams = (typeof URLSearchParams === 'function' && search) ? new URLSearchParams(search) : null;
+    if (urlParams?.get('autorun') === '1' && document.getElementById('repo-input')?.value?.trim()) {
       urlParams.delete('autorun');
       const nextQuery = urlParams.toString();
-      window.history.replaceState({}, '', nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname);
+      window.history?.replaceState?.({}, '', nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname);
       analyzeRepo();
       return;
     }
@@ -1035,12 +1038,12 @@
       if (preferenceKey) headers['X-Analysis-Account'] = preferenceKey;
       if (!savedRepository) {
         for (const [id, header] of [['linear-key', 'X-Linear-Api-Key'], ['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
-          const key = document.getElementById(id).value.trim();
+          const key = document.getElementById(id)?.value?.trim();
           if (key) headers[header] = key;
         }
       }
       const linearTeamInput = document.getElementById('linear-team-input');
-      const linearTeam = savedRepository ? undefined : (linearTeamInput?.value.trim() || undefined);
+      const linearTeam = savedRepository ? undefined : (linearTeamInput?.value?.trim() || undefined);
       const consentChecked = document.getElementById('allow-private').checked;
       const allowPrivate = savedRepository?.private
         ?? (consentChecked && (!restoredPrivateRepository || input === restoredPrivateRepository));

@@ -131,7 +131,7 @@ def _run_analysis(repo: str, force: bool, gemini_key=None, jev_key=None, *,
             )
     raw = (
         collect_data(repo, linear_team=cleaned_linear, linear_api_key=resolved_linear_key)
-        if (cleaned_linear or linear_key)
+        if (cleaned_linear or resolved_linear_key)
         else collect_data(repo)
     )
     metrics = compute_flow_metrics(raw)

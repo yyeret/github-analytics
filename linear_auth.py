@@ -181,15 +181,12 @@ async def resolve_linear_token(database, account_key: str | None, org_slug: str 
 async def delete_account_grants(database, account_key: str | None, org_slug: str | None = None) -> None:
     if not database or not account_key:
         return
-    try:
-        if org_slug:
-            await database.prepare(
-                "DELETE FROM linear_grants WHERE account_key = ? AND org_slug = ?"
-            ).bind(account_key, org_slug.lower()).run()
-        else:
-            await database.prepare("DELETE FROM linear_grants WHERE account_key = ?").bind(account_key).run()
-    except Exception:
-        pass
+    if org_slug:
+        await database.prepare(
+            "DELETE FROM linear_grants WHERE account_key = ? AND org_slug = ?"
+        ).bind(account_key, org_slug.lower()).run()
+    else:
+        await database.prepare("DELETE FROM linear_grants WHERE account_key = ?").bind(account_key).run()
 
 
 async def cleanup_expired_linear_credentials(database) -> None:

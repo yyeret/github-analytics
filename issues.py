@@ -946,7 +946,7 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
             if flow_available else None
         )),
         **({"project_history_status": project_status} if project_status else {}),
-        "resolution": None if rest else _resolution_summary(modern_closed),
+        "resolution": None if (rest or is_linear) else _resolution_summary(modern_closed),
     }
 
 

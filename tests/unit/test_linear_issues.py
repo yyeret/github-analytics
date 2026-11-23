@@ -201,7 +201,7 @@ def test_collect_linear_issues_paginates_and_normalizes(monkeypatch):
     assert raw["linear_team"]["org"] == "yeret-agility"
     assert len(raw["open"]) == 1 and raw["open"][0]["identifier"] == "CRM-2"
     assert len(raw["closed"]) == 1 and raw["closed"][0]["identifier"] == "CRM-1"
-    assert raw["closed"][0]["closedByPullRequestsReferences"]["totalCount"] == 1
+    assert raw["closed"][0]["linkedPullRequests"] == [42]
     assert raw["open_truncated"] is False
     assert len(calls) == 3
 
@@ -306,7 +306,7 @@ def test_linear_lifecycle_cfd_weekly_daily_and_same_day():
     assert metrics["linear_team"]["key"] == "CRM"
     assert metrics["stale"]["count"] == 1
     assert metrics["stale"]["items"][0]["identifier"] == "CRM-1"
-    assert metrics["resolution"]["with_pr"] == 1
+    assert metrics["resolution"] is None
     cfd = metrics["lifecycle_cfd"]
     assert cfd["source"] == "linear"
     assert cfd["profile"] == "CRM · mini-crm"
