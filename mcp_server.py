@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from github_auth import identify_token
 from mcp_oauth import SCOPE, access_grant, bearer_challenge, bounded_body
+from operational_review import build_operational_review, get_slice_detail, public_operational_review
 
 URI = 'ui://github-analytics/dashboard-v1.html'
 MIME = 'text/html;profile=mcp-app'
@@ -23,8 +24,11 @@ SERVER = {'name': 'github-flow-analytics', 'version': '1.0.0'}
 VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26']
 CAPABILITIES = {'tools': {}, 'resources': {}, 'extensions': {'io.modelcontextprotocol/ui': {'mimeTypes': [MIME]}}}
 INSTRUCTIONS = (
-    'Use show_github_dashboard when the user asks for repository flow or an interactive chart. '
-    'For issue cost of delay, use show_issue_value. Assessments describe stated intent and expected value. '
+    'Use show_github_dashboard to open an insights-first operational review for a repository: it leads with '
+    'key insights, operational review questions, and the most interesting slices, with backing charts available on demand. '
+    'Use inspect_flow_slice to drill into a specific slice (wip_aging, flow_predictability, contributor_mode, '
+    'batch_size, backlog_health, value_framing). For issue cost of delay, use show_issue_value. '
+    'Assessments describe stated intent and expected value, not verified outcomes. '
     'Ask for explicit permission to share private analytics with the chat client and process repository '
     'context with Gemini and Jev before passing allow_private. Never ask for access tokens.'
 )
@@ -33,9 +37,16 @@ INSTRUCTIONS = (
 class DashboardArgs(BaseModel):
     model_config = ConfigDict(extra='forbid')
     repo: str | None = Field(default=None, max_length=200, description='GitHub owner/repo or github.com URL.')
-    view: Literal['overview', 'flow', 'work', 'batch', 'issues', 'value'] = 'overview'
+    view: Literal['insights', 'slices', 'overview', 'flow', 'work', 'batch', 'issues', 'value'] = 'insights'
     force_refresh: bool = Field(default=False, strict=True)
     allow_private: bool = Field(default=False, strict=True, description='Enable only with explicit permission to process private data.')
+
+
+class SliceArgs(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    repo: str = Field(min_length=1, max_length=200, description='GitHub owner/repo or github.com URL.')
+    slice: Literal['wip_aging', 'flow_predictability', 'contributor_mode', 'batch_size', 'backlog_health', 'value_framing']
+    allow_private: bool = Field(default=False, strict=True)
 
 
 class RefreshArgs(DashboardArgs):
@@ -81,9 +92,12 @@ def definition(name, description, model, *, ui=True, app_only=False):
 
 TOOLS = [
     definition('show_github_dashboard',
-        'Open the interactive repository dashboard. Includes KPIs, cumulative flow, cycle time and SLEs, '
-        'throughput, active WIP, PR size and timeline, backlog health, framing and PR cost of delay. '
-        'Choose a starting view, or omit repo to let the user enter one.', DashboardArgs),
+        'Start an operational review for a GitHub repository. Leads with ranked key insights, discussion questions, '
+        'and the most interesting data slices, while keeping backing charts (CFD, cycle time SLEs, throughput, '
+        'active WIP, PR size, backlog health, framing and cost of delay) on demand. Omit repo to let the user enter one.', DashboardArgs),
+    definition('inspect_flow_slice',
+        'Drill into a specific operational review slice (wip_aging, flow_predictability, contributor_mode, '
+        'batch_size, backlog_health, or value_framing) with structured breakdown rows, evidence items, and review questions.', SliceArgs),
     definition('show_issue_value',
         'Assess expected cost of delay for GitHub issues, optionally selecting exact issue numbers. '
         'Use the results to prioritize proposed issue work, including repos without merged PRs.', IssueArgs),
@@ -118,8 +132,11 @@ def summary(metrics, view):
     stats = metrics.get('recent_stats', {})
     merged = stats.get('total', 0)
     tp = metrics.get('throughput_data', [])[1:-1][-8:]
+    private = metrics.get('repository_visibility') == 'private'
+    review = metrics.get('operational_review') or build_operational_review(metrics)
     data = {'repo': metrics['repo'], 'view': view, 'visibility': metrics.get('repository_visibility', 'public'),
             'analysis_id': metrics.get('analysis_id'), 'captured_at': metrics.get('captured_at'),
+            'operational_review': public_operational_review(review, private=private),
             'merged_pr_sample': merged, 'p50_cycle_hours': metrics.get('p50_sle') if merged else None,
             'p85_cycle_hours': metrics.get('p85_sle') if merged else None,
             'active_prs': len(metrics.get('active_wip_points', [])),
@@ -128,6 +145,25 @@ def summary(metrics, view):
         data.update({'open_issues_in_sample': issues['open_now'], 'open_issues_capped': issues['open_truncated'],
                      'net_backlog_8w': issues['net_8w'], 'stale_issues_in_sample': issues['stale']['count']})
     return data
+
+
+def _dashboard_text(data):
+    review = data.get('operational_review') or {}
+    lines = [review.get('executive_summary') or f'{data["visibility"].capitalize()} repository {data["repo"]}.']
+    for item in (review.get('key_insights') or [])[:3]:
+        lines.append(f'- [{item["severity"].upper()}] {item["title"]}')
+    questions = (review.get('review_questions') or [])[:3]
+    if questions:
+        lines.append('Questions to explore:')
+        for q in questions:
+            lines.append(f'- {q}')
+    basis = f'Sample: {data["merged_pr_sample"]} merged PRs, {data["active_prs"]} open PRs'
+    if data.get('p85_cycle_hours') is not None:
+        basis += f', P85 {data["p85_cycle_hours"]:.1f}h'
+    if 'open_issues_in_sample' in data:
+        basis += f', {data["open_issues_in_sample"]} open issues'
+    lines.append(basis + '.')
+    return '\n'.join(lines)
 
 
 def routing_name(header):
@@ -149,6 +185,8 @@ def install_mcp(app, analyze, issue_value, coach):
             if inputs.repo is None and name == 'show_github_dashboard':
                 return tool_result('Enter a GitHub repository in the dashboard.', {'view': inputs.view},
                                    privateEnabled=bool(grant['private_consent']))
+        elif name == 'inspect_flow_slice':
+            inputs = SliceArgs.model_validate(args)
         elif name in ('show_issue_value', 'assess_dashboard_issues'):
             inputs = IssueArgs.model_validate(args)
         elif name == 'ask_flow_coach':
@@ -164,6 +202,18 @@ def install_mcp(app, analyze, issue_value, coach):
         if isinstance(inputs, CoachArgs):
             answer = await coach(inputs, request, identity, full_dashboard=True)
             return tool_result(answer['reply'], answer)
+        if isinstance(inputs, SliceArgs):
+            metrics = await analyze(AnalysisInput(repo_url=inputs.repo, force_refresh=False,
+                                  allow_private=inputs.allow_private), request, identity, full_dashboard=True)
+            private = metrics.get('repository_visibility') == 'private'
+            detail = get_slice_detail(metrics, inputs.slice, private=private)
+            if not detail:
+                raise HTTPException(404, 'Slice is unavailable for this repository.')
+            sl = detail['slice']
+            text = (f'{sl["title"]} ({detail["repo"]}): {sl["headline_metric"]}. '
+                    f'{sl["insight"]} Question: {sl["review_question"]}')
+            return tool_result(text, detail, metrics=metrics, sliceFocus=inputs.slice,
+                               privateEnabled=bool(grant['private_consent']))
         if isinstance(inputs, IssueArgs):
             results = await issue_value(IssueAnalysisInput(**inputs.model_dump(), repo_url=inputs.repo), request, identity, mcp=True)
             value = results['product_value']
@@ -175,13 +225,7 @@ def install_mcp(app, analyze, issue_value, coach):
         metrics = await analyze(AnalysisInput(repo_url=inputs.repo or '', force_refresh=inputs.force_refresh,
                               allow_private=inputs.allow_private), request, identity, full_dashboard=True)
         data = summary(metrics, inputs.view)
-        text = (f'{data["visibility"].capitalize()} repository {data["repo"]}. '
-                f'{data["merged_pr_sample"]} merged PRs and {data["active_prs"]} open PRs in the sample.')
-        if data['p85_cycle_hours'] is not None:
-            text += f' P85 cycle time {data["p85_cycle_hours"]:.1f} hours.'
-        if 'open_issues_in_sample' in data:
-            text += f' {data["open_issues_in_sample"]} open issues in the sample.'
-        return tool_result(text, data, metrics=metrics, privateEnabled=bool(grant['private_consent']))
+        return tool_result(_dashboard_text(data), data, metrics=metrics, privateEnabled=bool(grant['private_consent']))
 
     @app.api_route('/mcp', methods=['GET', 'DELETE'])
     async def no_stream(request: Request):

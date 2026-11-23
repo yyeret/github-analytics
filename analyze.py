@@ -7,6 +7,7 @@ import re
 import concurrent.futures
 
 from flow_metrics_core import count_events_in_windows, count_intervals, elapsed, percentiles
+from operational_review import build_operational_review
 from value_classification import compute_value_classification, render_value_report
 from issues import collect_issues, collect_rest_issues, compute_issue_metrics, issue_weekly_bins
 
@@ -872,7 +873,7 @@ def compute_flow_metrics(data):
 
     recent_scatter_points = [{"x": p["merged_ts"], "y": p["cycle_time_hours"], "classification": p["classification"], "num": p["number"]} for p in recent_prs]
 
-    return {
+    metrics = {
         "repo": data.get("repo", ""),
         "captured_at": data.get("captured_at", ""),
         "value_classification": value_classification,
@@ -899,6 +900,8 @@ def compute_flow_metrics(data):
         "issues": compute_issue_metrics(data.get("issues"), issue_weekly_bins(now), now, repo=data.get("repo")),
         **({"pr_collection_unavailable": True} if data.get("pr_collection_unavailable") else {}),
     }
+    metrics["operational_review"] = build_operational_review(metrics)
+    return metrics
 
 
 def _script_json(value):

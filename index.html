@@ -492,6 +492,97 @@
     .login-card a{color:#c4b5fd;}
     #google-signin{display:flex;justify-content:center;margin:1.25rem 0 .5rem;min-height:44px;}
     #login-error{color:#fda4af;min-height:1.3em;font-size:.85rem;}
+
+    /* ── Insights-First Operational Review ─────────────────────── */
+    .review-banner{
+      background:linear-gradient(135deg,rgba(139,92,246,.14),rgba(6,182,212,.09));
+      border:1px solid rgba(139,92,246,.32);
+      border-radius:16px;
+      padding:1.1rem 1.25rem;
+      margin-bottom:1rem;
+      display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.75rem;
+    }
+    .review-banner-text{flex:1 1 20rem;font-size:.96rem;line-height:1.55;color:var(--text);}
+    .review-badge{
+      font-size:.74rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+      padding:.25rem .6rem;border-radius:999px;
+      background:rgba(139,92,246,.18);color:#c4b5fd;border:1px solid rgba(139,92,246,.35);
+      white-space:nowrap;
+    }
+    .insights-grid{display:grid;gap:.85rem;margin-bottom:1.5rem;}
+    .insight-card{
+      background:var(--card);border:1px solid var(--border);border-left:4px solid var(--cyan);
+      border-radius:14px;padding:1.05rem 1.2rem;display:grid;gap:.55rem;
+    }
+    .insight-card.severity-high{border-left-color:#f43f5e;}
+    .insight-card.severity-medium{border-left-color:#f59e0b;}
+    .insight-card.severity-info{border-left-color:var(--cyan);}
+    .insight-top{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;flex-wrap:wrap;}
+    .insight-title{font-size:1.02rem;font-weight:700;color:var(--text);line-height:1.35;}
+    .sev-pill{
+      font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+      padding:.18rem .52rem;border-radius:999px;white-space:nowrap;
+    }
+    .sev-pill.high{background:rgba(244,63,94,.18);color:#fda4af;border:1px solid rgba(244,63,94,.35);}
+    .sev-pill.medium{background:rgba(245,158,11,.18);color:#fcd34d;border:1px solid rgba(245,158,11,.35);}
+    .sev-pill.info{background:rgba(6,182,212,.16);color:#67e8f9;border:1px solid rgba(6,182,212,.32);}
+    .insight-summary{font-size:.9rem;color:var(--text-dim);line-height:1.55;margin:0;}
+    .insight-evidence{display:flex;flex-wrap:wrap;gap:.4rem;}
+    .evidence-pill{
+      font-size:.78rem;padding:.2rem .55rem;border-radius:8px;
+      background:rgba(148,163,184,.12);color:var(--text-dim);border:1px solid var(--border);
+    }
+    .insight-question{
+      background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.22);
+      border-radius:10px;padding:.6rem .8rem;font-size:.88rem;line-height:1.45;color:var(--text);
+    }
+    .insight-question strong{color:#c4b5fd;font-size:.76rem;text-transform:uppercase;letter-spacing:.04em;margin-right:.35rem;}
+    .insight-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.15rem;}
+    .insight-btn{
+      font-size:.82rem;font-weight:600;padding:.38rem .75rem;border-radius:8px;cursor:pointer;
+      background:var(--surface);color:var(--text);border:1px solid var(--border);
+      transition:border-color .15s,background .15s;
+    }
+    .insight-btn:hover{border-color:var(--violet);background:rgba(139,92,246,.14);}
+    .insight-btn.primary{background:rgba(139,92,246,.22);border-color:rgba(139,92,246,.45);color:#ede9fe;}
+
+    .slices-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem;flex-wrap:wrap;}
+    .slices-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.9rem;margin-bottom:1.5rem;}
+    @media(max-width:780px){.slices-grid{grid-template-columns:minmax(0,1fr);}}
+    .slice-card{
+      background:var(--card);border:1px solid var(--border);border-radius:14px;
+      padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.55rem;min-width:0;
+    }
+    .slice-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;flex-wrap:wrap;}
+    .slice-title{font-weight:700;font-size:.96rem;color:var(--text);}
+    .slice-headline{font-size:.8rem;font-weight:600;color:#67e8f9;}
+    .slice-rows{width:100%;border-collapse:collapse;font-size:.83rem;}
+    .slice-rows td{padding:.32rem .35rem;border-bottom:1px solid rgba(148,163,184,.12);vertical-align:top;}
+    .slice-rows td:first-child{color:var(--text-dim);}
+    .slice-rows td:nth-child(2){font-weight:600;color:var(--text);white-space:nowrap;}
+    .slice-rows td:nth-child(3){color:var(--text-muted);font-size:.78rem;}
+    .slice-evidence summary{cursor:pointer;font-size:.8rem;color:var(--text-dim);margin-top:.2rem;}
+    .slice-evidence ul{margin:.4rem 0 0;padding-left:1.1rem;font-size:.8rem;color:var(--text-dim);display:grid;gap:.2rem;}
+
+    #backing-data-bar{
+      display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;
+      padding:.85rem 1.1rem;margin:1.25rem 0 .85rem;
+      background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    }
+    #backing-data-bar .backing-meta{font-size:.86rem;color:var(--text-dim);}
+    #backing-data-wrapper.collapsed > #backing-data-content{display:none;}
+    #slice-filter-bar{
+      display:flex;flex-wrap:wrap;align-items:center;gap:.65rem;
+      padding:.75rem 1rem;margin-bottom:1rem;
+      background:var(--surface);border:1px solid var(--border);border-radius:12px;
+      font-size:.84rem;
+    }
+    #slice-filter-bar label{display:inline-flex;align-items:center;gap:.35rem;color:var(--text-dim);}
+    #slice-filter-bar select{
+      font:inherit;color:var(--text);background:var(--card);border:1px solid var(--border);
+      border-radius:8px;padding:.28rem .5rem;
+    }
+    #slice-filter-status{margin-left:auto;font-size:.8rem;color:var(--text-muted);}
   </style>
 </head>
 <body>
@@ -591,10 +682,65 @@
       <span>📁</span> <span id="repo-name-display">—</span>
     </div>
 
-    <p class="issue-note" id="pr-note" hidden></p>
-    <div class="kpi-grid" id="kpi-grid"></div>
+    <section id="insights-section" hidden>
+      <div class="section-header">
+        <h2>Operational Review: Key Insights &amp; Questions</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="review-banner">
+        <div class="review-banner-text" id="insights-summary"></div>
+        <span class="review-badge" id="insights-source-badge">Deterministic</span>
+      </div>
+      <div class="insights-grid" id="insights-list"></div>
+    </section>
 
-    <div id="pr-analysis">
+    <section id="slices-section" hidden>
+      <div class="section-header">
+        <h2>Most Interesting Slices</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="slices-toolbar">
+        <span class="issue-note" id="slices-note">Highlighted slices ranked by signal strength for this repository.</span>
+        <button type="button" class="insight-btn" id="toggle-all-slices" onclick="toggleAllSlices()" hidden>Show all slices</button>
+      </div>
+      <div class="slices-grid" id="slices-grid"></div>
+    </section>
+
+    <div id="backing-data-wrapper" class="collapsed">
+      <div id="backing-data-bar">
+        <div>
+          <strong>Backing Data &amp; Charts</strong>
+          <div class="backing-meta" id="backing-data-meta">KPIs, flow charts, backlog tables, framing breakdown, and interactive slice filters.</div>
+        </div>
+        <button type="button" class="insight-btn primary" id="toggle-backing-btn" aria-expanded="false" onclick="toggleBackingData()">Show backing data &amp; charts</button>
+      </div>
+
+      <div id="backing-data-content">
+        <p class="issue-note" id="pr-note" hidden></p>
+        <div class="kpi-grid" id="kpi-grid"></div>
+
+        <div id="slice-filter-bar" hidden>
+          <label>Contributor
+            <select id="filter-classification" onchange="onSliceFilterChange()"><option value="">All</option></select>
+          </label>
+          <label id="filter-size-wrap" hidden>PR Size
+            <select id="filter-size" onchange="onSliceFilterChange()"><option value="">All</option></select>
+          </label>
+          <label id="filter-framing-wrap" hidden>Framing
+            <select id="filter-framing" onchange="onSliceFilterChange()"><option value="">All</option></select>
+          </label>
+          <label>Window
+            <select id="filter-window" onchange="onSliceFilterChange()">
+              <option value="all">All sampled</option>
+              <option value="4w">Last 4 weeks</option>
+              <option value="8w">Last 8 weeks</option>
+            </select>
+          </label>
+          <span id="slice-filter-status"></span>
+          <button type="button" class="insight-btn" onclick="resetSliceFilters()">Reset</button>
+        </div>
+
+        <div id="pr-analysis">
 
     <!-- CFD & Control Chart -->
     <div class="section-header">
@@ -699,6 +845,9 @@
         <div style="overflow-x:auto;max-height:520px"><table class="issue-table" id="product-value-items"></table></div>
       </div>
     </section>
+
+      </div><!-- /backing-data-content -->
+    </div><!-- /backing-data-wrapper -->
 
   </div><!-- /dashboard -->
   <!-- Shared dashboard end -->
@@ -1061,12 +1210,318 @@
 
   // Shared dashboard renderer start
   // ── Dashboard Renderer ──────────────────────────────────────────────
+  let renderedMetrics = null;
+  let showAllSlicesState = false;
+  let activeSliceFilters = { classification: '', size_bucket: '', framing: '', window: 'all' };
+
+  function prSizeBucket(size) {
+    const val = Number(size) || 0;
+    if (val < 50) return 'XS (<50)';
+    if (val < 200) return 'S (50-199)';
+    if (val < 500) return 'M (200-499)';
+    return 'L (500+)';
+  }
+
+  function toggleBackingData(forceOpen) {
+    const wrap = document.getElementById('backing-data-wrapper');
+    const btn = document.getElementById('toggle-backing-btn');
+    if (!wrap || !btn) return;
+    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : wrap.classList.contains('collapsed');
+    wrap.classList.toggle('collapsed', !shouldOpen);
+    btn.setAttribute('aria-expanded', String(shouldOpen));
+    btn.textContent = shouldOpen ? 'Hide backing data & charts' : 'Show backing data & charts';
+    if (shouldOpen) {
+      requestAnimationFrame(() => {
+        for (const chart of Object.values(charts)) {
+          if (chart && chart.canvas?.offsetParent) chart.resize();
+        }
+      });
+    }
+  }
+
+  function handleDrilldown(drilldown) {
+    if (typeof window.dashboardDrilldown === 'function') {
+      window.dashboardDrilldown(drilldown);
+      return;
+    }
+    toggleBackingData(true);
+    if (drilldown?.filter) applySliceFilter(drilldown.filter);
+    const target = (drilldown?.chart_id && document.getElementById(drilldown.chart_id))
+      || (drilldown?.view === 'issues' && document.getElementById('issues-section'))
+      || (drilldown?.view === 'value' && document.getElementById('value-section'))
+      || document.getElementById('backing-data-content');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function handleAskCoach(question) {
+    if (!question) return;
+    if (typeof window.dashboardAskCoach === 'function') {
+      window.dashboardAskCoach(question);
+      return;
+    }
+    const drawer = document.getElementById('chat-drawer');
+    if (drawer && !drawer.classList.contains('open') && typeof toggleChat === 'function') toggleChat();
+    const input = document.getElementById('chat-input');
+    if (input) {
+      input.value = question;
+      if (typeof sendChat === 'function') sendChat();
+    }
+  }
+
+  function renderOperationalReview(d) {
+    const review = d.operational_review;
+    const insightsSection = document.getElementById('insights-section');
+    const slicesSection = document.getElementById('slices-section');
+    if (!review) {
+      insightsSection.hidden = true;
+      slicesSection.hidden = true;
+      return;
+    }
+    insightsSection.hidden = false;
+    document.getElementById('insights-summary').textContent = review.executive_summary || '';
+    const badge = document.getElementById('insights-source-badge');
+    badge.textContent = review.synthesis_source === 'llm' ? 'AI-synthesized review' : 'Deterministic review';
+
+    const list = document.getElementById('insights-list');
+    list.replaceChildren();
+    for (const item of (review.insights || [])) {
+      const card = document.createElement('article');
+      card.className = `insight-card severity-${item.severity || 'info'}`;
+      const evidenceHtml = (item.evidence || []).map(e => `<span class="evidence-pill">${escapeHtml(e)}</span>`).join('');
+      card.innerHTML =
+        `<div class="insight-top"><div class="insight-title">${escapeHtml(item.title)}</div>` +
+        `<span class="sev-pill ${escapeHtml(item.severity || 'info')}">${escapeHtml(item.severity || 'info')}</span></div>` +
+        `<p class="insight-summary">${escapeHtml(item.summary)}</p>` +
+        (evidenceHtml ? `<div class="insight-evidence">${evidenceHtml}</div>` : '') +
+        (item.review_question ? `<div class="insight-question"><strong>Review question:</strong>${escapeHtml(item.review_question)}</div>` : '') +
+        `<div class="insight-actions"></div>`;
+      const actions = card.querySelector('.insight-actions');
+      const inspectBtn = document.createElement('button');
+      inspectBtn.type = 'button';
+      inspectBtn.className = 'insight-btn primary';
+      inspectBtn.textContent = 'Inspect backing data →';
+      inspectBtn.addEventListener('click', () => handleDrilldown(item.drilldown));
+      actions.append(inspectBtn);
+      if (item.review_question) {
+        const coachBtn = document.createElement('button');
+        coachBtn.type = 'button';
+        coachBtn.className = 'insight-btn';
+        coachBtn.textContent = 'Explore with Coach';
+        coachBtn.addEventListener('click', () => handleAskCoach(item.review_question));
+        actions.append(coachBtn);
+      }
+      list.append(card);
+    }
+
+    renderSlicesSection(review);
+  }
+
+  function toggleAllSlices() {
+    showAllSlicesState = !showAllSlicesState;
+    if (renderedMetrics?.operational_review) renderSlicesSection(renderedMetrics.operational_review);
+  }
+
+  function renderSlicesSection(review) {
+    const slicesSection = document.getElementById('slices-section');
+    const allSlices = Object.values(review.slices || {}).filter(s => s && s.available);
+    if (!allSlices.length) {
+      slicesSection.hidden = true;
+      return;
+    }
+    slicesSection.hidden = false;
+    const featuredIds = new Set(review.featured_slices || []);
+    const toggleBtn = document.getElementById('toggle-all-slices');
+    const hasExtra = allSlices.length > featuredIds.size;
+    toggleBtn.hidden = !hasExtra;
+    toggleBtn.textContent = showAllSlicesState
+      ? `Show featured slices (${featuredIds.size})`
+      : `Show all available slices (${allSlices.length})`;
+
+    const visible = showAllSlicesState
+      ? allSlices.sort((a, b) => (b.score || 0) - (a.score || 0))
+      : (review.featured_slices || []).map(id => review.slices[id]).filter(Boolean);
+
+    const grid = document.getElementById('slices-grid');
+    grid.replaceChildren();
+    for (const slice of visible) {
+      const card = document.createElement('article');
+      card.className = 'slice-card';
+      const rowsHtml = (slice.rows || []).map(r =>
+        `<tr><td>${escapeHtml(r.label)}</td><td>${escapeHtml(r.value)}</td><td>${escapeHtml(r.detail || '')}</td></tr>`
+      ).join('');
+      const evidenceItems = slice.evidence_items || [];
+      const evidenceList = evidenceItems.length
+        ? `<details class="slice-evidence"><summary>Evidence items (${evidenceItems.length})</summary><ul>` +
+          evidenceItems.map(it =>
+            `<li><strong>#${escapeHtml(it.number)}</strong> ${escapeHtml(it.title || '')} — <span>${escapeHtml(it.metric || '')}</span></li>`
+          ).join('') + `</ul></details>`
+        : '';
+      card.innerHTML =
+        `<div class="slice-head"><div class="slice-title">${escapeHtml(slice.title)}</div>` +
+        `<span class="sev-pill ${escapeHtml(slice.severity || 'info')}">${escapeHtml(slice.severity || 'info')}</span></div>` +
+        `<div class="slice-headline">${escapeHtml(slice.headline_metric || '')}</div>` +
+        `<p class="insight-summary">${escapeHtml(slice.insight || '')}</p>` +
+        (rowsHtml ? `<table class="slice-rows"><tbody>${rowsHtml}</tbody></table>` : '') +
+        (slice.review_question ? `<div class="insight-question"><strong>Explore:</strong>${escapeHtml(slice.review_question)}</div>` : '') +
+        evidenceList +
+        `<div class="insight-actions"></div>`;
+      const actions = card.querySelector('.insight-actions');
+      const drillBtn = document.createElement('button');
+      drillBtn.type = 'button';
+      drillBtn.className = 'insight-btn primary';
+      drillBtn.textContent = 'Drill down →';
+      drillBtn.addEventListener('click', () => handleDrilldown(slice.drilldown));
+      actions.append(drillBtn);
+      if (slice.review_question) {
+        const askBtn = document.createElement('button');
+        askBtn.type = 'button';
+        askBtn.className = 'insight-btn';
+        askBtn.textContent = 'Ask Coach';
+        askBtn.addEventListener('click', () => handleAskCoach(slice.review_question));
+        actions.append(askBtn);
+      }
+      grid.append(card);
+    }
+  }
+
+  function populateSliceFilters(d) {
+    const bar = document.getElementById('slice-filter-bar');
+    const filters = d.operational_review?.available_filters;
+    const hasPRs = (d.recent_stats?.total || 0) > 0 || Boolean(d.active_wip_points?.length);
+    if (!bar || !filters || !hasPRs) {
+      if (bar) bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    const fill = (id, values) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.innerHTML = '<option value="">All</option>' + (values || []).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      el.value = '';
+    };
+    fill('filter-classification', filters.classifications);
+    fill('filter-size', filters.size_buckets);
+    document.getElementById('filter-size-wrap').hidden = !(filters.size_buckets && filters.size_buckets.length);
+    fill('filter-framing', filters.framing_levels);
+    document.getElementById('filter-framing-wrap').hidden = !(filters.framing_levels && filters.framing_levels.length);
+    document.getElementById('filter-window').value = 'all';
+    activeSliceFilters = { classification: '', size_bucket: '', framing: '', window: 'all' };
+    updateSliceFilterStatus(d.recent_scatter_points?.length || 0, d.recent_scatter_points?.length || 0, d.active_wip_points?.length || 0);
+  }
+
+  function updateSliceFilterStatus(shownMerged, totalMerged, shownOpen) {
+    const el = document.getElementById('slice-filter-status');
+    if (el) el.textContent = `Showing ${shownMerged}/${totalMerged} merged PRs · ${shownOpen} open PRs`;
+  }
+
+  function applySliceFilter(filter) {
+    if (!renderedMetrics || !filter) return;
+    if (filter.classification !== undefined) {
+      const el = document.getElementById('filter-classification');
+      if (el) el.value = filter.classification || '';
+    }
+    if (filter.size_bucket !== undefined) {
+      const el = document.getElementById('filter-size');
+      if (el) el.value = filter.size_bucket || '';
+    }
+    if (filter.framing !== undefined) {
+      const el = document.getElementById('filter-framing');
+      if (el) el.value = filter.framing || '';
+    }
+    if (filter.window !== undefined) {
+      const el = document.getElementById('filter-window');
+      if (el) el.value = filter.window || 'all';
+    }
+    onSliceFilterChange();
+  }
+
+  function resetSliceFilters() {
+    applySliceFilter({ classification: '', size_bucket: '', framing: '', window: 'all' });
+  }
+
+  function onSliceFilterChange() {
+    if (!renderedMetrics) return;
+    const d = renderedMetrics;
+    const cls = document.getElementById('filter-classification')?.value || '';
+    const sizeB = document.getElementById('filter-size')?.value || '';
+    const framing = document.getElementById('filter-framing')?.value || '';
+    const win = document.getElementById('filter-window')?.value || 'all';
+    activeSliceFilters = { classification: cls, size_bucket: sizeB, framing, window: win };
+
+    const framingByNum = new Map();
+    for (const item of (d.value_classification?.prs?.items || [])) {
+      framingByNum.set(item.number, item.level);
+    }
+    const sizeByNum = new Map();
+    for (const item of (d.pr_size_scatter_points || [])) {
+      sizeByNum.set(item.num, item.x);
+    }
+    const cutoffMs = win === '4w' ? Date.now() - 28 * 86400000 : win === '8w' ? Date.now() - 56 * 86400000 : 0;
+
+    const matchesMerged = (num, classification, sizeVal, mergedTs) => {
+      if (cls && classification !== cls) return false;
+      if (sizeB && prSizeBucket(sizeVal) !== sizeB) return false;
+      if (framing && framingByNum.get(num) !== framing) return false;
+      if (cutoffMs && mergedTs && mergedTs < cutoffMs) return false;
+      return true;
+    };
+
+    const filteredScatter = (d.recent_scatter_points || []).filter(p =>
+      matchesMerged(p.num, p.classification, sizeByNum.get(p.num), p.x)
+    );
+    const mergedTsByNum = new Map((d.recent_scatter_points || []).map(p => [p.num, p.x]));
+    const filteredSize = (d.pr_size_scatter_points || []).filter(p =>
+      matchesMerged(p.num, p.classification, p.x, mergedTsByNum.get(p.num))
+    );
+    const filteredComet = (d.comet_points || []).filter(p =>
+      matchesMerged(p.key, p.classification, p.size, p.end)
+    );
+    const filteredWip = (d.active_wip_points || []).filter(p => {
+      if (cls && p.classification !== cls) return false;
+      if (sizeB && prSizeBucket(p.size) !== sizeB) return false;
+      if (framing && framingByNum.get(p.num) !== framing) return false;
+      return true;
+    });
+
+    const hasPRs = (d.recent_stats?.total || 0) > 0;
+    if (hasPRs) {
+      renderControlChart(filteredScatter, d.p50_sle, d.p85_sle);
+      renderCorrelation(filteredSize, d.spearman_corr);
+      renderComet(filteredComet);
+    }
+    if (hasPRs || d.active_wip_points?.length) {
+      renderWIP(filteredWip, d.stage_percentiles);
+    }
+    if (framing) {
+      const valueLevel = document.getElementById('value-level');
+      if (valueLevel && [...valueLevel.options].some(o => o.value === framing)) {
+        valueLevel.value = framing;
+        renderValueItems();
+      }
+    }
+    updateSliceFilterStatus(filteredScatter.length, (d.recent_scatter_points || []).length, filteredWip.length);
+  }
+
   function renderDashboard(d) {
+    renderedMetrics = d;
+    showAllSlicesState = false;
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
     document.getElementById('repo-name-display').textContent = d.repo;
     for (const chart of Object.values(charts)) chart.destroy();
     charts = {};
+
+    renderOperationalReview(d);
+    toggleBackingData(false);
+    const metaEl = document.getElementById('backing-data-meta');
+    if (metaEl) {
+      const mergedCount = d.recent_stats?.total || 0;
+      const openPrCount = d.active_wip_points?.length || 0;
+      const openIssueCount = d.issues?.open_now;
+      const parts = [`${mergedCount} merged PRs`, `${openPrCount} open PRs`];
+      if (openIssueCount !== undefined && openIssueCount !== null) parts.push(`${openIssueCount} open issues`);
+      metaEl.textContent = `KPIs, flow charts, backlog tables, framing breakdown & slice filters (${parts.join(' · ')}).`;
+    }
 
     const hasPRs = (d.recent_stats?.total || 0) > 0;
     const hasOpenPRs = Boolean(d.active_wip_points?.length);
@@ -1075,6 +1530,7 @@
     prNote.hidden = hasPRs;
     prNote.textContent = d.pr_collection_unavailable ? 'Pull request data is temporarily unavailable.' : 'No merged pull requests were found in the analysis window.';
     renderKPIs(d);
+    populateSliceFilters(d);
     const mergedOnly = ['chart-control', 'chart-throughput', 'chart-correlation', 'chart-comet'];
     if (d.dashboard_source !== 'github_graphql') {
       for (const id of mergedOnly) document.getElementById(id).closest('.chart-card').hidden = !hasPRs;

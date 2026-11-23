@@ -4,7 +4,8 @@
   const status = byId('app-status');
   const dashboard = byId('dashboard');
   const buttons = [...byId('views').querySelectorAll('button')];
-  const panels = new Map([['overview', byId('kpi-grid')], ['issues', byId('issues-section')],
+  const panels = new Map([['insights', byId('insights-section')], ['slices', byId('slices-section')],
+    ['overview', byId('kpi-grid')], ['issues', byId('issues-section')],
     ['value', byId('value-section')], ['issue-value', byId('issue-value-panel')], ['coach', byId('coach-panel')]]);
   const canvases = ['flow', 'work', 'batch'];
   [...dashboard.querySelectorAll('#pr-analysis > .charts-2col')].forEach((row, index) => {
@@ -16,7 +17,7 @@
   });
   byId('issue-stale-table').parentElement.classList.add('scroll-table');
 
-  let view = 'overview';
+  let view = 'insights';
   let metrics = null;
   let repo = '';
   let allowPrivate = false;
@@ -51,7 +52,11 @@
   function showView(next) {
     view = next;
     dashboard.hidden = next === 'issue-value' || next === 'coach' || !metrics;
-    for (const [id, panel] of panels) panel.hidden = id !== next;
+    for (const [id, panel] of panels) {
+      if (panel) panel.hidden = id !== next;
+    }
+    const filterBar = byId('slice-filter-bar');
+    if (filterBar) filterBar.hidden = !['flow', 'work', 'batch'].includes(next);
     for (const button of buttons) {
       button.setAttribute('aria-current', String(button.dataset.view === next));
       button.hidden = button.dataset.view !== 'issue-value' && !metrics;
@@ -64,6 +69,22 @@
       resize();
     });
   }
+
+  window.dashboardDrilldown = drilldown => {
+    if (!drilldown) return;
+    if (drilldown.filter && typeof applySliceFilter === 'function') applySliceFilter(drilldown.filter);
+    showView(drilldown.view || 'overview');
+  };
+
+  window.dashboardAskCoach = question => {
+    if (!question) return;
+    showView('coach');
+    const input = byId('coach-message');
+    if (input) {
+      input.value = question;
+      input.focus();
+    }
+  };
 
   function clearAnalysis() {
     for (const chart of Object.values(charts)) chart.destroy();
@@ -247,7 +268,7 @@
     run(byId('analyze-form'), 'Analyzing repository…', async () => {
       const result = await callTool('refresh_github_dashboard', {
         repo: requestedRepo,
-        view: ['issue-value', 'coach'].includes(view) ? 'overview' : view,
+        view: ['issue-value', 'coach'].includes(view) ? 'insights' : view,
         force_refresh: force,
         allow_private: byId('allow-private').checked,
       });

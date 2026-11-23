@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from analyze import collect_data, compute_flow_metrics
+from operational_review import synthesize_operational_review
 from product_value import assess_product_value
 
 # ---------------------------------------------------------------------------
@@ -116,9 +117,12 @@ def _run_analysis(repo: str, force: bool, gemini_key=None, jev_key=None) -> dict
         raise HTTPException(status_code=400, detail="Only public repositories are supported.")
     raw = collect_data(repo)
     metrics = compute_flow_metrics(raw)
+    effective_gemini = gemini_key or _get_gemini_key()
     metrics["product_value"] = asyncio.run(assess_product_value(
-        repo, raw, gemini_key or _get_gemini_key(), os.environ.get("GITHUB_TOKEN"),
+        repo, raw, effective_gemini, os.environ.get("GITHUB_TOKEN"),
         jev_key=jev_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")))
+    metrics["operational_review"] = asyncio.run(synthesize_operational_review(
+        metrics, gemini_key=effective_gemini))
     return metrics
 
 
