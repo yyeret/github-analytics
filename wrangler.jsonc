@@ -15,7 +15,8 @@
   },
   "vars": {
     "AUTH_REQUIRED": "true",
-    "GOOGLE_OAUTH_CLIENT_ID": "914195447285-huoatl4c0c0e8qrcou5m3n2aalaj7jri.apps.googleusercontent.com"
+    "GOOGLE_OAUTH_CLIENT_ID": "914195447285-huoatl4c0c0e8qrcou5m3n2aalaj7jri.apps.googleusercontent.com",
+    "MCP_OAUTH_ALLOW_LOOPBACK": "true"
   },
   "assets": {
     "directory": "./public/",
@@ -69,7 +70,8 @@
   "previews": {
     "vars": {
       "AUTH_REQUIRED": "true",
-      "GOOGLE_OAUTH_CLIENT_ID": "914195447285-huoatl4c0c0e8qrcou5m3n2aalaj7jri.apps.googleusercontent.com"
+      "GOOGLE_OAUTH_CLIENT_ID": "914195447285-huoatl4c0c0e8qrcou5m3n2aalaj7jri.apps.googleusercontent.com",
+      "MCP_OAUTH_ALLOW_LOOPBACK": "true"
     },
     "kv_namespaces": [
       {
