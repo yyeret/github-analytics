@@ -876,13 +876,16 @@ def _compute_linear_work_item_aging(open_issues, closed_issues, issues_raw, now,
             if stage not in aging_stages:
                 aging_stages.append(stage)
                 stage_exit_ages.setdefault(stage, [])
-            aging_items.append({
+            aging_item = {
                 "identifier": issue.get("identifier") or f"#{issue.get('number')}",
                 "number": issue.get("number"),
                 "title": issue.get("title", ""),
                 "stage": stage,
                 "age_days": round(elapsed(active_start, now, 86400.0), 2),
-            })
+            }
+            if issue.get("url"):
+                aging_item["url"] = issue["url"]
+            aging_items.append(aging_item)
 
         last_exit_by_stage = {}
         is_completed = issue.get("state") == "CLOSED" and state_types.get(issue.get("linearState")) != "canceled"

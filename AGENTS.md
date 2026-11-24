@@ -17,9 +17,11 @@ Code, Gemini, macOS, and Windows. Use the host's native skill invocation syntax.
   `ce-code-review`. Resolve justified findings within the authorized scope.
 - Capture verified, reusable, non-obvious lessons with `ce-compound` when its
   criteria apply. Routine changes do not need a learning document.
-- Commit with `ce-commit` when requested. Use `ce-commit-push-pr` when publishing
-  is authorized; use `lfg` only when explicitly requested. Pushes, PR creation,
-  merges, deployments, and account changes require user authorization.
+- Default to **LFG mode** unless the user indicates otherwise: once verification
+  and `ce-code-review` (or native adversarial subagent review) pass with no
+  unresolved blocking findings, proceed end-to-end — commit, push, open PR,
+  wait for CI, merge, prune the temporary worktree, and deploy. Account changes
+  and destructive operations still require user authorization.
 
 Keep work proportional to risk. Start with the smallest meaningful proof of
 behavior, implement it, then improve structure. Use existing tests and machinery
