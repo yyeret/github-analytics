@@ -379,6 +379,7 @@ def _normalize_linear_issue(node: dict, repo: str | None) -> dict | None:
         "title": node.get("title") or "",
         "body": node.get("description") or "",
         "createdAt": node["createdAt"],
+        "startedAt": node.get("startedAt"),
         "updatedAt": node.get("updatedAt") or node["createdAt"],
         "closedAt": closed_at,
         "state": "CLOSED" if is_closed else "OPEN",

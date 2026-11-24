@@ -799,6 +799,142 @@ def _linear_lifecycle_cfd(issues, issues_raw, window_start, now):
     }
 
 
+_LINEAR_PRE_ACTIVE_TYPES = frozenset({"triage", "backlog", "unstarted"})
+_LINEAR_TERMINAL_TYPES = frozenset({"completed", "canceled"})
+_LINEAR_INACTIVE_TYPES = _LINEAR_PRE_ACTIVE_TYPES | _LINEAR_TERMINAL_TYPES
+
+
+def _is_linear_active_stage(stage, state_types):
+    return bool(stage) and state_types.get(stage) not in _LINEAR_INACTIVE_TYPES
+
+
+def _linear_state_changes(issue, state_types):
+    created = _parse(issue.get("createdAt"))
+    if created is None:
+        return []
+    transitions = []
+    for item in (issue.get("linearHistory") or {}).get("transitions") or []:
+        if not isinstance(item, dict):
+            continue
+        for state_key, type_key in (("fromState", "fromType"), ("toState", "toType")):
+            if item.get(state_key) and item.get(type_key):
+                state_types.setdefault(item[state_key], item[type_key])
+        at = _parse(item.get("createdAt"))
+        if at and item.get("toState"):
+            transitions.append((at, item.get("fromState"), item["toState"]))
+    transitions.sort(key=lambda item: item[0])
+    initial_stage = (transitions[0][1] or issue.get("linearState")) if transitions else issue.get("linearState")
+    changes = [(created, initial_stage)] if initial_stage else []
+    for at, _, to_state in transitions:
+        if at >= created and (not changes or changes[-1][1] != to_state):
+            changes.append((at, to_state))
+    return changes
+
+
+def _linear_active_start(issue, changes, state_types):
+    for at, stage in changes:
+        if _is_linear_active_stage(stage, state_types):
+            return at
+    return _parse(issue.get("startedAt"))
+
+
+def _compute_linear_work_item_aging(open_issues, closed_issues, issues_raw, now, modern_stats):
+    state_types = {}
+    aging_stages = []
+    for state in issues_raw.get("linear_states") or []:
+        if not isinstance(state, dict) or not state.get("name"):
+            continue
+        name, stype = state["name"], state.get("type")
+        if stype:
+            state_types[name] = stype
+        if stype not in _LINEAR_INACTIVE_TYPES and name not in aging_stages:
+            aging_stages.append(name)
+
+    all_issues = open_issues + closed_issues
+    for issue in all_issues:
+        if issue.get("linearState") and issue.get("linearStateType"):
+            state_types.setdefault(issue["linearState"], issue["linearStateType"])
+
+    open_ids = {id(issue) for issue in open_issues}
+    aging_items = []
+    stage_exit_ages = {stage: [] for stage in aging_stages}
+    completed_active_days = []
+
+    for issue in all_issues:
+        changes = _linear_state_changes(issue, state_types)
+        active_start = _linear_active_start(issue, changes, state_types)
+        if active_start is None:
+            continue
+
+        if id(issue) in open_ids and _is_linear_active_stage(issue.get("linearState"), state_types):
+            stage = issue["linearState"]
+            if stage not in aging_stages:
+                aging_stages.append(stage)
+                stage_exit_ages.setdefault(stage, [])
+            aging_items.append({
+                "identifier": issue.get("identifier") or f"#{issue.get('number')}",
+                "number": issue.get("number"),
+                "title": issue.get("title", ""),
+                "stage": stage,
+                "age_days": round(elapsed(active_start, now, 86400.0), 2),
+            })
+
+        last_exit_by_stage = {}
+        is_completed = issue.get("state") == "CLOSED" and state_types.get(issue.get("linearState")) != "canceled"
+        closed_at = _parse(issue.get("closedAt")) if is_completed else None
+        for idx, (_, stage) in enumerate(changes):
+            if not _is_linear_active_stage(stage, state_types):
+                continue
+            if idx + 1 < len(changes):
+                next_at, next_stage = changes[idx + 1]
+                next_type = state_types.get(next_stage)
+                if next_type == "canceled" or next_type in _LINEAR_PRE_ACTIVE_TYPES:
+                    continue
+                exit_at = next_at
+            else:
+                exit_at = closed_at
+            if exit_at and exit_at >= active_start:
+                last_exit_by_stage[stage] = elapsed(active_start, exit_at, 86400.0)
+
+        for stage, exit_days in last_exit_by_stage.items():
+            if stage not in stage_exit_ages:
+                stage_exit_ages[stage] = []
+                aging_stages.append(stage)
+            stage_exit_ages[stage].append(exit_days)
+        if closed_at and closed_at >= active_start:
+            completed_active_days.append(elapsed(active_start, closed_at, 86400.0))
+
+    if not aging_stages or not aging_items:
+        return None
+
+    stage_percentiles = []
+    for stage in aging_stages:
+        ages = stage_exit_ages.get(stage) or []
+        p50, p85 = percentiles(ages, (0.5, 0.85), method="upper-index") if ages else (None, None)
+        stage_percentiles.append({
+            "stage": stage,
+            "n": len(ages),
+            "p50_days": round(p50, 2) if p50 is not None else None,
+            "p85_days": round(p85, 2) if p85 is not None else None,
+        })
+
+    if completed_active_days:
+        overall_p50, overall_p85 = percentiles(completed_active_days, (0.5, 0.85), method="upper-index")
+        p50_days, p85_days = round(overall_p50, 2), round(overall_p85, 2)
+    else:
+        p50_days = round(modern_stats["median_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["median_hours"] is not None else None
+        p85_days = round(modern_stats["p85_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["p85_hours"] is not None else None
+
+    return {
+        "start_basis": "active_work",
+        "stages": aging_stages,
+        "items": aging_items,
+        "stage_percentiles": stage_percentiles,
+        "p50_days": p50_days,
+        "p85_days": p85_days,
+    }
+
+
 def _window_start(issues_raw, weekly_bins):
     start = weekly_bins[0]
     if issues_raw.get("closed_truncated"):
@@ -878,7 +1014,6 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
 
     age_counts = {label: 0 for label, _, _ in AGE_BUCKETS}
     stale_items = []
-    aging_items = []
     for it, made, _ in open_rows:
         if not made:
             continue
@@ -887,14 +1022,6 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
             if age_days >= low and (high is None or age_days < high):
                 age_counts[label] += 1
                 break
-        if is_linear and it.get("linearState"):
-            aging_items.append({
-                "identifier": it.get("identifier") or f"#{it.get('number')}",
-                "number": it.get("number"),
-                "title": it.get("title", ""),
-                "stage": it["linearState"],
-                "age_days": round(age_days, 2),
-            })
         last = _parse(it.get("updatedAt")) if (rest or is_linear) else _last_activity(it)
         idle_days = elapsed(last, now, 86400.0) if last else age_days
         if idle_days > stale_days:
@@ -932,22 +1059,11 @@ def compute_issue_metrics(issues_raw, weekly_bins, now, stale_days=STALE_DAYS, *
     if (not is_linear and not project_cfd and flow_available and not _workflow_label_stages(repo)
             and factory_evidence_ready and _has_tessl_factory_signals(lifecycle_issues)):
         factory_cfd = _tessl_factory_lifecycle_cfd(lifecycle_issues, window_start, now, history_start)
-    work_item_aging = None
-    if is_linear and open_available:
-        aging_stages = [
-            state["name"] for state in (issues_raw.get("linear_states") or [])
-            if isinstance(state, dict) and state.get("name") and state.get("type") not in ("completed", "canceled")
-        ]
-        for item in aging_items:
-            if item["stage"] not in aging_stages:
-                aging_stages.append(item["stage"])
-        if aging_stages and aging_items:
-            work_item_aging = {
-                "stages": aging_stages,
-                "items": aging_items,
-                "p50_days": round(modern_stats["median_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["median_hours"] is not None else None,
-                "p85_days": round(modern_stats["p85_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["p85_hours"] is not None else None,
-            }
+    work_item_aging = (
+        _compute_linear_work_item_aging(open_issues, modern_closed, issues_raw, now, modern_stats)
+        if (is_linear and open_available)
+        else None
+    )
     return {
         "sample_size": len(sampled),
         "open_available": open_available,

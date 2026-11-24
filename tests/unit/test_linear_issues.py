@@ -546,4 +546,132 @@ def test_detect_and_discover_linear_team_from_github(monkeypatch):
     assert sync_found["team_key"] == "MAG"
 
 
+@pytest.mark.unit
+def test_work_item_aging_uses_active_start_and_cumulative_stage_exit_percentiles():
+    now = datetime.datetime(2026, 11, 23, 0, 0)
+    weekly_bins = [now - datetime.timedelta(weeks=w) for w in range(8, -1, -1)]
+    linear_states = [
+        {"name": "Backlog", "type": "backlog", "position": 0},
+        {"name": "Next", "type": "unstarted", "position": 1},
+        {"name": "Specify", "type": "started", "position": 2},
+        {"name": "Spec Review", "type": "started", "position": 3},
+        {"name": "Build", "type": "started", "position": 4},
+        {"name": "Verify", "type": "started", "position": 5},
+        {"name": "Done", "type": "completed", "position": 6},
+        {"name": "Canceled", "type": "canceled", "position": 7},
+    ]
+
+    # Item A: 5d in Backlog, enters Specify on Nov 1 (active day 0), Spec Review on Nov 11 (day 10),
+    # finishes Spec Review -> Build on Nov 12 (day 11), Done on Nov 15 (day 14).
+    item_a = {
+        "number": 1,
+        "identifier": "MAG-1",
+        "title": "Item A",
+        "createdAt": "2026-10-27T00:00:00Z",
+        "startedAt": "2026-11-01T00:00:00Z",
+        "updatedAt": "2026-11-15T00:00:00Z",
+        "closedAt": "2026-11-15T00:00:00Z",
+        "state": "CLOSED",
+        "linearState": "Done",
+        "linearStateType": "completed",
+        "linearHistory": {
+            "hasNextPage": False,
+            "transitions": [
+                {"createdAt": "2026-11-01T00:00:00Z", "fromState": "Backlog", "toState": "Specify", "fromType": "backlog", "toType": "started"},
+                {"createdAt": "2026-11-11T00:00:00Z", "fromState": "Specify", "toState": "Spec Review", "fromType": "started", "toType": "started"},
+                {"createdAt": "2026-11-12T00:00:00Z", "fromState": "Spec Review", "toState": "Build", "fromType": "started", "toType": "started"},
+                {"createdAt": "2026-11-15T00:00:00Z", "fromState": "Build", "toState": "Done", "fromType": "started", "toType": "completed"},
+            ],
+        },
+    }
+
+    # Item B: enters Specify on Nov 10 (active day 0), Spec Review on Nov 13 (day 3),
+    # finishes Spec Review -> Build on Nov 15 (day 5), still open in Build (active age 13d on Nov 23).
+    item_b = {
+        "number": 2,
+        "identifier": "MAG-2",
+        "title": "Item B",
+        "createdAt": "2026-11-01T00:00:00Z",
+        "startedAt": "2026-11-10T00:00:00Z",
+        "updatedAt": "2026-11-15T00:00:00Z",
+        "closedAt": None,
+        "state": "OPEN",
+        "linearState": "Build",
+        "linearStateType": "started",
+        "linearHistory": {
+            "hasNextPage": False,
+            "transitions": [
+                {"createdAt": "2026-11-10T00:00:00Z", "fromState": "Backlog", "toState": "Specify", "fromType": "backlog", "toType": "started"},
+                {"createdAt": "2026-11-13T00:00:00Z", "fromState": "Specify", "toState": "Spec Review", "fromType": "started", "toType": "started"},
+                {"createdAt": "2026-11-15T00:00:00Z", "fromState": "Spec Review", "toState": "Build", "fromType": "started", "toType": "started"},
+            ],
+        },
+    }
+
+    # Item C: still in Backlog — must be excluded from active aging chart
+    item_c = {
+        "number": 3,
+        "identifier": "MAG-3",
+        "title": "Backlog item",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "updatedAt": "2026-10-01T00:00:00Z",
+        "closedAt": None,
+        "state": "OPEN",
+        "linearState": "Backlog",
+        "linearStateType": "backlog",
+        "linearHistory": {"hasNextPage": False, "transitions": []},
+    }
+
+    # Item D: canceled out of Spec Review — must not count as finishing Spec Review
+    item_d = {
+        "number": 4,
+        "identifier": "MAG-4",
+        "title": "Canceled item",
+        "createdAt": "2026-11-10T00:00:00Z",
+        "startedAt": "2026-11-10T00:00:00Z",
+        "updatedAt": "2026-11-11T00:00:00Z",
+        "closedAt": "2026-11-11T00:00:00Z",
+        "state": "CLOSED",
+        "linearState": "Canceled",
+        "linearStateType": "canceled",
+        "linearHistory": {
+            "hasNextPage": False,
+            "transitions": [
+                {"createdAt": "2026-11-10T12:00:00Z", "fromState": "Specify", "toState": "Spec Review", "fromType": "started", "toType": "started"},
+                {"createdAt": "2026-11-11T00:00:00Z", "fromState": "Spec Review", "toState": "Canceled", "fromType": "started", "toType": "canceled"},
+            ],
+        },
+    }
+
+    metrics = issues_mod.compute_issue_metrics(
+        {
+            "source": "linear",
+            "linear_states": linear_states,
+            "open": [item_b, item_c],
+            "closed": [item_a, item_d],
+            "pre_ai": [],
+        },
+        weekly_bins,
+        now,
+    )
+    aging = metrics["work_item_aging"]
+    assert aging["start_basis"] == "active_work"
+    assert aging["stages"] == ["Specify", "Spec Review", "Build", "Verify"]
+    # Only active open item MAG-2 is plotted, with age from active start (Nov 10 -> Nov 23 = 13d), not createdAt (22d)
+    assert len(aging["items"]) == 1
+    assert aging["items"][0]["identifier"] == "MAG-2"
+    assert aging["items"][0]["age_days"] == 13.0
+
+    by_stage = {sp["stage"]: sp for sp in aging["stage_percentiles"]}
+    # Spec Review exits: Item A = 11.0d (from active start, NOT 1d in stage), Item B = 5.0d; Item D canceled excluded
+    assert by_stage["Spec Review"]["n"] == 2
+    assert by_stage["Spec Review"]["p50_days"] == 11.0  # upper-index on [5.0, 11.0]
+    assert by_stage["Spec Review"]["p85_days"] == 11.0
+    # Build exits: only Item A finished Build -> Done at 14.0d
+    assert by_stage["Build"] == {"stage": "Build", "n": 1, "p50_days": 14.0, "p85_days": 14.0}
+    # Verify has no exits yet
+    assert by_stage["Verify"] == {"stage": "Verify", "n": 0, "p50_days": None, "p85_days": None}
+
+
+
 
