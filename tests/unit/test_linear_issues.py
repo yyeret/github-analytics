@@ -591,6 +591,7 @@ def test_work_item_aging_uses_active_start_and_cumulative_stage_exit_percentiles
         "number": 2,
         "identifier": "MAG-2",
         "title": "Item B",
+        "url": "https://linear.app/magnitude/issue/MAG-2/item-b",
         "createdAt": "2026-11-01T00:00:00Z",
         "startedAt": "2026-11-10T00:00:00Z",
         "updatedAt": "2026-11-15T00:00:00Z",
@@ -661,6 +662,7 @@ def test_work_item_aging_uses_active_start_and_cumulative_stage_exit_percentiles
     assert len(aging["items"]) == 1
     assert aging["items"][0]["identifier"] == "MAG-2"
     assert aging["items"][0]["age_days"] == 13.0
+    assert aging["items"][0]["url"] == "https://linear.app/magnitude/issue/MAG-2/item-b"
 
     by_stage = {sp["stage"]: sp for sp in aging["stage_percentiles"]}
     # Spec Review exits: Item A = 11.0d (from active start, NOT 1d in stage), Item B = 5.0d; Item D canceled excluded

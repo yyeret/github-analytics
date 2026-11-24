@@ -278,6 +278,26 @@
 
     #value-section select { background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 8px 10px 8px 0; }
     #value-section label { white-space: nowrap; }
+    .item-link{color:#93c5fd;text-decoration:none;font-weight:600;}
+    .item-link:hover,.item-link:focus-visible{color:#c4b5fd;text-decoration:underline;}
+    .msg a{color:#93c5fd;text-decoration:underline;text-underline-offset:2px;}
+    .msg a:hover{color:#c4b5fd;}
+    .drilldown{margin-top:1rem;border-top:1px solid var(--border);padding-top:.75rem;}
+    .drilldown summary{cursor:pointer;font-size:.82rem;font-weight:600;color:#c4b5fd;user-select:none;list-style:none;display:inline-flex;align-items:center;gap:.4rem;}
+    html[data-theme="light"] .item-link,html[data-theme="light"] .msg a{color:#1d4ed8;}
+    html[data-theme="light"] .item-link:hover,html[data-theme="light"] .item-link:focus-visible,html[data-theme="light"] .msg a:hover{color:#4338ca;}
+    html[data-theme="light"] .drilldown summary{color:#5b21b6;}
+    .drilldown summary::-webkit-details-marker{display:none;}
+    .drilldown summary::before{content:'▸';display:inline-block;transition:transform .15s;}
+    .drilldown[open] summary::before{transform:rotate(90deg);}
+    .drilldown-controls{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.7rem 0 .5rem;font-size:.78rem;color:var(--text-dim);}
+    .drilldown-controls select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:.78rem;}
+    .drilldown-table-wrap{overflow-x:auto;max-height:260px;overflow-y:auto;}
+    .pace-pill{display:inline-block;padding:.1rem .45rem;border-radius:99px;font-size:.7rem;font-weight:600;white-space:nowrap;}
+    .pace-green{background:rgba(16,185,129,.16);color:#6ee7b7;}
+    .pace-yellow{background:rgba(245,158,11,.18);color:#fcd34d;}
+    .pace-red{background:rgba(244,63,94,.18);color:#fda4af;}
+    .pace-neutral{background:rgba(148,163,184,.16);color:#cbd5e1;}
     #value-section td { vertical-align: top; }
     #value-counts { min-width: 540px; }
     #value-items { min-width: 660px; }
@@ -639,6 +659,15 @@
       <div class="chart-card">
         <div class="chart-title">Active WIP Age by Stage</div>
         <div class="chart-canvas-wrap tall"><canvas id="chart-wip"></canvas></div>
+        <details class="drilldown" id="wip-drilldown" hidden>
+          <summary id="wip-drilldown-summary">Inspect open PRs</summary>
+          <div class="drilldown-controls">
+            <label for="wip-stage-filter">Stage</label>
+            <select id="wip-stage-filter" onchange="renderWIPDrilldown()"></select>
+            <span id="wip-drilldown-count"></span>
+          </div>
+          <div class="drilldown-table-wrap"><table class="issue-table" id="wip-drilldown-table"></table></div>
+        </details>
       </div>
     </div>
 
@@ -683,6 +712,22 @@
           <div class="chart-card" id="issue-age-card">
             <div class="chart-title" id="issue-age-title">Open Issue Age Distribution</div>
             <div class="chart-canvas-wrap tall"><canvas id="chart-issue-age"></canvas></div>
+            <details class="drilldown" id="issue-age-drilldown" hidden>
+              <summary id="issue-age-drilldown-summary">Inspect active items</summary>
+              <div class="drilldown-controls">
+                <label for="issue-age-stage-filter">Stage</label>
+                <select id="issue-age-stage-filter" onchange="renderAgingDrilldown()"></select>
+                <label for="issue-age-pace-filter">Pace</label>
+                <select id="issue-age-pace-filter" onchange="renderAgingDrilldown()">
+                  <option value="">All</option>
+                  <option value="red">Above P85</option>
+                  <option value="yellow">P50–P85</option>
+                  <option value="green">≤ P50</option>
+                </select>
+                <span id="issue-age-drilldown-count"></span>
+              </div>
+              <div class="drilldown-table-wrap"><table class="issue-table" id="issue-age-drilldown-table"></table></div>
+            </details>
           </div>
         </div>
         <div class="chart-card charts-full" id="issue-stale-card">
@@ -1110,13 +1155,27 @@
 
   // Shared dashboard renderer start
   // ── Dashboard Renderer ──────────────────────────────────────────────
+  let activeDashboardRepo = null;
+  const GITHUB_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
   function renderDashboard(d) {
+    activeDashboardRepo = d?.repo && GITHUB_REPO_RE.test(d.repo) ? d.repo : null;
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
-    const linearLabel = d.linear_team?.key
-      ? ` + Linear: ${d.linear_team.key}${d.linear_team.name && d.linear_team.name.toLowerCase() !== d.linear_team.key.toLowerCase() ? ` (${d.linear_team.name})` : ''}`
+    const repoDisplay = document.getElementById('repo-name-display');
+    const repoHref = activeDashboardRepo ? `https://github.com/${activeDashboardRepo}` : null;
+    const linearTeam = d.linear_team || d.issues?.linear_team || null;
+    const linearText = linearTeam?.key
+      ? `Linear: ${linearTeam.key}${linearTeam.name && linearTeam.name.toLowerCase() !== linearTeam.key.toLowerCase() ? ` (${linearTeam.name})` : ''}`
       : '';
-    document.getElementById('repo-name-display').textContent = `${d.repo}${linearLabel}`;
+    const linearHref = safeExternalUrl(linearTeam?.url);
+    const repoHtml = repoHref
+      ? `<a class="item-link" href="${escapeHtml(repoHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(d.repo)}</a>`
+      : escapeHtml(d.repo || '—');
+    const linearHtml = linearText
+      ? ` + ${linearHref ? `<a class="item-link" href="${escapeHtml(linearHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linearText)}</a>` : escapeHtml(linearText)}`
+      : '';
+    repoDisplay.innerHTML = repoHtml + linearHtml;
     for (const chart of Object.values(charts)) chart.destroy();
     charts = {};
 
@@ -1134,13 +1193,13 @@
     }
     if (hasPRs || hasOpenPRs) renderCFD(d.cfd_data);
     if (hasPRs) {
-      renderControlChart(d.recent_scatter_points, d.p50_sle, d.p85_sle);
+      renderControlChart(d.recent_scatter_points, d.p50_sle, d.p85_sle, activeDashboardRepo);
       renderThroughput(d.throughput_data);
-      renderCorrelation(d.pr_size_scatter_points, d.spearman_corr);
-      renderComet(d.comet_points);
+      renderCorrelation(d.pr_size_scatter_points, d.spearman_corr, activeDashboardRepo);
+      renderComet(d.comet_points, activeDashboardRepo);
     }
-    if (hasPRs || hasOpenPRs) renderWIP(d.active_wip_points, d.stage_percentiles);
-    renderIssues(d.issues, d.linear_detected);
+    renderWIP(d.active_wip_points, d.stage_percentiles, activeDashboardRepo);
+    renderIssues(d.issues, d.linear_detected, activeDashboardRepo);
     renderValueClassification(d.value_classification);
     renderProductValue(d.product_value);
   }
@@ -1174,7 +1233,11 @@
       dimensions.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('') +
       '<th>Cost of delay</th></tr></thead><tbody>' +
       (value.items.map(item => {
-        const lead = `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td>`;
+        const href = safeExternalUrl(item.url) || (activeDashboardRepo && item.number ? `https://github.com/${activeDashboardRepo}/pull/${item.number}` : null);
+        const ref = href
+          ? `<a class="item-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.number)}</a>`
+          : `#${escapeHtml(item.number)}`;
+        const lead = `<tr><td>${ref} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.framing)}</td>`;
         if (item.status !== 'assessed') return lead + `<td colspan="${dimensions.length + 1}">Not scored: ${escapeHtml(item.reason || 'assessment unavailable')}.</td></tr>`;
         return lead + dimensions.map(([name]) => {
           const d = item.dimensions[name];
@@ -1212,7 +1275,15 @@
     const group = valueClassification[kind];
     const items = (group?.items || []).filter(item => !level || item.level === level);
     document.getElementById('value-items').innerHTML = '<thead><tr><th>Item</th><th>State</th><th>Framing</th><th>Rationale</th></tr></thead><tbody>' +
-      (items.map(item => `<tr><td>#${escapeHtml(item.number)} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.level)}</td><td>${escapeHtml(item.rationale)}${item.body_available ? '' : ' (Title only)'}</td></tr>`).join('') ||
+      (items.map(item => {
+        const seg = kind === 'prs' ? 'pull' : 'issues';
+        const href = safeExternalUrl(item.url) || (activeDashboardRepo && item.number ? `https://github.com/${activeDashboardRepo}/${seg}/${item.number}` : null);
+        const label = item.identifier || `#${item.number}`;
+        const ref = href
+          ? `<a class="item-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+          : escapeHtml(label);
+        return `<tr><td>${ref} ${escapeHtml(item.title)}</td><td>${escapeHtml(item.cohort)}</td><td>${escapeHtml(item.level)}</td><td>${escapeHtml(item.rationale)}${item.body_available ? '' : ' (Title only)'}</td></tr>`;
+      }).join('') ||
        '<tr><td colspan="4">No items in this selection.</td></tr>') + '</tbody>';
   }
 
@@ -1353,11 +1424,56 @@
     return hours.toFixed(1) + 'h';
   }
 
+  // ── External Link & Chart Helpers ─────────────────────────────────
+  function safeExternalUrl(url) {
+    if (typeof url !== 'string' || !url) return null;
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function chartPointUrl(chart, elements) {
+    if (!elements?.length) return null;
+    const el = elements[0];
+    const raw = chart?.data?.datasets?.[el.datasetIndex]?.data?.[el.index];
+    return safeExternalUrl(raw?.url);
+  }
+
   // ── Destroy + Create Chart helpers ─────────────────────────────────
   function mkChart(id, config) {
     if (charts[id]) { charts[id].destroy(); }
     const ctx = document.getElementById(id);
     if (!ctx) return;
+    if (ctx.style) ctx.style.cursor = '';
+    const hasPointUrls = Boolean(config?.data?.datasets?.some(
+      ds => Array.isArray(ds.data) && ds.data.some(pt => pt && typeof pt === 'object' && pt.url)
+    ));
+    if (hasPointUrls) {
+      config.options = config.options || {};
+      if (!config.options.onHover) {
+        config.options.onHover = (event, elements, chart) => {
+          const target = event?.native?.target || chart?.canvas;
+          if (target?.style) target.style.cursor = chartPointUrl(chart, elements) ? 'pointer' : '';
+        };
+      }
+      if (!config.options.onClick) {
+        config.options.onClick = (_event, elements, chart) => {
+          const url = chartPointUrl(chart, elements);
+          if (url) window.open(url, '_blank', 'noopener,noreferrer');
+        };
+      }
+      config.options.plugins = config.options.plugins || {};
+      config.options.plugins.tooltip = config.options.plugins.tooltip || {};
+      config.options.plugins.tooltip.callbacks = config.options.plugins.tooltip.callbacks || {};
+      if (!config.options.plugins.tooltip.callbacks.footer) {
+        config.options.plugins.tooltip.callbacks.footer = items => (
+          safeExternalUrl(items?.[0]?.raw?.url) ? 'Click to open ↗' : ''
+        );
+      }
+    }
     charts[id] = new Chart(ctx, config);
   }
 
@@ -1407,9 +1523,10 @@
   }
 
   // ── Control Chart ──────────────────────────────────────────────────
-  function renderControlChart(pts, p50, p85) {
+  function renderControlChart(pts, p50, p85, repo) {
     if (!pts || !pts.length) return;
     const sorted = pts.filter(p=>p.y !== null && p.y !== undefined).sort((a,b)=>a.x-b.x);
+    const prUrl = p => p.url || (repo && p.num ? `https://github.com/${repo}/pull/${p.num}` : null);
 
     const colors = { Human:'rgba(139,92,246,.75)', 'AI-Assisted':'rgba(6,182,212,.75)', 'AI-Agentic':'rgba(244,63,94,.75)' };
 
@@ -1418,7 +1535,7 @@
       data: {
         datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
           label: cls,
-          data: sorted.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y/24, num:p.num})),
+          data: sorted.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y/24, num:p.num, url:prUrl(p)})),
           backgroundColor: colors[cls],
           pointRadius: 3, pointHoverRadius:6,
         }))
@@ -1511,7 +1628,40 @@
     });
   }
 
-  function renderIssues(iss, linearDetected) {
+  let agingDrilldownState = null;
+
+  function renderAgingDrilldown() {
+    if (!agingDrilldownState) return;
+    const table = document.getElementById('issue-age-drilldown-table');
+    const stageEl = document.getElementById('issue-age-stage-filter');
+    const paceEl = document.getElementById('issue-age-pace-filter');
+    const countEl = document.getElementById('issue-age-drilldown-count');
+    if (!table || !stageEl || !paceEl) return;
+    const stageFilter = stageEl.value;
+    const paceFilter = paceEl.value;
+    const filtered = agingDrilldownState.items.filter(item =>
+      (!stageFilter || item.stage === stageFilter) && (!paceFilter || item.pace === paceFilter)
+    );
+    if (countEl) countEl.textContent = `Showing ${filtered.length} of ${agingDrilldownState.items.length}`;
+    const paceMeta = {
+      red: ['Above P85', 'pace-red'],
+      yellow: ['P50–P85', 'pace-yellow'],
+      green: ['≤ P50', 'pace-green'],
+      neutral: ['No baseline', 'pace-neutral'],
+    };
+    const rows = filtered.map(item => {
+      const [paceLabel, paceCls] = paceMeta[item.pace] || paceMeta.neutral;
+      const ref = item.url
+        ? `<a class="item-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.identifier)}</a>`
+        : escapeHtml(item.identifier);
+      return `<tr><td class="num">${ref}</td><td>${escapeHtml(item.title || '')}</td><td>${escapeHtml(item.stage)}</td><td class="num">${(Number(item.age_days) || 0).toFixed(1)}d</td><td><span class="pace-pill ${paceCls}">${paceLabel}</span></td></tr>`;
+    }).join('');
+    table.innerHTML = rows
+      ? `<thead><tr><th>Issue</th><th>Title</th><th>Stage</th><th>Age</th><th>Pace</th></tr></thead><tbody>${rows}</tbody>`
+      : '<tbody><tr><td colspan="5">No matching items.</td></tr></tbody>';
+  }
+
+  function renderIssues(iss, linearDetected, repo) {
     const sec = document.getElementById('issues-section');
     sec.style.display = 'block';
     const note = document.getElementById('issues-note');
@@ -1591,11 +1741,29 @@
       }
     });
 
+    const safeRepo = repo && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo) ? repo : null;
+    const issueUrl = item => {
+      const explicit = typeof safeExternalUrl === 'function'
+        ? safeExternalUrl(item?.url)
+        : (typeof item?.url === 'string' && /^https?:\/\//i.test(item.url) ? item.url : null);
+      if (explicit) return explicit;
+      if (iss.source === 'linear') {
+        if (iss.linear_team?.org && item?.identifier) {
+          return `https://linear.app/${encodeURIComponent(iss.linear_team.org)}/issue/${encodeURIComponent(item.identifier)}`;
+        }
+        return null;
+      }
+      if (safeRepo && item?.number) return `https://github.com/${safeRepo}/issues/${item.number}`;
+      return null;
+    };
+
     const aging = iss.work_item_aging;
     const hasAging = Boolean(aging?.items?.length && aging?.stages?.length);
     document.getElementById('issue-age-card').hidden = !hasAging && !iss.open_now;
     document.getElementById('issue-stale-card').hidden = !iss.open_now;
     const ageTitle = document.getElementById('issue-age-title');
+    const agingDrilldown = document.getElementById('issue-age-drilldown');
+    if (agingDrilldown) agingDrilldown.hidden = !hasAging;
     if (hasAging) {
       if (ageTitle) ageTitle.textContent = 'Work Item Aging by Status';
       const annotations = {};
@@ -1673,15 +1841,27 @@
         }
       }
 
-      const pointColors = aging.items.map(item => {
+      const itemPace = item => {
         const sp = stageStats.get(item.stage);
         const p50 = hasStagePercentiles ? sp?.p50_days : aging.p50_days;
         const p85 = hasStagePercentiles ? sp?.p85_days : aging.p85_days;
-        if (p50 == null && p85 == null) return 'rgba(148,163,184,.95)';
-        if (p85 != null && item.age_days > p85) return 'rgba(244,63,94,.95)';
-        if (p50 != null && item.age_days > p50) return 'rgba(245,158,11,.95)';
-        return 'rgba(16,185,129,.95)';
-      });
+        if (p50 == null && p85 == null) return 'neutral';
+        if (p85 != null && item.age_days > p85) return 'red';
+        if (p50 != null && item.age_days > p50) return 'yellow';
+        return 'green';
+      };
+      const paceColors = {
+        neutral: 'rgba(148,163,184,.95)',
+        red: 'rgba(244,63,94,.95)',
+        yellow: 'rgba(245,158,11,.95)',
+        green: 'rgba(16,185,129,.95)',
+      };
+      const enrichedAgingItems = aging.items.map(item => ({
+        ...item,
+        pace: itemPace(item),
+        url: issueUrl(item),
+      }));
+      const pointColors = enrichedAgingItems.map(item => paceColors[item.pace]);
 
       mkChart('chart-issue-age', {
         type: 'scatter',
@@ -1689,7 +1869,13 @@
           labels: aging.stages,
           datasets: [{
             label: 'Open issues',
-            data: aging.items.map(item => ({x: item.stage, y: item.age_days, identifier: item.identifier, title: item.title})),
+            data: enrichedAgingItems.map(item => ({
+              x: item.stage,
+              y: item.age_days,
+              identifier: item.identifier,
+              title: item.title,
+              url: item.url,
+            })),
             backgroundColor: pointColors,
             borderColor: '#f8fafc',
             borderWidth: 1.25,
@@ -1720,7 +1906,27 @@
           }
         }
       });
+
+      if (agingDrilldown) {
+        const sortedItems = [...enrichedAgingItems].sort((a, b) => (b.age_days || 0) - (a.age_days || 0));
+        agingDrilldownState = { items: sortedItems };
+        const summary = document.getElementById('issue-age-drilldown-summary');
+        const overP85 = sortedItems.filter(i => i.pace === 'red').length;
+        if (summary) {
+          summary.textContent = `Inspect ${sortedItems.length} active item${sortedItems.length === 1 ? '' : 's'}${overP85 ? ` (${overP85} above P85)` : ''}`;
+        }
+        const stageFilter = document.getElementById('issue-age-stage-filter');
+        if (stageFilter) {
+          stageFilter.innerHTML = '<option value="">All stages</option>' +
+            aging.stages.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+          stageFilter.value = '';
+        }
+        const paceFilter = document.getElementById('issue-age-pace-filter');
+        if (paceFilter) paceFilter.value = '';
+        renderAgingDrilldown();
+      }
     } else if (iss.open_now) {
+      agingDrilldownState = null;
       if (ageTitle) ageTitle.textContent = 'Open Issue Age Distribution';
       mkChart('chart-issue-age', {
         type: 'bar',
@@ -1738,9 +1944,14 @@
 
     const basis = iss.stale_basis === 'updated' ? 'update' : 'comment';
     document.getElementById('issue-stale-title').textContent = `Stale Issues (no ${basis} for over ${iss.stale.threshold_days} days)`;
-    const rows = iss.stale.items.map(i =>
-      `<tr><td class="num">${escapeHtml(i.identifier || ('#' + i.number))}</td><td>${escapeHtml(i.title || '')}</td><td class="num">${Math.round(i.days_since_activity)}d idle</td><td class="num">${Math.round(i.age_days)}d old</td></tr>`
-    ).join('');
+    const rows = iss.stale.items.map(i => {
+      const label = i.identifier || ('#' + i.number);
+      const href = issueUrl(i);
+      const ref = href
+        ? `<a class="item-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+        : escapeHtml(label);
+      return `<tr><td class="num">${ref}</td><td>${escapeHtml(i.title || '')}</td><td class="num">${Math.round(i.days_since_activity)}d idle</td><td class="num">${Math.round(i.age_days)}d old</td></tr>`;
+    }).join('');
     document.getElementById('issue-stale-table').innerHTML = rows
       ? `<thead><tr><th>Issue</th><th>Title</th><th>Idle</th><th>Age</th></tr></thead><tbody>${rows}</tbody>`
       : '<tbody><tr><td>No stale issues.</td></tr></tbody>';
@@ -1773,10 +1984,51 @@
   }
 
   // ── Active WIP Age ─────────────────────────────────────────────────
-  function renderWIP(pts, stagePct) {
-    if (!pts || !pts.length) return;
+  let wipDrilldownState = null;
+
+  function renderWIPDrilldown() {
+    if (!wipDrilldownState || typeof document === 'undefined') return;
+    const table = document.getElementById('wip-drilldown-table');
+    const stageEl = document.getElementById('wip-stage-filter');
+    const countEl = document.getElementById('wip-drilldown-count');
+    if (!table || !stageEl) return;
+    const esc = text => String(text).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const stageFilter = stageEl.value;
+    const filtered = wipDrilldownState.items.filter(item => !stageFilter || item.stage === stageFilter);
+    if (countEl) countEl.textContent = `Showing ${filtered.length} of ${wipDrilldownState.items.length}`;
+    const rows = filtered.map(item => {
+      const label = `PR #${item.num}`;
+      const ref = item.url
+        ? `<a class="item-link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`
+        : esc(label);
+      return `<tr><td class="num">${ref}</td><td>${esc(item.title || '')}</td><td>${esc(item.stage)}</td><td>${esc(item.classification || '')}</td><td class="num">${(Number(item.age_days) || 0).toFixed(1)}d</td></tr>`;
+    }).join('');
+    table.innerHTML = rows
+      ? `<thead><tr><th>PR</th><th>Title</th><th>Stage</th><th>Author</th><th>Age</th></tr></thead><tbody>${rows}</tbody>`
+      : '<tbody><tr><td colspan="5">No matching open PRs.</td></tr></tbody>';
+  }
+
+  function renderWIP(pts, stagePct, repo) {
+    const wipDrilldown = typeof document !== 'undefined' ? document.getElementById('wip-drilldown') : null;
+    if (!pts || !pts.length) {
+      wipDrilldownState = null;
+      if (wipDrilldown) wipDrilldown.hidden = true;
+      return;
+    }
     const legacyMap = {'1. Active Coding':'Draft', '2. Review Queue':'In Review', '3. Merge Delay':'Approved'};
-    const normalized = pts.map(p => ({...p, x: legacyMap[p.x] || p.x}));
+    const safeRepo = repo && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo) ? repo : null;
+    const safeUrl = url => {
+      if (typeof safeExternalUrl === 'function') return safeExternalUrl(url);
+      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+      try {
+        const parsed = new URL(url);
+        return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+      } catch {
+        return null;
+      }
+    };
+    const prUrl = p => safeUrl(p.url) || (safeRepo && p.num ? `https://github.com/${safeRepo}/pull/${p.num}` : null);
+    const normalized = pts.map(p => ({...p, x: legacyMap[p.x] || p.x, url: prUrl(p)}));
     const hasDraft = normalized.some(p => p.x === 'Draft');
     const stageOrder = hasDraft ? ['Draft', 'Opened', 'In Review', 'Approved'] : ['Opened', 'In Review', 'Approved'];
     const colors = { Human:'rgba(139,92,246,.8)', 'AI-Assisted':'rgba(6,182,212,.8)', 'AI-Agentic':'rgba(244,63,94,.8)' };
@@ -1787,7 +2039,7 @@
         labels: stageOrder,
         datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
           label: cls,
-          data: normalized.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y, title:p.title, num:p.num})),
+          data: normalized.filter(p=>p.classification===cls).map(p=>({x:p.x, y:p.y, title:p.title, num:p.num, url:p.url})),
           backgroundColor: colors[cls],
           pointRadius:5, pointHoverRadius:9,
         }))
@@ -1811,10 +2063,28 @@
         }
       }
     });
+
+    if (wipDrilldown) {
+      const esc = text => String(text).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      const sorted = normalized
+        .map(p => ({ num: p.num, title: p.title, stage: p.x, classification: p.classification, age_days: p.y, url: p.url }))
+        .sort((a, b) => (Number(b.age_days) || 0) - (Number(a.age_days) || 0));
+      wipDrilldownState = { items: sorted };
+      wipDrilldown.hidden = false;
+      const summary = document.getElementById('wip-drilldown-summary');
+      if (summary) summary.textContent = `Inspect ${sorted.length} open PR${sorted.length === 1 ? '' : 's'}`;
+      const stageFilter = document.getElementById('wip-stage-filter');
+      if (stageFilter) {
+        stageFilter.innerHTML = '<option value="">All stages</option>' +
+          stageOrder.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+        stageFilter.value = '';
+      }
+      renderWIPDrilldown();
+    }
   }
 
   // ── Correlation Scatter ────────────────────────────────────────────
-  function renderCorrelation(pts, corr) {
+  function renderCorrelation(pts, corr, repo) {
     const canvas = document.getElementById('chart-correlation');
     const wrap = canvas?.parentElement;
     const note = document.getElementById('correlation-note');
@@ -1833,13 +2103,14 @@
       note.textContent = '';
     }
     const colors = { Human:'rgba(139,92,246,.65)', 'AI-Assisted':'rgba(6,182,212,.65)', 'AI-Agentic':'rgba(244,63,94,.65)' };
+    const prUrl = p => p.url || (repo && p.num ? `https://github.com/${repo}/pull/${p.num}` : null);
 
     mkChart('chart-correlation', {
       type: 'scatter',
       data: {
         datasets: ['Human','AI-Assisted','AI-Agentic'].map(cls => ({
           label: cls,
-          data: pts.filter(p=>p.classification===cls).map(p=>({x:Math.log10(Math.max(1,p.x)), y:p.y/24, num:p.num, title:p.title})),
+          data: pts.filter(p=>p.classification===cls).map(p=>({x:Math.log10(Math.max(1,p.x)), y:p.y/24, num:p.num, title:p.title, url:prUrl(p)})),
           backgroundColor: colors[cls],
           pointRadius:3.5, pointHoverRadius:7,
         }))
@@ -1868,7 +2139,7 @@
   }
 
   // ── Comet Chart ────────────────────────────────────────────────────
-  function renderComet(pts) {
+  function renderComet(pts, repo) {
     if (!pts || !pts.length) return;
 
     // Only render recent 300 items to keep it readable
@@ -1876,6 +2147,7 @@
     const maxLane = Math.max(...recent.map(p=>p.lane));
     const spanDays = (Math.max(...recent.map(p=>p.end)) - Math.min(...recent.map(p=>p.start))) / 86400000;
     const colors = { Human:'rgba(139,92,246,.7)', 'AI-Assisted':'rgba(6,182,212,.7)', 'AI-Agentic':'rgba(244,63,94,.7)' };
+    const prUrl = p => p.url || (repo && p.key ? `https://github.com/${repo}/pull/${p.key}` : null);
 
     // Transform to scatter datasets where each point is (midpoint_ts, lane)
     // with a custom draw to show horizontal bars
@@ -1887,6 +2159,7 @@
         start: p.start, end: p.end,
         key: p.key, summary: p.summary, size: p.size, cycle_time: p.cycle_time,
         classification: cls,
+        url: prUrl(p),
       })),
       backgroundColor: colors[cls],
       pointStyle: 'rect',
@@ -1987,9 +2260,46 @@
     else if (role === 'user') chatHistory.push({ role: 'user', content });
   }
 
+  function linkifyChatRefs(html) {
+    const repo = currentRepo && GITHUB_REPO_RE.test(currentRepo) ? currentRepo : null;
+    const linearTeam = currentMetrics?.linear_team || currentMetrics?.issues?.linear_team || null;
+    const linearOrg = linearTeam?.org || null;
+    const linearKey = linearTeam?.key && /^[A-Za-z0-9]+$/.test(linearTeam.key) ? linearTeam.key : null;
+    const linearRegex = linearOrg && linearKey ? new RegExp(`\\b(${linearKey}-\\d+)\\b`, 'g') : null;
+    return html.split(/(<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>|<[^>]+>)/g).map((part, idx) => {
+      if (idx % 2 === 1) return part;
+      let out = part;
+      if (linearRegex) {
+        out = out.replace(linearRegex, id => {
+          const href = `https://linear.app/${encodeURIComponent(linearOrg)}/issue/${encodeURIComponent(id)}`;
+          return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${id}</a>`;
+        });
+      }
+      if (repo) {
+        out = out.replace(/\b(PR|pull request)\s+#(\d+)\b|(^|[\s([,:])#(\d+)\b/gi, (m, prWord, prNum, lead, issueNum) => {
+          if (prWord) {
+            const href = `https://github.com/${repo}/pull/${prNum}`;
+            return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${prWord} #${prNum}</a>`;
+          }
+          const href = `https://github.com/${repo}/issues/${issueNum}`;
+          return `${lead}<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">#${issueNum}</a>`;
+        });
+      }
+      return out;
+    }).join('');
+  }
+
   function simpleMarkdown(text) {
-    return text
+    const mdLinks = [];
+    const withLinkTokens = text
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, href) => {
+        const safe = safeExternalUrl(href.replace(/&amp;/g, '&'));
+        if (!safe) return label;
+        const idx = mdLinks.push(`<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${label}</a>`) - 1;
+        return `\u0000MDLINK${idx}\u0000`;
+      });
+    const rendered = withLinkTokens
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
       .replace(/`(.+?)`/g,'<code>$1</code>')
       .replace(/^### (.+)$/gm,'<h3>$1</h3>')
@@ -1998,7 +2308,9 @@
       .replace(/(<li>.*<\/li>)/gs, m => `<ul>${m}</ul>`)
       .replace(/\n{2,}/g,'</p><p>')
       .replace(/\n/g,'<br>')
-      .replace(/^(?!<[hup])/,'<p>').replace(/(?<![>])$/,'</p>');
+      .replace(/^(?!<[hup])/,'<p>').replace(/(?<![>])$/,'</p>')
+      .replace(/\u0000MDLINK(\d+)\u0000/g, (_m, i) => mdLinks[Number(i)] || '');
+    return linkifyChatRefs(rendered);
   }
 
   async function sendChat() {
