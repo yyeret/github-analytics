@@ -92,7 +92,7 @@ DEFAULT_MAX_PRS = 30
 README_CHARS = 12_000
 BODY_CHARS = 1_500
 CONCURRENCY = 5
-GEMINI_TIMEOUT = 30
+GEMINI_TIMEOUT = 40
 CONTEXT_TIMEOUT = 65
 CONTEXT_TOKEN_BUDGETS = (4096, 8192)
 CANVAS_KEYS = ("customer_segments", "problem", "solution", "unique_value_proposition",
@@ -212,7 +212,8 @@ async def gemini_json(key, prompt, schema, max_tokens=1200, *, diagnostics=None,
     info = {**(diagnostics or {}), "model": MODEL, "attempt": attempt, "max_output_tokens": max_tokens}
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens,
-                                 "responseMimeType": "application/json", "responseSchema": schema}}
+                                 "responseMimeType": "application/json", "responseSchema": schema,
+                                 "thinkingConfig": {"thinkingLevel": "low"}}}
     code = None
     fallback = "transport_error"
     try:
