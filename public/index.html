@@ -1675,8 +1675,9 @@
 
       const pointColors = aging.items.map(item => {
         const sp = stageStats.get(item.stage);
-        const p50 = sp?.p50_days ?? aging.p50_days;
-        const p85 = sp?.p85_days ?? aging.p85_days;
+        const p50 = hasStagePercentiles ? sp?.p50_days : aging.p50_days;
+        const p85 = hasStagePercentiles ? sp?.p85_days : aging.p85_days;
+        if (p50 == null && p85 == null) return 'rgba(148,163,184,.95)';
         if (p85 != null && item.age_days > p85) return 'rgba(244,63,94,.95)';
         if (p50 != null && item.age_days > p50) return 'rgba(245,158,11,.95)';
         return 'rgba(16,185,129,.95)';

@@ -811,9 +811,11 @@ def _is_linear_active_stage(stage, state_types):
 def _linear_state_changes(issue, state_types):
     created = _parse(issue.get("createdAt"))
     if created is None:
-        return []
+        return [], False
+    history = issue.get("linearHistory") or {}
+    history_truncated = bool(history.get("hasNextPage"))
     transitions = []
-    for item in (issue.get("linearHistory") or {}).get("transitions") or []:
+    for item in history.get("transitions") or []:
         if not isinstance(item, dict):
             continue
         for state_key, type_key in (("fromState", "fromType"), ("toState", "toType")):
@@ -824,18 +826,21 @@ def _linear_state_changes(issue, state_types):
             transitions.append((at, item.get("fromState"), item["toState"]))
     transitions.sort(key=lambda item: item[0])
     initial_stage = (transitions[0][1] or issue.get("linearState")) if transitions else issue.get("linearState")
-    changes = [(created, initial_stage)] if initial_stage else []
+    changes = [(created, initial_stage)] if (initial_stage and not history_truncated) else []
     for at, _, to_state in transitions:
         if at >= created and (not changes or changes[-1][1] != to_state):
             changes.append((at, to_state))
-    return changes
+    return changes, history_truncated
 
 
-def _linear_active_start(issue, changes, state_types):
+def _linear_active_start(issue, changes, state_types, *, history_truncated=False):
+    started_at = _parse(issue.get("startedAt"))
+    if history_truncated and started_at is not None:
+        return started_at
     for at, stage in changes:
         if _is_linear_active_stage(stage, state_types):
             return at
-    return _parse(issue.get("startedAt"))
+    return started_at
 
 
 def _compute_linear_work_item_aging(open_issues, closed_issues, issues_raw, now, modern_stats):
@@ -861,8 +866,8 @@ def _compute_linear_work_item_aging(open_issues, closed_issues, issues_raw, now,
     completed_active_days = []
 
     for issue in all_issues:
-        changes = _linear_state_changes(issue, state_types)
-        active_start = _linear_active_start(issue, changes, state_types)
+        changes, history_truncated = _linear_state_changes(issue, state_types)
+        active_start = _linear_active_start(issue, changes, state_types, history_truncated=history_truncated)
         if active_start is None:
             continue
 
@@ -922,8 +927,7 @@ def _compute_linear_work_item_aging(open_issues, closed_issues, issues_raw, now,
         overall_p50, overall_p85 = percentiles(completed_active_days, (0.5, 0.85), method="upper-index")
         p50_days, p85_days = round(overall_p50, 2), round(overall_p85, 2)
     else:
-        p50_days = round(modern_stats["median_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["median_hours"] is not None else None
-        p85_days = round(modern_stats["p85_hours"] / 24.0, 2) if modern_stats["n"] and modern_stats["p85_hours"] is not None else None
+        p50_days = p85_days = None
 
     return {
         "start_basis": "active_work",

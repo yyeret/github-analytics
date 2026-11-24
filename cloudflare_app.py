@@ -512,8 +512,9 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         if saved:
             cached = json.loads(saved)
             if not full_dashboard:
-                return cached
-            if cached.get('repository_id') == repository_id and cached.get('analysis_id'):
+                if not use_graphql or cached.get('repository_id') == repository_id:
+                    return cached
+            elif cached.get('repository_id') == repository_id and cached.get('analysis_id'):
                 snapshot = await cache.get(public_dashboard_snapshot_key(repo, cached['analysis_id']))
                 if snapshot:
                     return json.loads(snapshot)
@@ -591,10 +592,10 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     options = {'allow_private': True} if private else {}
     if use_graphql:
         metrics['dashboard_source'] = 'github_graphql'
+        metrics['repository_id'] = repository_id
     if full_dashboard:
         if not private:
             options['load_sources'] = partial(public_value_sources, repo, identity.token, repository_id)
-        metrics['repository_id'] = repository_id
         metrics['analysis_id'] = secrets.token_urlsafe(24)
         if not metrics.get('recent_stats', {}).get('total'):
             metrics['p50_sle'] = metrics['p85_sle'] = None
@@ -765,8 +766,11 @@ async def chat_for_identity(req, request, identity, *, full_dashboard=False):
             saved = await cache.get(private_analysis_key(repo, identity, req.analysis_id, True))
     else:
         cache_key = (private_analysis_key(repo, identity, req.analysis_id) if identity and req.analysis_id
-            else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id else public_analysis_key(repo, False))
+            else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id
+            else public_analysis_key(repo, False, graphql=bool(identity)))
         saved = await cache.get(cache_key)
+        if not saved and identity and not req.analysis_id:
+            saved = await cache.get(public_analysis_key(repo, False))
         if not saved and identity and req.analysis_id and request.cookies.get(SESSION_COOKIE):
             try:
                 await signed_in_user(request)
