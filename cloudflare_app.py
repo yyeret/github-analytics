@@ -353,6 +353,18 @@ async def repository_access(repo, request, identity, allow_private):
     return token if metadata['private'] else None, metadata['private']
 
 
+async def web_repository_access(repo, request, identity, allow_private):
+    token = identity.token if identity else getattr(environment(request), 'GITHUB_TOKEN', None)
+    metadata = await public_repo_exists(repo, token, allow_private=allow_private)
+    if metadata['private'] and not identity:
+        raise HTTPException(401, 'Connect your GitHub identity or supply its bearer credential for private analysis.')
+    raw_id = metadata.get('id')
+    repository_id = raw_id if (identity and type(raw_id) is int and raw_id >= 1) else None
+    canonical_repo = parse_repo(metadata.get('full_name') or repo) if repository_id is not None else repo
+    # Anonymous content reads cannot cross a later public-to-private transition.
+    return canonical_repo, (token if metadata['private'] else None), metadata['private'], repository_id
+
+
 async def mcp_repository_access(repo, token, allow_private):
     metadata = await public_repo_exists(repo, token, allow_private=allow_private)
     repository_id = metadata.get('id')
@@ -452,7 +464,8 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         repo, private, repository_id = await mcp_repository_access(repo, identity.token, req.allow_private)
         token = identity.token if private else None
     else:
-        token, private = await repository_access(repo, request, identity, req.allow_private)
+        repo, token, private, repository_id = await web_repository_access(repo, request, identity, req.allow_private)
+    use_graphql = full_dashboard or (identity is not None and repository_id is not None)
     gemini_override = None if full_dashboard else request.headers.get("X-Gemini-Api-Key")
     jev_override = None if full_dashboard else request.headers.get("X-TypeSafe-Api-Key")
     linear_override = None if full_dashboard else (request.headers.get("X-Linear-Api-Key") or "").strip() or None
@@ -493,14 +506,15 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         getattr(env, "ANALYTICS_CACHE", None)
         if env and not caller_keys and not private and not is_linear and not connected_linear else None
     )
-    cache_key = public_analysis_key(repo, full_dashboard)
+    cache_key = public_analysis_key(repo, full_dashboard, graphql=use_graphql)
     if cache and not req.force_refresh:
         saved = await cache.get(cache_key)
         if saved:
             cached = json.loads(saved)
             if not full_dashboard:
-                return cached
-            if cached.get('repository_id') == repository_id and cached.get('analysis_id'):
+                if not use_graphql or cached.get('repository_id') == repository_id:
+                    return cached
+            elif cached.get('repository_id') == repository_id and cached.get('analysis_id'):
                 snapshot = await cache.get(public_dashboard_snapshot_key(repo, cached['analysis_id']))
                 if snapshot:
                     return json.loads(snapshot)
@@ -509,7 +523,7 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         if is_linear:
             github_coro = (
                 collect_dashboard_data(repo, identity.token, private, repository_id, include_issues=False)
-                if full_dashboard else collect_public_data(repo, token, include_issues=False)
+                if use_graphql else collect_public_data(repo, token, include_issues=False)
             )
             gh_task = asyncio.create_task(github_coro)
             lin_task = asyncio.create_task(collect_linear_issues(linear_team_url, linear_key, repo=repo))
@@ -523,7 +537,7 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
             raw["issues"] = linear_issues
         else:
             raw = (await collect_dashboard_data(repo, identity.token, private, repository_id)
-                   if full_dashboard else await collect_public_data(repo, token))
+                   if use_graphql else await collect_public_data(repo, token))
             pr_bodies = [
                 pr.get("body")
                 for group in ("recent_prs", "open_prs")
@@ -576,11 +590,12 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
     jev_key = jev_override or getattr(env, "TYPESAFE_API_KEY", None)
     metrics['repository_visibility'] = 'private' if private else 'public'
     options = {'allow_private': True} if private else {}
+    if use_graphql:
+        metrics['dashboard_source'] = 'github_graphql'
+        metrics['repository_id'] = repository_id
     if full_dashboard:
         if not private:
             options['load_sources'] = partial(public_value_sources, repo, identity.token, repository_id)
-        metrics['dashboard_source'] = 'github_graphql'
-        metrics['repository_id'] = repository_id
         metrics['analysis_id'] = secrets.token_urlsafe(24)
         if not metrics.get('recent_stats', {}).get('total'):
             metrics['p50_sle'] = metrics['p85_sle'] = None
@@ -621,8 +636,8 @@ def public_dashboard_snapshot_key(repo, analysis_id):
     return f'{public_analysis_key(repo, True)}:{analysis_id}'
 
 
-def public_analysis_key(repo, full_dashboard):
-    namespace = 'dashboard:v1:' if full_dashboard else ''
+def public_analysis_key(repo, full_dashboard, *, graphql=False):
+    namespace = 'dashboard:v1:' if full_dashboard else ('graphql:v1:' if graphql else '')
     return f'{METRICS_CACHE_PREFIX}{namespace}{repo.lower()}'
 
 
@@ -751,8 +766,11 @@ async def chat_for_identity(req, request, identity, *, full_dashboard=False):
             saved = await cache.get(private_analysis_key(repo, identity, req.analysis_id, True))
     else:
         cache_key = (private_analysis_key(repo, identity, req.analysis_id) if identity and req.analysis_id
-            else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id else public_analysis_key(repo, False))
+            else session_analysis_key(repo, request, req.analysis_id) if req.analysis_id
+            else public_analysis_key(repo, False, graphql=bool(identity)))
         saved = await cache.get(cache_key)
+        if not saved and identity and not req.analysis_id:
+            saved = await cache.get(public_analysis_key(repo, False))
         if not saved and identity and req.analysis_id and request.cookies.get(SESSION_COOKIE):
             try:
                 await signed_in_user(request)

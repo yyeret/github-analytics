@@ -117,10 +117,15 @@ test('renderIssues replaces weekly arrivals with CFD and age distribution with W
       coverage: { issues: 5, with_workflow_signal: 5 },
     },
     work_item_aging: {
-      stages: ['Todo', 'In Progress'],
-      items: [{ identifier: 'MAG-1', number: 1, title: 'Open task', stage: 'In Progress', age_days: 4.2 }],
-      p50_days: 2.0,
-      p85_days: 4.0,
+      stages: ['Specify', 'Spec Review', 'Build'],
+      items: [{ identifier: 'MAG-1', number: 1, title: 'Open task', stage: 'Spec Review', age_days: 9.5 }],
+      stage_percentiles: [
+        { stage: 'Specify', n: 4, p50_days: 3.0, p85_days: 6.0 },
+        { stage: 'Spec Review', n: 3, p50_days: 5.0, p85_days: 11.0 },
+        { stage: 'Build', n: 0, p50_days: null, p85_days: null },
+      ],
+      p50_days: 5.0,
+      p85_days: 11.0,
     },
   });
 
@@ -129,6 +134,16 @@ test('renderIssues replaces weekly arrivals with CFD and age distribution with W
   assert.equal(drawn['chart-issue-flow'], undefined);
   assert.equal(els['issue-age-title'].textContent, 'Work Item Aging by Status');
   assert.equal(drawn['chart-issue-age'].type, 'scatter');
-  assert.deepEqual(Array.from(drawn['chart-issue-age'].options.scales.x.labels), ['Todo', 'In Progress']);
-  assert.deepEqual(Array.from(drawn['chart-issue-age'].data.labels), ['Todo', 'In Progress']);
+  assert.deepEqual(Array.from(drawn['chart-issue-age'].options.scales.x.labels), ['Specify', 'Spec Review', 'Build']);
+  assert.deepEqual(Array.from(drawn['chart-issue-age'].data.labels), ['Specify', 'Spec Review', 'Build']);
+  const ann = drawn['chart-issue-age'].options.plugins.annotation.annotations;
+  assert.equal(ann.band_green_1.yMin, 0);
+  assert.equal(ann.band_green_1.yMax, 5.0);
+  assert.equal(ann.band_yellow_1.yMin, 5.0);
+  assert.equal(ann.band_yellow_1.yMax, 11.0);
+  assert.equal(ann.band_red_1.yMin, 11.0);
+  assert.ok(ann.band_red_1.yMax > 11.0);
+  assert.equal(ann.p50_line_1.yMin, 5.0);
+  assert.equal(ann.p85_line_1.yMin, 11.0);
+  assert.equal(ann.band_green_2, undefined);
 });

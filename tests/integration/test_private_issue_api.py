@@ -236,3 +236,98 @@ def test_google_owned_snapshot_remains_readable_after_connecting_github(monkeypa
         'repo': 'o/r', 'analysis_id': 'original', 'message': 'Next?'})
     assert response.status_code == 200
     assert response.json()['reply'] == 'Throughput rose.'
+
+
+def test_signed_in_web_analyze_uses_graphql_for_pr_size_and_spearman(monkeypatch):
+    client, _, cache, _ = setup(monkeypatch)
+    seen = {}
+
+    async def repo_metadata(url, **kwargs):
+        return 200, {}, {'private': True, 'id': 9001, 'full_name': 'o/r'}
+
+    async def fake_graphql(repo, token, private, repository_id, *, include_issues=True):
+        seen.update(repo=repo, token=token, private=private, repository_id=repository_id, include_issues=include_issues)
+        return {
+            'repo': repo,
+            'captured_at': '2026-11-23T12:00:00Z',
+            'recent_prs': [
+                {'number': 1, 'title': 'Small', 'body': '', 'createdAt': '2026-11-20T00:00:00Z',
+                 'mergedAt': '2026-11-20T02:00:00Z', 'closedAt': '2026-11-20T02:00:00Z',
+                 'additions': 10, 'deletions': 5, 'isDraft': False,
+                 'author': {'login': 'alice', '__typename': 'User'},
+                 'closingIssuesReferences': {'nodes': []}, 'commits': {'totalCount': 1, 'nodes': []},
+                 'reviews': {'totalCount': 0, 'nodes': []}, 'timelineItems': {'nodes': []}},
+                {'number': 2, 'title': 'Large', 'body': '', 'createdAt': '2026-11-21T00:00:00Z',
+                 'mergedAt': '2026-11-21T10:00:00Z', 'closedAt': '2026-11-21T10:00:00Z',
+                 'additions': 200, 'deletions': 50, 'isDraft': False,
+                 'author': {'login': 'alice', '__typename': 'User'},
+                 'closingIssuesReferences': {'nodes': []}, 'commits': {'totalCount': 2, 'nodes': []},
+                 'reviews': {'totalCount': 0, 'nodes': []}, 'timelineItems': {'nodes': []}},
+            ],
+            'open_prs': [],
+            'pre_ai_prs': [],
+            'issues': {'open': [], 'closed': [], 'pre_ai': []},
+        }
+
+    async def assess(*_, **__):
+        return {'status': 'ok', 'items': []}
+
+    monkeypatch.setattr(hosted, 'request_json', repo_metadata)
+    monkeypatch.setattr(hosted, 'collect_dashboard_data', fake_graphql)
+    monkeypatch.setattr(hosted, 'collect_public_data', lambda *a, **k: pytest.fail('REST fallback should not run when signed in'))
+    monkeypatch.setattr(hosted, 'assess_product_value', assess)
+
+    response = client.post(
+        '/api/analyze',
+        headers={'Authorization': 'Bearer caller-a'},
+        json={'repo_url': 'o/r', 'allow_private': True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert seen == {'repo': 'o/r', 'token': 'caller-a', 'private': True, 'repository_id': 9001, 'include_issues': True}
+    assert body['dashboard_source'] == 'github_graphql'
+    assert [p['x'] for p in body['pr_size_scatter_points']] == [15, 250]
+    assert body['spearman_corr'] == pytest.approx(1.0)
+    assert all(':private:1:' in key for key in cache.stored)
+
+
+def test_signed_in_public_analyze_uses_separate_graphql_cache_key(monkeypatch):
+    client, _, cache, _ = setup(monkeypatch)
+    # Pre-seed anonymous REST cache entry without PR sizes
+    cache.stored[hosted.public_analysis_key('o/r', False)] = json.dumps({'repo': 'o/r', 'pr_size_scatter_points': [{'x': 0, 'y': 1}]})
+
+    async def public_metadata(url, **kwargs):
+        return 200, {}, {'private': False, 'id': 42, 'full_name': 'o/r'}
+
+    async def fake_graphql(repo, token, private, repository_id, *, include_issues=True):
+        assert private is False and repository_id == 42 and token == 'caller-a'
+        return {
+            'repo': repo,
+            'captured_at': '2026-11-23T12:00:00Z',
+            'recent_prs': [
+                {'number': 1, 'title': 'PR', 'body': '', 'createdAt': '2026-11-20T00:00:00Z',
+                 'mergedAt': '2026-11-20T02:00:00Z', 'closedAt': '2026-11-20T02:00:00Z',
+                 'additions': 30, 'deletions': 10, 'isDraft': False,
+                 'author': {'login': 'alice', '__typename': 'User'},
+                 'closingIssuesReferences': {'nodes': []}, 'commits': {'totalCount': 1, 'nodes': []},
+                 'reviews': {'totalCount': 0, 'nodes': []}, 'timelineItems': {'nodes': []}},
+            ],
+            'open_prs': [],
+            'pre_ai_prs': [],
+            'issues': {'open': [], 'closed': [], 'pre_ai': []},
+        }
+
+    async def assess(*_, **__):
+        return {'status': 'ok', 'items': []}
+
+    monkeypatch.setattr(hosted, 'request_json', public_metadata)
+    monkeypatch.setattr(hosted, 'collect_dashboard_data', fake_graphql)
+    monkeypatch.setattr(hosted, 'collect_public_data', lambda *a, **k: pytest.fail('REST fallback should not run'))
+    monkeypatch.setattr(hosted, 'assess_product_value', assess)
+
+    response = client.post('/api/analyze', headers={'Authorization': 'Bearer caller-a'}, json={'repo_url': 'o/r'})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['dashboard_source'] == 'github_graphql'
+    assert body['pr_size_scatter_points'][0]['x'] == 40
+    assert hosted.public_analysis_key('o/r', False, graphql=True) in cache.stored
