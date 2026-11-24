@@ -170,22 +170,29 @@ def test_distribution_requires_exactly_the_supported_buckets(services, probabili
 def test_missing_key_sends_nothing(services):
     fake = services()
     assert run(jev_key=None)["status"] == "unavailable"
-    assert run(key=None)["status"] == "unavailable"
     assert fake.urls == []
+    fallback = run(key=None)
+    assert fallback["status"] == "ok" and fallback["context_method"] == "evidence_fallback"
+    assert fallback["fallback_reason"] == "gemini_not_configured"
 
 
-def test_context_failure_sends_nothing_to_jev(services):
+def test_context_failure_falls_back_to_jev_with_diagnostics(services):
     fake = services(context_status=429)
-    assert run()["status"] == "failed"
-    assert not fake.jev_requests
+    result = run()
+    assert result["status"] == "ok" and result["context_method"] == "evidence_fallback"
+    assert result["fallback_reason"] == "provider_http_error"
+    assert result["diagnostics"]["fallback_used"] is True
+    assert len(fake.jev_requests) == 3
 
 
 @pytest.mark.parametrize("context", [["bad"], {**CONTEXT, "strategic_goals": []},
                                      {**CONTEXT, "value_proposition": "draft " * 500}])
 def test_unusable_context_does_not_become_strategic_evidence(services, context):
     fake = services(context=context)
-    assert run()["status"] == "failed"
-    assert not fake.jev_requests
+    result = run()
+    assert result["status"] == "ok" and result["context_method"] == "evidence_fallback"
+    assert result["fallback_reason"] == "invalid_response"
+    assert "draft " not in json.dumps(fake.jev_requests)
 
 
 def test_private_repository_sends_nothing_to_models(services):
@@ -220,8 +227,9 @@ def test_research_claims_cannot_cite_sources_that_were_not_loaded(services):
     context["repository_research"]["value_drivers"][0]["source_ids"] = ["invented-web-page"]
     fake = services(context=context)
     result = run()
-    assert result["status"] == "failed" and result["error_code"] == "invalid_response"
-    assert not fake.jev_requests
+    assert result["status"] == "ok" and result["context_method"] == "evidence_fallback"
+    assert result["fallback_reason"] == "invalid_response"
+    assert "invented-web-page" not in json.dumps(fake.jev_requests)
 
 
 def test_context_generation_constrains_references_to_loaded_source_ids(services):
@@ -273,7 +281,8 @@ def test_provider_deadline_is_enforced(monkeypatch):
         return 200, {}, {"private": False}
     monkeypatch.setattr(product_value, "request_json", hang)
     monkeypatch.setattr(product_value, "GEMINI_TIMEOUT", .01)
-    assert run()["status"] == "failed"
+    result = run()
+    assert result["fallback_reason"] == "timeout" and result["context_method"] == "evidence_fallback"
 
 
 def test_selection_is_most_recent_and_pairs_each_cohort_with_its_own_record():
@@ -462,10 +471,11 @@ def test_repeated_truncation_is_explicit_and_bounded(monkeypatch, services, text
 
     monkeypatch.setattr(product_value, "request_json", upstream)
     result = run()
-    assert result["status"] == "failed" and result["error_code"] == "output_truncated"
-    assert "truncated" in result["reason"].lower()
-    assert result["items"] == [] and len(context_calls) == 2
-    assert len([e for e in _events(caplog) if e.get("event") == "product_value_failed"]) == 1
+    assert result["status"] == "ok" and result["context_method"] == "evidence_fallback"
+    assert result["fallback_reason"] == "output_truncated"
+    assert result["diagnostics"]["fallback_used"] is True
+    assert len(context_calls) == 2
+    assert len([e for e in _events(caplog) if e.get("event") == "product_context_fallback"]) == 1
 
 
 @pytest.mark.parametrize("reply,code", [
@@ -487,7 +497,8 @@ def test_non_truncation_errors_are_specific_safe_and_not_retried(monkeypatch, se
 
     monkeypatch.setattr(product_value, "request_json", upstream)
     result = run()
-    assert result["status"] == "failed" and result["error_code"] == code
+    assert result["status"] == "ok" and result["context_method"] == "evidence_fallback"
+    assert result["fallback_reason"] == code
     assert len(calls) == 1
     assert "provider-secret-sentinel" not in json.dumps(result) + caplog.text
     event = next(e for e in _events(caplog) if e.get("event") == "gemini_generation")
@@ -527,7 +538,7 @@ def test_context_retry_shares_one_deadline(monkeypatch, services, caplog):
     monkeypatch.setattr(product_value, "request_json", upstream)
     monkeypatch.setattr(product_value, "CONTEXT_TIMEOUT", .04)
     result = run()
-    assert result["error_code"] == "timeout" and len(calls) == 2
+    assert result["fallback_reason"] == "timeout" and len(calls) == 2
     assert any(e.get("error_code") == "timeout" and e["stage"] == "product_context" for e in _events(caplog))
 
 
@@ -566,7 +577,8 @@ def test_local_transport_timeout_is_reported_as_timeout(monkeypatch, services, c
 
     monkeypatch.setattr(product_value, 'request_json', upstream)
     result = run()
-    assert result['error_code'] == 'timeout'
+    assert result['fallback_reason'] == 'timeout'
+    assert result['diagnostics']['fallback_reason'] == 'timeout'
     assert 'exception-secret-sentinel' not in json.dumps(result) + caplog.text
 
 
@@ -599,12 +611,12 @@ def test_retry_cannot_reset_the_shared_context_deadline(monkeypatch, services):
             result = loop.run_until_complete(product_value.assess_product_value('o/r', DATA, 'k', jev_key='j'))
     finally:
         loop.close()
-    assert result['error_code'] == 'timeout' and len(calls) == 2
+    assert result['fallback_reason'] == 'timeout' and len(calls) == 2
 
 
 def test_unconfigured_result_exposes_the_logged_error_code(services):
     services()
-    result = run(key=None)
+    result = run(jev_key=None)
     assert result['status'] == 'unavailable' and result['error_code'] == 'not_configured'
     assert result['reason']
 

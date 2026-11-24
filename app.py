@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from analyze import collect_data, compute_flow_metrics
 from linear_issues import LinearError, parse_linear_team
 from product_value import assess_product_value
+from jev_patterns import analyze_patterns_and_framing
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -137,10 +138,13 @@ def _run_analysis(repo: str, force: bool, gemini_key=None, jev_key=None, *,
     metrics = compute_flow_metrics(raw)
     metrics["repository_visibility"] = "private" if is_private else "public"
     value_kwargs = {"allow_private": True} if is_private else {}
+    resolved_jev_key = jev_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")
     metrics["product_value"] = asyncio.run(assess_product_value(
         repo, raw, gemini_key or _get_gemini_key(), os.environ.get("GITHUB_TOKEN"),
-        jev_key=jev_key or os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY"),
+        jev_key=resolved_jev_key,
         **value_kwargs))
+    metrics["pattern_insights"] = asyncio.run(analyze_patterns_and_framing(
+        repo, raw, metrics, jev_key=resolved_jev_key, allow_private=is_private))
     return metrics
 
 
@@ -191,6 +195,7 @@ def _build_system_prompt(metrics: dict) -> str:
                        "These describe stated intent, not achieved outcomes. Keyword rules can misclassify; missing bodies limit evidence.\n"
                        + value.get("scope", "") + "\n" + "\n".join(value_lines) + "\n")
     issue_block = _build_issue_block(metrics.get("issues"))
+    pattern_block = _build_pattern_block(metrics.get("pattern_insights"))
 
     return f"""You are **Flowy AI Coach**, an expert in software engineering flow metrics,
 Value Stream Mapping, and the Theory of Constraints. You help engineering teams use data to improve 
@@ -228,10 +233,28 @@ Your coaching philosophy:
 ### Sample of Recent PRs
 {pr_list_str or "  No recent PR data available"}
 
-{issue_block}{value_block}Answer questions about this data with specific, actionable coaching insights.
+{issue_block}{value_block}{pattern_block}Answer questions about this data with specific, actionable coaching insights.
 Reference specific PR numbers or metric values when relevant.
 Keep answers concise but insightful. Use markdown formatting.
 """
+
+
+def _build_pattern_block(patterns: Optional[dict]) -> str:
+    """Prompt section for Jev-classified flow and item patterns."""
+    if not patterns or patterns.get("status") != "ok":
+        return ""
+    lines = []
+    for fp in patterns.get("flow_patterns") or []:
+        if fp.get("matched"):
+            pct = f"{fp['probability'] * 100:.0f}%" if fp.get("probability") is not None else "?"
+            lines.append(f"- Flow pattern [{fp['label']}] ({pct}): {fp['coaching_hint']}")
+    for ip in patterns.get("item_patterns") or []:
+        if ip.get("matched_count"):
+            items = ", ".join(f"#{m['number']}" for m in (ip.get("matched_items") or [])[:4])
+            lines.append(f"- Item pattern [{ip['label']}] ({ip['matched_count']}/{ip['sampled_count']}): {items} — {ip['coaching_hint']}")
+    if not lines:
+        return ""
+    return "\n### Jev-Classified Insight Patterns\n" + "\n".join(lines) + "\n"
 
 
 def _build_issue_block(issues: Optional[dict]) -> str:

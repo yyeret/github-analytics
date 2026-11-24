@@ -12,6 +12,41 @@ MAX_DOCUMENTS = 5
 MAX_SOURCE_CHARS = 36_000
 README_CHARS = 12_000
 DOCUMENT_CHARS = 4_000
+CORE_CONTEXT_PATHS = ("AGENTS.md", "CLAUDE.md", "pyproject.toml", "package.json")
+INLINE_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)|(?:^|[\s(])@([A-Za-z0-9_./-]+\.(?:md|rst|txt|toml|json))", re.MULTILINE)
+DOC_SUFFIXES = (".md", ".rst", ".txt", ".toml", ".json")
+
+
+def _safe_repo_path(raw_path):
+    if not isinstance(raw_path, str):
+        return None
+    path = raw_path.split("#", 1)[0].split("?", 1)[0].strip()
+    if not path or "://" in path or path.startswith(("/", "~", "mailto:")):
+        return None
+    while path.startswith("./"):
+        path = path[2:]
+    parts = PurePosixPath(path).parts
+    if not parts or ".." in parts or len(path) > 300:
+        return None
+    if PurePosixPath(path).suffix.lower() not in DOC_SUFFIXES:
+        return None
+    if any(part.lower() in ("node_modules", "vendor", ".git", "dist", "build") for part in parts):
+        return None
+    return path
+
+
+def _extract_inline_doc_paths(text, *, exclude=()):
+    found = []
+    seen = {p.lower() for p in exclude}
+    for match in INLINE_LINK_RE.finditer(text or ""):
+        candidate = _safe_repo_path(match.group(1) or match.group(2))
+        if not candidate or candidate.lower() in seen:
+            continue
+        seen.add(candidate.lower())
+        found.append(candidate)
+        if len(found) >= MAX_DOCUMENTS:
+            break
+    return found
 SELECTION_SCHEMA = {"type": "OBJECT", "properties": {
     "paths": {"type": "ARRAY", "items": {"type": "STRING"}}}, "required": ["paths"]}
 SELECTION_PROMPT = """Choose at most five repository documents that will help a researcher understand
@@ -119,22 +154,35 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
                         "text": bounded, "truncated": truncated or len(text) > len(bounded)})
         remaining -= len(bounded)
 
-    async def fetch(suffix, label):
+    async def fetch(suffix, label, *, ignore_missing=False):
         timeout = min(REQUEST_TIMEOUT, max(0, deadline - loop.time()))
         if not timeout:
-            limitations.append(f"{label} was skipped after the research budget expired; availability is unknown.")
+            if not ignore_missing:
+                limitations.append(f"{label} was skipped after the research budget expired; availability is unknown.")
             return None
         try:
             status, _, payload = await asyncio.wait_for(
                 request(f"{base}/{suffix}", timeout, headers=headers), timeout)
         except Exception:
-            limitations.append(f"{label} could not be loaded; availability is unknown.")
+            if not ignore_missing:
+                limitations.append(f"{label} could not be loaded; availability is unknown.")
             return None
         if not 200 <= status < 300:
+            if ignore_missing and status == 404:
+                return None
             reason = "rate limited or access refused" if status in (403, 429) else f"HTTP {status}"
             limitations.append(f"{label} could not be loaded ({reason}); availability is unknown.")
             return None
         return payload
+
+    def decode_doc(path, document):
+        try:
+            if not isinstance(document, dict) or document.get("encoding") != "base64":
+                raise ValueError
+            return base64.b64decode(document["content"], validate=False).decode("utf-8", "replace")
+        except (ValueError, KeyError, TypeError):
+            limitations.append(f"Document {path} did not contain readable text.")
+            return None
 
     metadata = {key: metadata_sources.get(key) for key in ("description", "topics", "homepage")}
     metadata_text = json.dumps(metadata, ensure_ascii=False)
@@ -152,55 +200,90 @@ async def build_research_sources(repo, metadata_sources, token, request, generat
             add(source["id"], source["kind"], source["text"], len(source["text"]),
                 path=source["path"], url=source["url"], truncated=source["truncated"])
 
-    tree, releases, issues = await asyncio.gather(
-        fetch("git/trees/HEAD?recursive=1", "Document catalog"),
-        fetch("releases?per_page=5", "Recent releases"),
-        fetch("issues?state=open&sort=comments&direction=desc&per_page=10", "Open issue signals"))
-    catalog = []
-    if isinstance(tree, dict) and isinstance(tree.get("tree"), list):
-        catalog, clipped = _catalog(tree["tree"])
-        if tree.get("truncated"):
-            limitations.append("GitHub truncated the document tree; some documents were not discoverable.")
-        if clipped:
-            limitations.append("The document catalog was limited to 120 ranked paths.")
-    elif tree is not None:
-        limitations.append("The document catalog response was unreadable.")
+    core_tasks = [fetch(f"contents/{quote(path, safe='/')}", f"Document {path}", ignore_missing=True) for path in CORE_CONTEXT_PATHS]
+    core_results = await asyncio.gather(*core_tasks, fetch("releases?per_page=5", "Recent releases"),
+                                        fetch("issues?state=open&sort=comments&direction=desc&per_page=10", "Open issue signals"))
+    core_docs = core_results[:len(CORE_CONTEXT_PATHS)]
+    releases, issues = core_results[len(CORE_CONTEXT_PATHS):]
 
-    selected = []
-    if catalog:
-        prompt = SELECTION_PROMPT.format(repo=repo, metadata=metadata_text[:2_000], readme=readme[:README_CHARS],
-                                         catalog=json.dumps(catalog, ensure_ascii=False))
-        try:
-            selection = await asyncio.wait_for(generate(prompt, SELECTION_SCHEMA, 768,
-                diagnostics={**(diagnostics or {}), "stage": "repo_research_plan"}), max(0, deadline - loop.time()))
-            paths = selection.get("paths") if isinstance(selection, dict) else None
-            if not isinstance(paths, list):
-                limitations.append("The research planner returned an unreadable document selection.")
-            else:
-                if any(not isinstance(path, str) or path not in catalog for path in paths):
-                    limitations.append("The research planner selected unsupported paths; those paths were ignored.")
-                for path in paths:
-                    if isinstance(path, str) and path in catalog and path not in selected:
-                        selected.append(path)
-                if len(selected) > MAX_DOCUMENTS:
-                    limitations.append("The research planner selection was limited to five documents.")
-                selected = selected[:MAX_DOCUMENTS]
-        except Exception:
-            limitations.append("Research document planning failed; the profile uses the remaining supplied evidence.")
-
-    documents = await asyncio.gather(*(fetch(f"contents/{quote(path, safe='/')}", f"Document {path}") for path in selected))
-    for index, (path, document) in enumerate(zip(selected, documents), 1):
+    doc_index = 0
+    loaded_texts = [readme]
+    seen_paths = {"readme.md", "readme.rst", "readme.txt"}
+    for path, document in zip(CORE_CONTEXT_PATHS, core_docs):
         if document is None:
             continue
-        try:
-            if not isinstance(document, dict) or document.get("encoding") != "base64":
-                raise ValueError
-            text = base64.b64decode(document["content"], validate=False).decode("utf-8", "replace")
-        except (ValueError, KeyError, TypeError):
-            limitations.append(f"Document {path} did not contain readable text.")
+        text = decode_doc(path, document)
+        if text is None:
             continue
-        add(f"document-{index}", "document", text, DOCUMENT_CHARS, path=path,
+        doc_index += 1
+        seen_paths.add(path.lower())
+        loaded_texts.append(text)
+        add(f"document-{doc_index}", "document", text, DOCUMENT_CHARS, path=path,
             url=f"{web}/blob/HEAD/{quote(path, safe='/')}")
+
+    inline_paths = []
+    for text in loaded_texts:
+        for candidate in _extract_inline_doc_paths(text, exclude=seen_paths):
+            if candidate.lower() not in seen_paths and len(inline_paths) + doc_index < MAX_DOCUMENTS:
+                seen_paths.add(candidate.lower())
+                inline_paths.append(candidate)
+
+    if inline_paths:
+        inline_docs = await asyncio.gather(*(fetch(f"contents/{quote(path, safe='/')}", f"Document {path}", ignore_missing=True) for path in inline_paths))
+        for path, document in zip(inline_paths, inline_docs):
+            if document is None:
+                continue
+            text = decode_doc(path, document)
+            if text is None:
+                continue
+            doc_index += 1
+            add(f"document-{doc_index}", "document", text, DOCUMENT_CHARS, path=path,
+                url=f"{web}/blob/HEAD/{quote(path, safe='/')}")
+
+    selected = []
+    if generate is not None and doc_index == 0:
+        tree = await fetch("git/trees/HEAD?recursive=1", "Document catalog")
+        catalog = []
+        if isinstance(tree, dict) and isinstance(tree.get("tree"), list):
+            catalog, clipped = _catalog(tree["tree"])
+            if tree.get("truncated"):
+                limitations.append("GitHub truncated the document tree; some documents were not discoverable.")
+            if clipped:
+                limitations.append("The document catalog was limited to 120 ranked paths.")
+        elif tree is not None:
+            limitations.append("The document catalog response was unreadable.")
+
+        if catalog:
+            prompt = SELECTION_PROMPT.format(repo=repo, metadata=metadata_text[:2_000], readme=readme[:README_CHARS],
+                                             catalog=json.dumps(catalog, ensure_ascii=False))
+            try:
+                selection = await asyncio.wait_for(generate(prompt, SELECTION_SCHEMA, 768,
+                    diagnostics={**(diagnostics or {}), "stage": "repo_research_plan"}), max(0, deadline - loop.time()))
+                paths = selection.get("paths") if isinstance(selection, dict) else None
+                if not isinstance(paths, list):
+                    limitations.append("The research planner returned an unreadable document selection.")
+                else:
+                    if any(not isinstance(path, str) or path not in catalog for path in paths):
+                        limitations.append("The research planner selected unsupported paths; those paths were ignored.")
+                    for path in paths:
+                        if isinstance(path, str) and path in catalog and path not in selected:
+                            selected.append(path)
+                    if len(selected) > MAX_DOCUMENTS:
+                        limitations.append("The research planner selection was limited to five documents.")
+                    selected = selected[:MAX_DOCUMENTS]
+            except Exception:
+                limitations.append("Research document planning failed; the profile uses the remaining supplied evidence.")
+
+        documents = await asyncio.gather(*(fetch(f"contents/{quote(path, safe='/')}", f"Document {path}") for path in selected))
+        for path, document in zip(selected, documents):
+            if document is None:
+                continue
+            text = decode_doc(path, document)
+            if text is None:
+                continue
+            doc_index += 1
+            add(f"document-{doc_index}", "document", text, DOCUMENT_CHARS, path=path,
+                url=f"{web}/blob/HEAD/{quote(path, safe='/')}")
 
     if releases is not None and not isinstance(releases, list):
         limitations.append("The recent releases response was unreadable.")

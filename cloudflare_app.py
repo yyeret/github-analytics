@@ -16,6 +16,7 @@ from analyze import collect_public_data, compute_flow_metrics
 from github_api import request_json
 from google_auth import verify_id_token
 from product_value import assess_product_value, assess_issue_value
+from jev_patterns import analyze_patterns_and_framing
 import github_auth
 import linear_auth
 from issue_candidates import collect_issue_candidates
@@ -603,6 +604,10 @@ async def analyze_for_identity(req, request, identity, *, full_dashboard=False):
         await assess_product_value(repo, raw, gemini_key, token, jev_key=jev_key, **options)
         if metrics.get("recent_stats", {}).get("total") or raw.get("open_prs") else None
     )
+    if metrics.get("recent_stats", {}).get("total") or raw.get("open_prs") or raw.get("issues"):
+        metrics["pattern_insights"] = await analyze_patterns_and_framing(repo, raw, metrics, jev_key=jev_key, allow_private=private)
+    else:
+        metrics["pattern_insights"] = None
     if private or ((caller_keys or is_linear) and identity):
         if not full_dashboard:
             metrics['analysis_id'] = secrets.token_urlsafe(24)
@@ -807,7 +812,7 @@ async def chat_for_identity(req, request, identity, *, full_dashboard=False):
         for m in req.history if m.role in ("user", "assistant")]
     contents.append({"role": "user", "parts": [{"text": req.message}]})
     body = {"system_instruction": {"parts": [{"text": prompt}]}, "contents": contents,
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 700}}
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 700, "thinkingConfig": {"thinkingLevel": "low"}}}
     try:
         async with httpx.AsyncClient(timeout=25) as client:
             response = await client.post(

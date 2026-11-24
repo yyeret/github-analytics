@@ -8,13 +8,14 @@ from repo_research import build_research_sources
 
 
 class ResearchServices:
-    def __init__(self, paths=None, tree=None):
+    def __init__(self, paths=None, tree=None, files=None):
         self.paths = paths if paths is not None else ["docs/strategy.md"]
         self.tree = tree if tree is not None else [
             {"path": "docs/strategy.md", "type": "blob"},
             {"path": "README.md", "type": "blob"},
             {"path": "src/private.py", "type": "blob"},
         ]
+        self.files = files if files is not None else {}
         self.calls, self.prompts = [], []
         self.failures = {}
         self.document = "Users need secure, reliable exports."
@@ -36,6 +37,11 @@ class ResearchServices:
                 {"number": 8, "title": "Not an issue", "body": "PR body", "pull_request": {}},
             ]
         if "/contents/" in url:
+            path = url.split("/contents/", 1)[1]
+            if path in self.files:
+                return 200, {}, {"encoding": "base64", "content": base64.b64encode(self.files[path].encode()).decode()}
+            if path in ("AGENTS.md", "CLAUDE.md", "pyproject.toml", "package.json"):
+                return 404, {}, {"message": "Not Found"}
             return 200, {}, {"encoding": "base64", "content": base64.b64encode(self.document.encode()).decode()}
         raise AssertionError(url)
 
@@ -71,7 +77,7 @@ def test_model_paths_are_restricted_to_the_catalog_and_five_documents():
     documents = [source for source in result["sources"] if source["kind"] == "document"]
     assert len(documents) == 5
     assert {source["path"] for source in documents}.issubset(paths)
-    assert len([url for url, _, _ in service.calls if "/contents/" in url]) == 5
+    assert len([url for url, _, _ in service.calls if "/contents/docs/" in url]) == 5
     assert result["limitations"]
 
 
@@ -169,3 +175,28 @@ def test_owner_sources_total_budget_and_duplicates():
         with pytest.raises(ValueError):
             asyncio.run(build_research_sources('owner/public', {}, None, service.request,
                 service.generate, owner_context=invalid))
+
+
+def test_deterministic_core_files_and_inline_links_skip_planner():
+    service = ResearchServices(files={
+        "AGENTS.md": "See @docs/arch.md and [Guide](docs/guide.md) and [Ext](https://example.com/a.md) and @../bad.md",
+        "docs/arch.md": "Architecture details.",
+        "docs/guide.md": "User guide details.",
+    })
+    result = run(service)
+    paths = {s["path"] for s in result["sources"] if s["kind"] == "document"}
+    assert paths == {"AGENTS.md", "docs/arch.md", "docs/guide.md"}
+    assert not service.prompts
+    assert not any("/git/trees/" in url for url, _, _ in service.calls)
+
+
+def test_safe_repo_path_and_inline_extraction_filters():
+    from repo_research import _extract_inline_doc_paths, _safe_repo_path
+    assert _safe_repo_path(None) is None
+    assert _safe_repo_path("https://example.com/a.md") is None
+    assert _safe_repo_path("/etc/passwd.md") is None
+    assert _safe_repo_path("node_modules/pkg/README.md") is None
+    assert _safe_repo_path("src/app.py") is None
+    assert _safe_repo_path("./docs/guide.md#section") == "docs/guide.md"
+    links = " ".join(f"[d{i}](docs/d{i}.md)" for i in range(8))
+    assert len(_extract_inline_doc_paths(links)) == 5

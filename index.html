@@ -754,10 +754,23 @@
         <div style="overflow-x:auto;max-height:420px"><table class="issue-table" id="value-items"></table></div>
       </div>
       <div class="chart-card charts-full" id="product-value-card" style="display:none">
-        <div class="chart-title">Expected cost of delay (PRs)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <div class="chart-title" style="margin:0">Expected cost of delay (PRs)</div>
+          <button type="button" id="refresh-context-btn" class="secondary-btn" onclick="refreshProductContext()" style="padding:6px 12px;font-size:12px">Refresh context</button>
+        </div>
         <p class="issue-note" id="product-value-note"></p>
+        <details id="product-value-diagnostics" class="issue-note" style="margin:8px 0;display:none">
+          <summary>Troubleshooting &amp; diagnostics</summary>
+          <div id="product-value-diagnostics-body" style="margin-top:6px"></div>
+        </details>
         <div id="product-value-context"></div>
         <div style="overflow-x:auto;max-height:520px"><table class="issue-table" id="product-value-items"></table></div>
+      </div>
+      <div class="chart-card charts-full" id="pattern-insights-card" style="display:none">
+        <div class="chart-title">Jev pattern insights</div>
+        <p class="issue-note" id="pattern-insights-note"></p>
+        <div id="pattern-insights-flow" style="margin-bottom:12px"></div>
+        <div style="overflow-x:auto;max-height:420px"><table class="issue-table" id="pattern-insights-items"></table></div>
       </div>
     </section>
 
@@ -1071,7 +1084,9 @@
     btn.disabled = true;
     btn.classList.add('loading');
     clearStatus();
-    const loadingMessage = savedRepository ? 'Reopening your last repository…' : 'Fetching repository data… this may take 30–60 seconds';
+    const loadingMessage = savedRepository?.forceRefresh
+      ? 'Refreshing product context and re-scoring…'
+      : savedRepository ? 'Reopening your last repository…' : 'Fetching repository data… this may take 30–60 seconds';
     if (document.getElementById('settings-dialog').open) {
       showStatus(loadingMessage);
     } else {
@@ -1082,18 +1097,19 @@
     try {
       const headers = {'Content-Type':'application/json'};
       if (preferenceKey) headers['X-Analysis-Account'] = preferenceKey;
-      if (!savedRepository) {
+      if (!savedRepository || savedRepository.forceRefresh) {
         for (const [id, header] of [['linear-key', 'X-Linear-Api-Key'], ['typesafe-key', 'X-TypeSafe-Api-Key'], ['gemini-key', 'X-Gemini-Api-Key']]) {
           const key = document.getElementById(id)?.value?.trim();
           if (key) headers[header] = key;
         }
       }
       const linearTeamInput = document.getElementById('linear-team-input');
-      const linearTeam = savedRepository ? undefined : (linearTeamInput?.value?.trim() || undefined);
+      const isSavedRestore = Boolean(savedRepository && !savedRepository.forceRefresh);
+      const linearTeam = isSavedRestore ? undefined : (linearTeamInput?.value?.trim() || undefined);
       const consentChecked = document.getElementById('allow-private').checked;
       const allowPrivate = savedRepository?.private
         ?? (consentChecked && (!restoredPrivateRepository || input === restoredPrivateRepository));
-      const payload = { repo_url: input, force_refresh: false, allow_private: allowPrivate };
+      const payload = { repo_url: input, force_refresh: Boolean(savedRepository?.forceRefresh), allow_private: allowPrivate };
       if (linearTeam) payload.linear_team_url = linearTeam;
       response = await fetch('/api/analyze', {
         method: 'POST',
@@ -1145,7 +1161,7 @@
       if (savedRepository && response && ![401, 403, 409].includes(response.status) && !repoInput.value) {
         repoInput.value = input;
       }
-      showStatus(savedRepository ? `Could not reopen your last repository. ${e.message}` : `Error: ${e.message}`, 'error');
+      showStatus(savedRepository && !savedRepository.forceRefresh ? `Could not reopen your last repository. ${e.message}` : `Error: ${e.message}`, 'error');
     } finally {
       btn.disabled = false;
       btn.classList.remove('loading');
@@ -1202,6 +1218,46 @@
     renderIssues(d.issues, d.linear_detected, activeDashboardRepo);
     renderValueClassification(d.value_classification);
     renderProductValue(d.product_value);
+    renderPatternInsights(d.pattern_insights);
+  }
+
+  function refreshProductContext() {
+    if (!currentRepo) return;
+    analyzeRepo({
+      repo: currentRepo,
+      private: currentMetrics?.repository_visibility === 'private',
+      forceRefresh: true,
+    });
+  }
+
+  function renderPatternInsights(patterns) {
+    const card = document.getElementById('pattern-insights-card');
+    if (!card) return;
+    card.style.display = patterns ? 'block' : 'none';
+    if (!patterns) return;
+    const note = document.getElementById('pattern-insights-note');
+    const flowEl = document.getElementById('pattern-insights-flow');
+    const table = document.getElementById('pattern-insights-items');
+    if (patterns.status !== 'ok') {
+      note.textContent = patterns.reason || 'Pattern insights unavailable.';
+      flowEl.innerHTML = '';
+      table.innerHTML = '';
+      return;
+    }
+    note.textContent = `Catalog ${patterns.catalog_version} via ${patterns.model}. Sampled ${patterns.assessed_items} of ${patterns.sampled_items} work items in ${patterns.elapsed_ms}ms.`;
+    const matchedFlow = (patterns.flow_patterns || []).filter(p => p.matched);
+    flowEl.innerHTML = matchedFlow.length
+      ? '<p><strong>Detected flow patterns:</strong></p><ul>' + matchedFlow.map(p =>
+          `<li><strong>${escapeHtml(p.label)}</strong> (${(p.probability * 100).toFixed(0)}%) — ${escapeHtml(p.coaching_hint)}</li>`
+        ).join('') + '</ul>'
+      : '<p class="issue-note">No system-level flow anti-patterns exceeded the detection threshold.</p>';
+    const rows = (patterns.item_patterns || []).map(p => {
+      const examples = (p.matched_items || []).map(m => `#${escapeHtml(m.number)} (${(m.probability * 100).toFixed(0)}%)`).join(', ') || '—';
+      return `<tr><td><strong>${escapeHtml(p.label)}</strong><br><span class="issue-note">${escapeHtml(p.description)}</span></td>` +
+        `<td>${escapeHtml(p.matched_count)} / ${escapeHtml(p.sampled_count)}</td>` +
+        `<td>${examples}</td><td>${escapeHtml(p.coaching_hint)}</td></tr>`;
+    }).join('');
+    table.innerHTML = '<thead><tr><th>Pattern</th><th>Matched</th><th>Sampled items</th><th>Coaching action</th></tr></thead><tbody>' + rows + '</tbody>';
   }
 
   function renderProductValue(value) {
@@ -1211,6 +1267,31 @@
     const note = document.getElementById('product-value-note');
     const contextEl = document.getElementById('product-value-context');
     const table = document.getElementById('product-value-items');
+    const diagBox = document.getElementById('product-value-diagnostics');
+    const diagBody = document.getElementById('product-value-diagnostics-body');
+    if (diagBox && diagBody) {
+      const diag = value.diagnostics;
+      if (!diag && value.status === 'ok') {
+        diagBox.style.display = 'none';
+        diagBody.innerHTML = '';
+      } else {
+        diagBox.style.display = 'block';
+        diagBox.open = value.status !== 'ok' || Boolean(diag?.fallback_used);
+        const d = diag || {};
+        const parts = [
+          d.stage && `<strong>Stage:</strong> ${escapeHtml(d.stage)}`,
+          d.context_method && `<strong>Context method:</strong> ${escapeHtml(d.context_method)}`,
+          d.error_code && `<strong>Error code:</strong> ${escapeHtml(d.error_code)}`,
+          d.fallback_used && `<strong>Fallback reason:</strong> ${escapeHtml(d.fallback_reason || 'unknown')}`,
+          d.http_status && `<strong>Provider HTTP:</strong> ${escapeHtml(d.http_status)}`,
+          d.context_elapsed_ms != null && `<strong>Context time:</strong> ${escapeHtml(d.context_elapsed_ms)}ms`,
+          d.total_elapsed_ms != null && `<strong>Total time:</strong> ${escapeHtml(d.total_elapsed_ms)}ms`,
+          Array.isArray(d.sources_loaded) && d.sources_loaded.length && `<strong>Sources loaded:</strong> ${d.sources_loaded.map(s => escapeHtml(s)).join(', ')}`,
+          Array.isArray(d.limitations) && d.limitations.length && `<strong>Limitations:</strong> ${d.limitations.map(l => escapeHtml(l)).join(' · ')}`,
+        ].filter(Boolean);
+        diagBody.innerHTML = parts.length ? parts.join(' &nbsp;|&nbsp; ') : 'No additional diagnostics recorded.';
+      }
+    }
     if (value.status !== 'ok') {
       note.textContent = `Not assessed: ${value.reason || 'unavailable.'} ${value.disclaimer}`;
       contextEl.innerHTML = '';
@@ -1218,9 +1299,12 @@
       return;
     }
     const sources = value.sources || {};
+    const contextLabel = value.context_method === 'evidence_fallback'
+      ? `raw repository evidence fallback (${value.fallback_reason || 'gemini_unavailable'})`
+      : (value.context_model || value.context_method || 'repository context');
     note.textContent = `${value.disclaimer} Assessed ${value.assessed} of ${value.selected} selected PRs` +
       (value.failed ? ` (${value.failed} failed)` : '') +
-      `. Scores: ${value.model}; product context: ${value.context_model}. ` +
+      `. Scores: ${value.model}; product context: ${contextLabel}. ` +
       `Context from ${[sources.description && 'description', sources.readme && (sources.readme_truncated ? 'README (truncated)' : 'README')].filter(Boolean).join(' and ') || 'repository metadata'}.`;
     const ctx = value.context || {};
     const goals = (ctx.strategic_goals || []).map(goal => `<li>${escapeHtml(goal)}</li>`).join('');
@@ -1261,7 +1345,8 @@
     const selected = filter.value;
     filter.innerHTML = '<option value="">All</option>' + value.levels.map(level => `<option>${escapeHtml(level)}</option>`).join('');
     filter.value = value.levels.includes(selected) ? selected : '';
-    document.getElementById('value-note').textContent = value.scope + ' Rule-based classification. ' +
+    const methodLabel = value.method === 'jev' ? 'Jev-assisted classification. ' : 'Rule-based classification. ';
+    document.getElementById('value-note').textContent = value.scope + ' ' + methodLabel +
       groups.map(([name, group]) => group ? `${name}: ${group.total} sampled, ${group.body_available} with bodies available, ${group.defaulted} defaulted.` : `${name}: not collected.`).join(' ') +
       ' Older caches may contain titles only; refresh to collect bodies. Review the rationale before drawing conclusions.';
     document.getElementById('value-counts').innerHTML = '<thead><tr><th>Sample</th>' +

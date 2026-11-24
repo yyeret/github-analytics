@@ -452,6 +452,53 @@ async def assess_issue_value(repo, issues, key, token=None, *, jev_key=None, max
                                load_sources=load_sources, issue=True)
 
 
+def _build_fallback_context(repo, sources_list, reason_code=None):
+    """Build deterministic repository context from README/AGENTS.md/CLAUDE.md/metadata for Jev fallback."""
+    by_id = {s["id"]: s for s in sources_list if isinstance(s, dict) and s.get("id")}
+    meta_desc = ""
+    if "metadata" in by_id:
+        try:
+            meta_obj = json.loads(by_id["metadata"].get("text") or "{}")
+            meta_desc = str(meta_obj.get("description") or "").strip()
+        except Exception:
+            meta_desc = ""
+    doc_texts = []
+    for source in sources_list:
+        if source.get("kind") in ("readme", "document", "owner_context") and (source.get("text") or "").strip():
+            doc_texts.append((source["id"], source.get("path") or source["id"], source["text"].strip()))
+    first_excerpt = ""
+    goals = []
+    claims = []
+    for sid, label, text in doc_texts:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("<!--")]
+        if not first_excerpt and lines:
+            first_excerpt = " ".join(lines[:4])[:550]
+        for ln in lines:
+            clean = ln.lstrip("#*- ").strip()
+            if 15 <= len(clean) <= 200 and clean not in goals and len(goals) < 3:
+                goals.append(clean)
+        if len(claims) < 3:
+            claims.append({"claim": f"{label}: {' '.join(lines[:2])[:180]}", "basis": "stated", "source_ids": [sid]})
+    if not claims:
+        fallback_sid = next(iter(by_id), "metadata")
+        claims.append({"claim": f"Repository metadata for {repo}: {meta_desc or 'No README or docs available.'}"[:220],
+                       "basis": "stated", "source_ids": [fallback_sid]})
+    summary = (meta_desc or first_excerpt or f"Repository {repo}")[:950]
+    value_prop = (first_excerpt or meta_desc or f"Capabilities and maintenance for {repo}")[:550]
+    if not goals:
+        goals = [f"Deliver core functionality and reliability for {repo}"[:380]]
+    missing = (f"LLM context synthesis fell back to raw repository evidence ({reason_code})."
+               if reason_code else "Using deterministic repository evidence directly without LLM synthesis.")
+    return {
+        "product_summary": summary,
+        "value_proposition": value_prop,
+        "strategic_goals": goals[:5],
+        "lean_canvas": {},
+        "missing_context": missing[:950],
+        "repository_research": {"value_drivers": claims},
+    }
+
+
 async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_private=False,
                         owner_context=None, owner_profile=None, load_sources=None, issue=False):
     """Research repository value drivers once, then judge each PR's intended contribution."""
@@ -468,18 +515,29 @@ async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_priva
     if issue:
         result.update(item_type="issue", version=f"{VERSION}-issues-1", ranking=[], disclaimer=DISCLAIMER.replace("merged PRs are scored retrospectively.",
             "issues are scored as proposed contributions. Ranking is not WSJF or permission to execute."))
-    if (not key and owner_profile is None) or not jev_key:
+    if not jev_key:
         log_event(logging.WARNING, "product_value_unavailable", **diagnostics, stage="product_context",
                   error_code="not_configured", elapsed_ms=round((time.monotonic() - started) * 1000))
         return {**result, "status": "unavailable", "error_code": "not_configured",
-                "reason": "Configure Gemini and TypeSafe API keys to assess cost of delay."}
+                "reason": "Configure TypeSafe API key to assess cost of delay.",
+                "diagnostics": {"analysis_id": diagnostics["analysis_id"], "stage": "product_context",
+                                "error_code": "not_configured", "context_method": "unavailable",
+                                "elapsed_ms": round((time.monotonic() - started) * 1000)}}
     stage = "product_sources"
+    context_started = time.monotonic()
+    fallback_used = False
+    fallback_reason = None
+    fallback_http_status = None
+    research_limitations = []
+    sources_loaded = []
     try:
         if owner_profile is not None:
             stage = "owner_profile"
             owner_sources, limitations = owner_evidence_sources(owner_context or [])
             context = _clean_context(owner_profile, {source["id"] for source in owner_sources})
             result.update(context_method="owner_profile", context_model=None)
+            sources_loaded = [s.get("path") or s["id"] for s in owner_sources]
+            research_limitations = limitations
             result["sources"] = {"description": False, "readme": False, "readme_truncated": False,
                 "research": [{key: source[key] for key in ("id", "kind", "path", "url", "truncated")} for source in owner_sources],
                 "limitations": limitations + ["Owner-supplied profile; repository strategy was not regenerated or independently verified in this request."]}
@@ -494,33 +552,66 @@ async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_priva
             log_event(logging.INFO, "product_sources_loaded", **diagnostics, stage=stage,
                       elapsed_ms=round((time.monotonic() - started) * 1000), **result["sources"])
             stage = "product_context"
-            async def research_context():
-                async def plan(prompt, schema, max_tokens, **kwargs):
-                    return await gemini_json(key, prompt, schema, max_tokens, **kwargs)
-                research = await build_research_sources(repo, sources, token, _request, plan, diagnostics,
-                    **({"allow_private": allow_private, "owner_context": owner_context} if allow_private or owner_context is not None else {}))
-                result["sources"].update(
-                    research=[{k: source[k] for k in ("id", "kind", "path", "url", "truncated")} for source in research["sources"]],
-                    limitations=research["limitations"])
-                log_event(logging.INFO, "repository_research_loaded", **diagnostics, stage="repository_research",
-                          source_count=len(research["sources"]), limitation_count=len(research["limitations"]),
-                          elapsed_ms=round((time.monotonic() - started) * 1000))
-                source_ids = {source["id"] for source in research["sources"]}
-                schema = copy.deepcopy(CONTEXT_SCHEMA)
-                for field in RESEARCH_FIELDS:
-                    schema["properties"]["repository_research"]["properties"][field]["items"]["properties"]["source_ids"]["items"] = {
-                        "type": "STRING", "enum": sorted(source_ids)}
-                return await generate_context(key, CONTEXT_PROMPT.format(
-                    repo=repo, evidence=json.dumps(research["sources"], ensure_ascii=False),
-                    limitations=json.dumps(research["limitations"])), {**diagnostics, "stage": stage}, schema=schema,
-                    validate=lambda context: _clean_context(context, source_ids, generated=True))
-            context = await asyncio.wait_for(research_context(), min(CONTEXT_TIMEOUT, max(0, deadline - loop.time())))
+            research = await asyncio.wait_for(
+                build_research_sources(repo, sources, token, _request, None, diagnostics,
+                    **({"allow_private": allow_private, "owner_context": owner_context} if allow_private or owner_context is not None else {})),
+                min(CONTEXT_TIMEOUT, max(0, deadline - loop.time())))
+            research_limitations = research["limitations"]
+            sources_loaded = [s.get("path") or s["id"] for s in research["sources"]]
+            result["sources"].update(
+                research=[{k: source[k] for k in ("id", "kind", "path", "url", "truncated")} for source in research["sources"]],
+                limitations=research["limitations"])
+            log_event(logging.INFO, "repository_research_loaded", **diagnostics, stage="repository_research",
+                      source_count=len(research["sources"]), limitation_count=len(research["limitations"]),
+                      elapsed_ms=round((time.monotonic() - started) * 1000))
+            source_ids = {source["id"] for source in research["sources"]}
+            schema = copy.deepcopy(CONTEXT_SCHEMA)
+            for field in RESEARCH_FIELDS:
+                schema["properties"]["repository_research"]["properties"][field]["items"]["properties"]["source_ids"]["items"] = {
+                    "type": "STRING", "enum": sorted(source_ids)}
+            if key:
+                try:
+                    remaining_budget = max(0, min(CONTEXT_TIMEOUT, deadline - loop.time()))
+                    if remaining_budget <= 0:
+                        raise GenerationError("timeout")
+                    context = await asyncio.wait_for(
+                        generate_context(key, CONTEXT_PROMPT.format(
+                            repo=repo, evidence=json.dumps(research["sources"], ensure_ascii=False),
+                            limitations=json.dumps(research["limitations"])), {**diagnostics, "stage": stage},
+                            schema=schema,
+                            validate=lambda ctx: _clean_context(ctx, source_ids, generated=True)),
+                        remaining_budget)
+                    result["context_method"] = "gemini"
+                except Exception as ctx_exc:
+                    fallback_used = True
+                    fallback_reason = _error_code(ctx_exc, "invalid_response")
+                    fallback_http_status = getattr(ctx_exc, "http_status", None)
+                    log_event(logging.WARNING, "product_context_fallback", **diagnostics, stage=stage,
+                              error_code=fallback_reason, http_status=fallback_http_status,
+                              elapsed_ms=round((time.monotonic() - started) * 1000))
+                    context = _build_fallback_context(repo, research["sources"], fallback_reason)
+                    result.update(context_method="evidence_fallback", context_model=None,
+                                  fallback_reason=fallback_reason)
+            else:
+                fallback_used = True
+                fallback_reason = "gemini_not_configured"
+                context = _build_fallback_context(repo, research["sources"], fallback_reason)
+                result.update(context_method="evidence_fallback", context_model=None,
+                              fallback_reason=fallback_reason)
     except Exception as exc:
         code = _error_code(exc, "source_unavailable" if stage == "product_sources" else "invalid_response")
+        http_status = getattr(exc, "http_status", None)
+        elapsed_ms = round((time.monotonic() - started) * 1000)
         log_event(logging.ERROR, "product_value_failed", **diagnostics, stage=stage, error_code=code,
-                  elapsed_ms=round((time.monotonic() - started) * 1000))
+                  elapsed_ms=elapsed_ms)
         return {**result, "status": "failed", "error_code": code,
-                "reason": f"Product context could not be generated. {_failure_reason(code)}"}
+                "reason": f"Product context could not be generated. {_failure_reason(code)}",
+                "diagnostics": {"analysis_id": diagnostics["analysis_id"], "stage": stage, "error_code": code,
+                                "http_status": http_status, "context_method": "failed",
+                                "elapsed_ms": elapsed_ms, "sources_loaded": sources_loaded,
+                                "limitations": research_limitations, "fallback_used": fallback_used,
+                                "fallback_reason": fallback_reason}}
+    context_elapsed_ms = round((time.monotonic() - context_started) * 1000)
     result["context"] = context
     limit = asyncio.Semaphore(CONCURRENCY)
     def deadline_failure(item):
@@ -560,7 +651,17 @@ async def _assess_value(repo, data, key, token, max_prs, *, jev_key, allow_priva
         result["ranking"] = [{"rank": rank, "number": item["number"], "cost_of_delay": item["cost_of_delay"]}
                              for rank, item in enumerate(ranked, 1)]
     assessed = sum(i["status"] == "assessed" for i in result["items"])
+    total_elapsed_ms = round((time.monotonic() - started) * 1000)
     log_event(logging.INFO, "product_value_completed", **diagnostics, stage="issue_assessment" if issue else "pr_assessment",
-              assessed=assessed, failed=len(selected) - assessed,
-              elapsed_ms=round((time.monotonic() - started) * 1000))
-    return {**result, "status": "ok", "assessed": assessed, "failed": len(selected) - assessed}
+              assessed=assessed, failed=len(selected) - assessed, elapsed_ms=total_elapsed_ms)
+    return {**result, "status": "ok", "assessed": assessed, "failed": len(selected) - assessed,
+            "diagnostics": {"analysis_id": diagnostics["analysis_id"],
+                            "stage": "issue_assessment" if issue else "pr_assessment",
+                            "context_method": result.get("context_method", "gemini"),
+                            "context_elapsed_ms": context_elapsed_ms,
+                            "total_elapsed_ms": total_elapsed_ms,
+                            "sources_loaded": sources_loaded,
+                            "limitations": research_limitations,
+                            "fallback_used": fallback_used,
+                            "fallback_reason": fallback_reason,
+                            "http_status": fallback_http_status}}
