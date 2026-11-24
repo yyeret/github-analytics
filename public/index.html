@@ -1233,7 +1233,9 @@
       dimensions.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('') +
       '<th>Cost of delay</th></tr></thead><tbody>' +
       (value.items.map(item => {
-        const href = safeExternalUrl(item.url) || (activeDashboardRepo && item.number ? `https://github.com/${activeDashboardRepo}/pull/${item.number}` : null);
+        const repo = typeof activeDashboardRepo === 'string' ? activeDashboardRepo : null;
+        const explicit = typeof safeExternalUrl === 'function' ? safeExternalUrl(item.url) : null;
+        const href = explicit || (repo && item.number ? `https://github.com/${repo}/pull/${item.number}` : null);
         const ref = href
           ? `<a class="item-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">#${escapeHtml(item.number)}</a>`
           : `#${escapeHtml(item.number)}`;
@@ -1277,7 +1279,9 @@
     document.getElementById('value-items').innerHTML = '<thead><tr><th>Item</th><th>State</th><th>Framing</th><th>Rationale</th></tr></thead><tbody>' +
       (items.map(item => {
         const seg = kind === 'prs' ? 'pull' : 'issues';
-        const href = safeExternalUrl(item.url) || (activeDashboardRepo && item.number ? `https://github.com/${activeDashboardRepo}/${seg}/${item.number}` : null);
+        const repo = typeof activeDashboardRepo === 'string' ? activeDashboardRepo : null;
+        const explicit = typeof safeExternalUrl === 'function' ? safeExternalUrl(item.url) : null;
+        const href = explicit || (repo && item.number ? `https://github.com/${repo}/${seg}/${item.number}` : null);
         const label = item.identifier || `#${item.number}`;
         const ref = href
           ? `<a class="item-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
